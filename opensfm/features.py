@@ -92,13 +92,14 @@ def _in_mask(point, width, height, mask):
 def extract_features_sift(image, config):
     sift_edge_threshold = config['sift_edge_threshold']
     sift_peak_threshold = float(config['sift_peak_threshold'])
+
     if context.OPENCV3:
         try:
             detector = cv2.xfeatures2d.SIFT_create(
                 edgeThreshold=sift_edge_threshold,
                 contrastThreshold=sift_peak_threshold)
         except AttributeError as ae:
-            if "no attribute 'xfeatures2d'" in ae.message:
+            if "no attribute 'xfeatures2d'" in ae.__str__():
                 logger.error('OpenCV Contrib modules are required to extract SIFT features')
             raise
         descriptor = detector
@@ -269,6 +270,7 @@ def extract_features(color_image, config, mask=None):
         - colors: the color of the center of each feature
     """
     assert len(color_image.shape) == 3
+
     color_image = resized_image(color_image, config)
     image = cv2.cvtColor(color_image, cv2.COLOR_RGB2GRAY)
 

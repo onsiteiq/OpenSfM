@@ -135,12 +135,24 @@ def point_from_json(key, obj):
     return point
 
 
+def alignment_from_json( obj ):
+
+    align_info = types.AlignmentInfo()
+    if obj is not None:
+        align_info.aligned = obj.get( 'aligned', False )
+        align_info.num_correspondences = obj.get( 'num_correspondences', 0 )
+    return align_info
+
+
 def reconstruction_from_json(obj):
     """
     Read a reconstruction from a json object
     """
     reconstruction = types.Reconstruction()
 
+    # Extract alignment meta-data
+    reconstruction.alignment = alignment_from_json( obj.get( 'alignment', None ) )
+    
     # Extract cameras
     for key, value in iteritems(obj['cameras']):
         camera = camera_from_json(key, value)
@@ -298,6 +310,14 @@ def point_to_json(point):
         'reprojection_error': point.reprojection_error
     }
 
+def alignment_to_json( align_info ):
+    """
+    Write alignment info to a json object
+    """
+    return {
+        'aligned' : align_info.aligned,
+        'num_correspondences' : align_info.num_correspondences
+    }
 
 def reconstruction_to_json(reconstruction):
     """
@@ -308,6 +328,8 @@ def reconstruction_to_json(reconstruction):
         "shots": {},
         "points": {}
     }
+    
+    obj['alignment'] = alignment_to_json( reconstruction.alignment )
 
     # Extract cameras
     for camera in reconstruction.cameras.values():
@@ -429,6 +451,39 @@ def read_ground_control_points_list(fileobj, reference_lla, exif):
               for line in lines]
     return points
 
+
+def _read_gps_points_list_line( line, projection ):
+    
+    words = line.split()
+    
+    easting, northing, alt = map(float, words[:3])
+    shot_id = words[3]
+
+    # Convert 3D coordinates
+    if projection is not None:
+        lon, lat = projection(easting, northing, inverse=True)
+    else:
+        lon, lat = easting, northing
+        
+    return ( shot_id, lat, lon, alt )
+
+def read_gps_points_list( fileobj ):
+    """Read a gps points list file.
+
+    It requires the points to be in the WGS84 lat, lon, alt format.
+    """
+    lines = fileobj.readlines()
+    projection = _parse_projection(lines[0])
+    
+    gps_dict = {}
+    
+    for line in lines[1:]:
+        ( shot_id, lat, lon, alt ) = _read_gps_points_list_line( line, projection )
+        
+        gps_dict[ shot_id ] = (lat, lon, alt)
+       
+    return gps_dict
+    
 
 def mkdir_p(path):
     '''Make a directory including parent directories.

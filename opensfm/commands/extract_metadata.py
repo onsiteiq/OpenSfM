@@ -21,6 +21,12 @@ class Command:
         start = time.time()
         data = dataset.DataSet(args.dataset)
 
+        # Load GPS list if present ( these override any GPS read from EXIF metadata )
+        gps_points = {}
+        if data.gps_points_exist():
+            gps_points = data.load_gps_points()
+            logger.info( str( gps_points ) )
+
         exif_overrides = {}
         if data.exif_overrides_exists():
             exif_overrides = data.load_exif_overrides()
@@ -32,7 +38,7 @@ class Command:
                 d = data.load_exif(image)
             else:
                 logging.info('Extracting EXIF for {}'.format(image))
-                d = self._extract_exif(image, data)
+                d = self._extract_exif(image, gps_points, data)
 
                 if image in exif_overrides:
                     d.update(exif_overrides[image])
@@ -59,10 +65,23 @@ class Command:
         with open(data.profile_log(), 'a') as fout:
             fout.write('focal_from_exif: {0}\n'.format(end - start))
 
-    def _extract_exif(self, image, data):
-         # EXIF data in Image
-        d = exif.extract_exif_from_file(data.open_image_file(image))
+    def _extract_exif(self, image, gps_points, data):
 
+        # EXIF data in Image
+        d = exif.extract_exif_from_file( data.open_image_file(image), data )
+
+        lla = gps_points.get( image )
+        if lla is not None:
+            gps_md = d.get('gps')
+            if gps_md is None:
+                gps_md = {}
+                d['gps'] = gps_md
+                
+            gps_md['latitude'] = lla[0]
+            gps_md['longitude'] = lla[1]
+            gps_md['altitude'] = lla[2]
+            gps_md['dop'] = 25 # There is a question about what should be here...
+                
         # Image Height and Image Width
         if d['width'] <= 0 or not data.config['use_exif_size']:
             d['height'], d['width'] = data.load_image(image).shape[:2]

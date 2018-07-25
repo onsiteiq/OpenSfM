@@ -11,13 +11,14 @@ from opensfm import transformations as tf
 
 logger = logging.getLogger(__name__)
 
-
-def align_reconstruction(reconstruction, gcp, config):
+def align_reconstruction(reconstruction, gcp, config ):
     """Align a reconstruction with GPS and GCP data."""
-    res = align_reconstruction_similarity(reconstruction, gcp, config)
+    res = align_reconstruction_similarity(reconstruction, gcp, config )
+    reconstruction.alignment.aligned = False
     if res:
         s, A, b = res
         apply_similarity(reconstruction, s, A, b)
+        reconstruction.alignment.aligned = True
 
 
 def apply_similarity(reconstruction, s, A, b):
@@ -43,7 +44,7 @@ def apply_similarity(reconstruction, s, A, b):
         shot.pose.translation = list(tp)
 
 
-def align_reconstruction_similarity(reconstruction, gcp, config):
+def align_reconstruction_similarity(reconstruction, gcp, config ):
     """Align reconstruction with GPS and GCP data.
 
     Config parameter `align_method` can be used to choose the alignment method.
@@ -56,27 +57,35 @@ def align_reconstruction_similarity(reconstruction, gcp, config):
         return align_reconstruction_orientation_prior_similarity(
             reconstruction, config)
     elif align_method == 'naive':
-        return align_reconstruction_naive_similarity(reconstruction, gcp)
+        return align_reconstruction_naive_similarity( reconstruction, gcp, config )
 
 
-def align_reconstruction_naive_similarity(reconstruction, gcp):
+def align_reconstruction_naive_similarity(reconstruction, gcp, config ):
     """Align with GPS and GCP data using direct 3D-3D matches."""
     X, Xp = [], []
 
     # Get Ground Control Point correspondences
-    if gcp:
+    if gcp and config['align_use_gcp']:
         triangulated, measured = triangulate_all_gcp(reconstruction, gcp)
         X.extend(triangulated)
         Xp.extend(measured)
 
     # Get camera center correspondences
-    for shot in reconstruction.shots.values():
-        X.append(shot.pose.get_origin())
-        Xp.append(shot.metadata.gps_position)
-
+    if config['align_use_gps']:
+        for shot in reconstruction.shots.values():
+            if shot.metadata.gps_dop != 999999.0:
+                X.append(shot.pose.get_origin())
+                Xp.append(shot.metadata.gps_position)
+                #print( "Used GPS for shot: " + shot.id )
+            
     if len(X) < 3:
+        logger.debug( 'Similarity alignment NOT attempted ( {0} Correspondences )'.format(len(X)) )
+        reconstruction.alignment.num_correspondences = 0
         return
-
+    
+    logger.debug( 'Similarity alignment attempted ( {0} Correspondences )'.format(len(X)) )
+    reconstruction.alignment.num_correspondences = len(X)
+    
     # Compute similarity Xp = s A X + b
     X = np.array(X)
     Xp = np.array(Xp)
@@ -126,6 +135,8 @@ def align_reconstruction_orientation_prior_similarity(reconstruction, config):
 
     X = np.array(X)
     Xp = np.array(Xp)
+    
+    reconstruction.alignment.num_correspondences = len(X)
 
     # Estimate ground plane.
     p = multiview.fit_plane(X - X.mean(axis=0), onplane, verticals)
@@ -183,7 +194,7 @@ def get_horizontal_and_vertical_directions(R, orientation):
 
 def triangulate_single_gcp(reconstruction, observations):
     """Triangulate one Ground Control Point."""
-    reproj_threshold = 0.004
+    reproj_threshold = 0.014 # 0.004
     min_ray_angle_degrees = 2.0
 
     os, bs = [], []

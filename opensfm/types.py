@@ -677,6 +677,19 @@ class GroundControlPointObservation(object):
         self.shot_id = None
         self.shot_coordinates = None
 
+        
+class AlignmentInfo(object):
+    """Stores reconstruction alignment metadata.
+
+    Attributes:
+        aligned (bool): has this reconstruction been aligned.
+        num_correspondences (int): number of correspondences used in alignment.
+    """
+
+    def __init__(self):
+        """Defaut constructor"""
+        self.aligned = False
+        self.num_correspondences = 0
 
 class Reconstruction(object):
     """Defines the reconstructed scene.
@@ -689,6 +702,7 @@ class Reconstruction(object):
 
     def __init__(self):
         """Defaut constructor"""
+        self.alignment = AlignmentInfo()
         self.cameras = {}
         self.shots = {}
         self.points = {}

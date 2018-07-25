@@ -81,15 +81,22 @@ def camera_id_(make, model, width, height, projection_type, focal):
     ]).lower()
 
 
-def extract_exif_from_file(fileobj):
-    if isinstance(fileobj, string_types):
-        with open(fileobj) as f:
-            exif_data = EXIF(f)
-    else:
-        exif_data = EXIF(fileobj)
+def extract_exif_from_file( fileobj, data ):
 
-    d = exif_data.extract_exif()
-    return d
+    if data.config['use_exif_template']:
+            
+        return data.load_exif_template()
+        
+    else:
+        if isinstance(fileobj, (str, bytes)):
+            with open(fileobj) as f:
+                exif_data = EXIF(f)
+        else:
+            exif_data = EXIF(fileobj)
+
+        d = exif_data.extract_exif()
+        
+        return d
 
 
 def get_xmp(fileobj):

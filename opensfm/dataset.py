@@ -338,6 +338,9 @@ class DataSet:
             path = os.path.join(self.data_path, relpath.strip())
             self.mask_files[image.strip()] = path
 
+    def _exif_template_path(self):
+        return self.data_path;
+
     def _exif_path(self):
         """Return path of extracted exif directory"""
         return os.path.join(self.data_path, 'exif')
@@ -349,6 +352,13 @@ class DataSet:
         """
         return os.path.join(self._exif_path(), image + '.exif')
 
+    def load_exif_template(self):
+        
+        tfile = os.path.join(self._exif_template_path(), 'template.exif')
+        
+        with io.open_rt( tfile ) as fin:
+            return json.load(fin)
+    
     def load_exif(self, image):
         """
         Return extracted exif information, as dictionary, usually with fields:
@@ -506,6 +516,14 @@ class DataSet:
     def save_undistorted_tracks_graph(self, graph):
         return self.save_tracks_graph(graph, 'undistorted_tracks.csv')
 
+    def save_match_counts(self, matches, filename=None, minify=False ):
+        with io.open_wt( self._match_counts_file(filename) ) as fout:
+            io.json_dump(matches, fout, minify)
+    
+    def _match_counts_file(self, filename):
+        """Return path of match counts json file"""
+        return os.path.join(self.data_path, filename or 'match_counts.json')
+        
     def _reconstruction_file(self, filename):
         """Return path of reconstruction file"""
         return os.path.join(self.data_path, filename or 'reconstruction.json')
@@ -652,6 +670,18 @@ class DataSet:
         with io.open_wt(self._ply_file(filename)) as fout:
             fout.write(ply)
 
+    def _gps_points_file(self):
+        return os.path.join(self.data_path, 'gps_list.txt')        
+        
+    def gps_points_exist(self):
+        return os.path.isfile(self._gps_points_file())
+    
+    def load_gps_points(self):
+        """Load explicit points as opposed to GPS derived from EXIF metadata"""
+        
+        with open(self._gps_points_file()) as fin:
+            return io.read_gps_points_list( fin )    
+    
     def _ground_control_points_file(self):
         return os.path.join(self.data_path, 'gcp_list.txt')
 
