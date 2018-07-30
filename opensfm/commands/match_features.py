@@ -140,19 +140,35 @@ def match_candidates_by_time(images, exifs, max_neighbors):
     return pairs
 
 
-def match_candidates_by_order(images, max_neighbors):
+def match_candidates_by_order(images, max_neighbors, data):
     """Find candidate matching pairs by sequence order."""
+
     if max_neighbors <= 0:
         return set()
+    
     n = (max_neighbors + 1) // 2
+
+    len_images = len(images)
+
+    if n > len_images:
+        n = len_images
 
     pairs = set()
     for i, image in enumerate(images):
-        a = max(0, i - n)
-        b = min(len(images), i + n)
+
+        a = i - n
+        b = i + n + 1
+        
+        if not data.config['matching_order_loop']:        
+            a = max(0, a)
+            b = min(len_images, b)
+        
         for j in range(a, b):
             if i != j:
+                if j >= len_images:
+                    j -= len_images
                 pairs.add(tuple(sorted((images[i], images[j]))))
+                
     return pairs
 
 
