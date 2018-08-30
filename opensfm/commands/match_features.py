@@ -202,7 +202,7 @@ def match_candidates_from_metadata(images, exifs, data):
         d = match_candidates_by_distance(images, exifs, reference,
                                          gps_neighbors, max_distance)
         t = match_candidates_by_time(images, exifs, time_neighbors)
-        o = match_candidates_by_order(images, order_neighbors)
+        o = match_candidates_by_order(images, order_neighbors, data)
         pairs = d | t | o
 
     res = {im: [] for im in images}
