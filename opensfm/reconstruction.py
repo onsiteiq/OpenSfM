@@ -1137,11 +1137,17 @@ def incremental_reconstruction(data):
     logger.info("Starting incremental reconstruction")
     report = {}
     chrono = Chronometer()
-    if not data.reference_lla_exists():
+    if not data.reference_lla_exists() and not data.config['use_provided_reference_lla']:
         data.invent_reference_lla()
 
     graph = data.load_tracks_graph()
     tracks, images = matching.tracks_and_images(graph)
+
+    target_images = data.config.get('target_images', [] )
+    
+    if target_images:
+        images = target_images
+
     chrono.lap('load_tracks_graph')
     remaining_images = set(images)
     gcp = None
