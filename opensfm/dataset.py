@@ -5,6 +5,7 @@ import json
 import logging
 import pickle
 import gzip
+import glob
 
 import cv2
 import numpy as np
@@ -351,6 +352,14 @@ class DataSet:
         :param image: Image name, with extension (i.e. 123.jpg)
         """
         return os.path.join(self._exif_path(), image + '.exif')
+
+    def get_exif_files(self):
+        """
+        Return file names for all exif files
+        """
+        exif_files = glob.glob(os.path.join(self._exif_path(), '*.exif') )
+        
+        return list( map( lambda x: os.path.basename(x), exif_files ) )
 
     def load_exif_template(self):
         
