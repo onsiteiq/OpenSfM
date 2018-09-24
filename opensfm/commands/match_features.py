@@ -146,6 +146,10 @@ def match_candidates_by_order(images, max_neighbors, data):
     if max_neighbors <= 0:
         return set()
     
+    gps_points_dict = {}
+    if data.gps_points_exist():
+        gps_points_dict = data.load_gps_points()
+
     n = (max_neighbors + 1) // 2
 
     len_images = len(images)
@@ -163,11 +167,37 @@ def match_candidates_by_order(images, max_neighbors, data):
             a = max(0, a)
             b = min(len_images, b)
         
+        ith_pairs = []
+        highestLHIndex = 0
+        lowestUHIndex = 100000
+        ipind = 0
+
         for j in range(a, b):
             if i != j:
                 if j >= len_images:
                     j -= len_images
-                pairs.add(tuple(sorted((images[i], images[j]))))
+                
+                if gps_points_dict:
+                    
+                    llaf = gps_points_dict.get( images[j] )
+                    gps_exists = llaf is not None
+                    
+                    if gps_exists:
+                        if j < i and llaf[3]:
+                            if ipind > highestLHIndex:
+                                highestLHIndex = ipind
+                        if j > i and llaf[3]:
+                            if ipind < lowestUHIndex:
+                                lowestUHIndex = ipind
+
+                ith_pairs.append( tuple( sorted( (images[i], images[j]) ) ) )
+                ipind = ipind + 1
+        
+        if lowestUHIndex > len(ith_pairs)-1:
+            lowestUHIndex = len(ith_pairs)-1
+        
+        for ip in ith_pairs[ highestLHIndex : lowestUHIndex + 1 ]:
+            pairs.add( ip )
                 
     return pairs
 
