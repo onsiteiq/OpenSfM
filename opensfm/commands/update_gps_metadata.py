@@ -50,7 +50,7 @@ class Command:
                     gps_md['latitude'] = lla[0]
                     gps_md['longitude'] = lla[1]
                     gps_md['altitude'] = lla[2]
-                    gps_md['dop'] = 25 # There is a question about what should be here...
+                    gps_md['dop'] = 35 # There is a question about what should be here...
                 
                 data.save_exif(image, d)
 
