@@ -4,6 +4,7 @@ import time
 import logging
 import numpy as np
 import cv2
+from random import sample
 
 from opensfm import context
 from opensfm import csfm
@@ -124,6 +125,12 @@ def extract_features_sift(image, config):
         else:
             logger.debug('done')
             break
+
+    feat_max = config.get( 'feature_max_frames', 20000 )
+    if len(points) > feat_max:
+        points = sample( points, feat_max )
+        logger.debug('Sampling only {0} points.'.format( len(points) ))
+
     points, desc = descriptor.compute(image, points)
     if config['feature_root']:
         desc = root_feature(desc)
