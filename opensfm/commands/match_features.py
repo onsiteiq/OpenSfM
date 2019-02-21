@@ -193,8 +193,16 @@ def match_candidates_by_order(images, max_neighbors, data):
                 ith_pairs.append( tuple( sorted( (images[i], images[j]) ) ) )
                 ipind = ipind + 1
         
+        # Make the feature fences leaky +/- 5 images otherwise the reconstruction can become inaccurate.
+        
+        highestLHIndex -= 5
+        lowestUHIndex += 5
+        
         if lowestUHIndex > len(ith_pairs)-1:
             lowestUHIndex = len(ith_pairs)-1
+            
+        if highestLHIndex < 0:
+            highestLHIndex = 0
         
         for ip in ith_pairs[ highestLHIndex : lowestUHIndex + 1 ]:
             pairs.add( ip )
