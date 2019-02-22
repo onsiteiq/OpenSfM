@@ -367,6 +367,10 @@ class DataSet:
         
         with io.open_rt( tfile ) as fin:
             return json.load(fin)
+
+    def image_names_from_exif(self):
+        exif_files = self.get_exif_files()
+        return list( map( lambda x: os.path.splitext(x)[0], exif_files ) )
     
     def load_exif(self, image):
         """
@@ -703,7 +707,12 @@ class DataSet:
         It uses reference_lla to convert the coordinates
         to topocentric reference frame.
         """
-        exif = {image: self.load_exif(image) for image in self.images()}
+        # As a backup in case the images are not present get the names from the exif metadata files
+        images = self.images()
+        if not images:
+            images = self.image_names_from_exif()
+
+        exif = { image: self.load_exif(image) for image in images }
 
         with open(self._ground_control_points_file()) as fin:
             return io.read_ground_control_points_list(
