@@ -195,8 +195,8 @@ def match_candidates_by_order(images, max_neighbors, data):
         
         # Make the feature fences leaky +/- 5 images otherwise the reconstruction can become inaccurate.
         
-        highestLHIndex -= 5
-        lowestUHIndex += 5
+        highestLHIndex -= 0
+        lowestUHIndex += 0
         
         if lowestUHIndex > len(ith_pairs)-1:
             lowestUHIndex = len(ith_pairs)-1
