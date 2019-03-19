@@ -823,6 +823,56 @@ class TrackTriangulator:
         self.origins = {}
         self.rotation_inverses = {}
         self.Rts = {}
+        self.max_dist_unaligned = self._max_triangulation_dist()
+
+    def _max_triangulation_dist( self ):
+        
+        r = self.reconstruction
+    
+        #if r.alignment.aligned:
+            
+            # If we are aligned compute the smallest dimension of x,y axis 
+            # aligned bounding box. The units are pixels.
+            
+            #origins = []
+            #for shot in r.shots.values():
+           #     o = shot.pose.get_origin()
+            #    origins.append( o )
+        
+           # np_origins = np.stack( origins )
+            
+           # min_xy = np.amin( np_origins, axis = 0 )[0:2]
+           # max_xy = np.amax( np_origins, axis = 0 )[0:2]
+            
+           # return 1630 #np.amin( max_xy - min_xy )
+            
+       # else:
+        
+            #return None
+            
+            # Estimate from the step size which is known to be ~3 ft.
+            
+        shots = list(r.shots.values())
+        shots.sort( key = lambda x: x.id )
+        
+        index_dists = []
+        for ind, shot in enumerate( shots ):
+            cur_o = shot.pose.get_origin()
+            if ind + 1 < len(shots):
+                next_shot = shots[ind+1]
+                next_o = next_shot.pose.get_origin()
+                
+                index_dist = np.linalg.norm( next_o - cur_o )
+                index_dists.append( index_dist )
+        
+        index_dists.sort()
+        
+        #print( "========================================================================" )
+        #print( np.median( index_dists ) )
+        
+        #exit()
+        
+        return np.median( index_dists )*20.0
 
     def triangulate(self, track, reproj_threshold, min_ray_angle_degrees):
         """Triangulate track and add point to reconstruction."""
@@ -843,7 +893,13 @@ class TrackTriangulator:
                 point = types.Point()
                 point.id = track
                 point.coordinates = X.tolist()
+                
                 self.reconstruction.add_point(point)
+
+                #avg_o = np.mean( os, axis = 0 ) 
+                #dist = np.linalg.norm( X - avg_o )
+                #if dist < self.max_dist_unaligned:
+                #    self.reconstruction.add_point(point)
 
     def triangulate_dlt(self, track, reproj_threshold, min_ray_angle_degrees):
         """Triangulate track using DLT and add point to reconstruction."""
@@ -1123,6 +1179,11 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
             logger.info("Some images can not be added")
             break
 
+        max_recon_size = config.get( 'reconstruction_max_images', -1 )
+        if max_recon_size != -1:
+            if len( reconstruction.shots ) >= max_recon_size:
+                break
+
     logger.info("-------------------------------------------------------")
 
     bundle(graph, reconstruction, gcp, config)
@@ -1149,7 +1210,7 @@ def incremental_reconstruction(data):
         images = target_images
 
     chrono.lap('load_tracks_graph')
-    remaining_images = set(images)
+    
     gcp = None
     if data.ground_control_points_exist():
         gcp = data.load_ground_control_points()
@@ -1159,23 +1220,50 @@ def incremental_reconstruction(data):
     chrono.lap('compute_image_pairs')
     report['num_candidate_image_pairs'] = len(pairs)
     report['reconstructions'] = []
-    for im1, im2 in pairs:
-        if im1 in remaining_images and im2 in remaining_images:
-            rec_report = {}
-            report['reconstructions'].append(rec_report)
-            tracks, p1, p2 = common_tracks[im1, im2]
-            reconstruction, rec_report['bootstrap'] = bootstrap_reconstruction(
-                data, graph, im1, im2, p1, p2)
 
-            if reconstruction:
-                remaining_images.remove(im1)
-                remaining_images.remove(im2)
-                reconstruction, rec_report['grow'] = grow_reconstruction(
-                    data, graph, reconstruction, remaining_images, gcp)
-                reconstructions.append(reconstruction)
-                reconstructions = sorted(reconstructions,
-                                         key=lambda x: -len(x.shots))
-                data.save_reconstruction(reconstructions)
+    full_images = list(set(images))
+
+    full_images.sort()
+
+    image_groups = []
+
+    # Breakup image sets along specified GPS locations
+
+    gps_points_dict = {}
+    if data.gps_points_exist() and False:
+        gps_points_dict = data.load_gps_points()
+        split_images = []
+        for img in full_images:
+            split_images.append( img )
+            gps_info = gps_points_dict.get( img )
+            if gps_info is not None and gps_info[4]:
+                image_groups.append( split_images )
+                split_images = [ img ]
+
+        image_groups.append( split_images )
+
+    else:
+        image_groups.append( full_images )
+
+    for remaining_images in image_groups:
+
+        for im1, im2 in pairs:
+            if im1 in remaining_images and im2 in remaining_images:
+                rec_report = {}
+                report['reconstructions'].append(rec_report)
+                tracks, p1, p2 = common_tracks[im1, im2]
+                reconstruction, rec_report['bootstrap'] = bootstrap_reconstruction(
+                    data, graph, im1, im2, p1, p2)
+
+                if reconstruction:
+                    remaining_images.remove(im1)
+                    remaining_images.remove(im2)
+                    reconstruction, rec_report['grow'] = grow_reconstruction(
+                        data, graph, reconstruction, remaining_images, gcp)
+                    reconstructions.append(reconstruction)
+                    reconstructions = sorted(reconstructions,
+                                             key=lambda x: -len(x.shots))
+                    data.save_reconstruction(reconstructions)
 
     for k, r in enumerate(reconstructions):
         logger.info("Reconstruction {}: {} images, {} points".format(

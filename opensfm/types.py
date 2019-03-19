@@ -3,6 +3,8 @@
 import numpy as np
 import cv2
 
+from opensfm import transformations as tf
+
 
 class Pose(object):
     """Defines the pose parameters of a camera.
@@ -548,6 +550,10 @@ class SphericalCamera(Camera):
         self.projection_type = 'equirectangular'
         self.width = None
         self.height = None
+        self.undistort_camera = PerspectiveCamera()
+        self.undistort_camera.focal = 0.5
+        self.undistort_camera.k1 = 0.0
+        self.undistort_camera.k2 = 0.0
 
     def project(self, point):
         """Project a 3D point in camera coordinates to the image plane."""
@@ -584,6 +590,129 @@ class SphericalCamera(Camera):
     def pixel_bearings(self, pixels):
         """Deprecated: use pixel_bearing_many."""
         return self.pixel_bearing_many(pixels)
+
+    def unfolded_pixel_bearing( self, pixel ):
+        """Unit vector pointing to the pixel viewing direction for an unfolded spherical image"""
+        
+        rotated_bearing = None
+        R = None
+        bearing = None
+        
+        px = pixel[0]
+        py = pixel[1]
+        
+        # Determine which is the correct undistorted camera and convert
+        # into normalized image coordinates for this camera.  From normalized
+        # image coordinates a unit bearing can be calculated.
+        
+        if px >= -0.5 and px < -0.25:
+            
+            if py >= -0.25 and py < 0.0:
+                # Front: 
+                
+                px = 4*( px + 0.375 )
+                py = 4*( py + 0.125 )
+                
+                #print( "Front" )
+                #print( px )
+                #print( py )
+                
+                bearing = self.undistort_camera.pixel_bearing( ( px, py ) )
+                R = tf.rotation_matrix(-0 * np.pi / 2, (0, 1, 0))[:3, :3]
+                
+            elif py >= 0.0 and py < 0.25:
+                # Bottom
+                px = 4*( px + 0.375 )
+                py = 4*( py - 0.125 )
+                
+                #print( "Bottom" )
+                #print( px )
+                #print( py )
+                
+                bearing = self.undistort_camera.pixel_bearing( ( px, py ) )
+                R = tf.rotation_matrix(+np.pi / 2, (1, 0, 0))[:3, :3]
+                
+        elif px >= -0.25 and px < 0.0:
+            
+            #print( px )
+            
+            if py >= -0.25 and py < 0.0:
+                # Left
+                px = 4*( px + 0.125 )
+                py = 4*( py + 0.125 )
+                
+                #print( "Left" )
+                #print( px )
+                #print( py )
+                
+                bearing = self.undistort_camera.pixel_bearing( ( px, py ) )
+                R = tf.rotation_matrix(-1 * np.pi / 2, (0, 1, 0))[:3, :3]
+                
+        elif px >= 0.0 and px < 0.25:
+            
+            if py >= -0.25 and py < 0.0:
+                # Back
+                px = 4*( px - 0.125 )
+                py = 4*( py + 0.125 )
+                
+                #print( "Back" )
+                #print( px )
+                #print( py )
+                
+                bearing = self.undistort_camera.pixel_bearing( ( px, py ) )
+                R = tf.rotation_matrix(-2 * np.pi / 2, (0, 1, 0))[:3, :3]
+                
+        elif px >= 0.25 and px < 0.5:
+            
+            if py >= -0.25 and py < 0.0:
+                # Right
+                px = 4*( px - 0.375 )
+                py = 4*( py + 0.125 )
+                
+                #print( "Right" )
+                #print( px )
+                #print( py )
+                
+                bearing = self.undistort_camera.pixel_bearing( ( px, py ) )
+                R = tf.rotation_matrix(-3 * np.pi / 2, (0, 1, 0))[:3, :3]
+                
+            elif py >= 0.0 and py < 0.25:
+                # Top
+                px = 4*( px - 0.375 )
+                py = 4*( py - 0.125 )
+                
+                #print( "Top" )
+                #print( px )
+                #print( py )
+                
+                bearing = self.undistort_camera.pixel_bearing( ( px, py ) )
+                R = tf.rotation_matrix(-np.pi / 2, (1, 0, 0))[:3, :3]
+        
+        else:
+            message =  "(" + str(px) + "," + str(py) + ") " + \
+                       "is outside of valid ranges of x in [-0.5,0.5) and y in [-0.25,0.25)"
+            raise ValueError( message )
+        
+        if bearing is not None:
+            
+            rotated_bearing = np.dot( bearing, R )
+            
+        return rotated_bearing
+        
+    def unfolded_pixel_bearings( self, pixels ):
+        """Unit vector pointing to the pixel viewing directions for undistored combined image."""
+        
+        bearings = []
+        
+        for pixel in pixels:
+            bearing = self.unfolded_pixel_bearing( pixel )
+            
+            if bearing is None:
+                logger.error( 'Pixel outside valid image region: ' + str( pixel ) )
+            
+            bearings.append( bearing.tolist() )
+        
+        return np.array( bearings )
 
 
 class Shot(object):

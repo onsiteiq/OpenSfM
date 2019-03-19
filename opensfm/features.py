@@ -87,7 +87,7 @@ def _in_mask(point, width, height, mask):
     """Check if a point is inside a binary mask."""
     u = mask.shape[1] * (point[0] + 0.5) / width
     v = mask.shape[0] * (point[1] + 0.5) / height
-    return mask[int(v), int(u)] != 0
+    return mask[int(v), int(u)][0] != 0
 
 
 def extract_features_sift(image, config):
