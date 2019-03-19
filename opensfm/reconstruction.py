@@ -1230,7 +1230,7 @@ def incremental_reconstruction(data):
     # Breakup image sets along specified GPS locations
 
     gps_points_dict = {}
-    if data.gps_points_exist() and False:
+    if data.gps_points_exist():
         gps_points_dict = data.load_gps_points()
         split_images = []
         for img in full_images:

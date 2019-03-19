@@ -84,11 +84,11 @@ class Command:
         # If we are re-processing partial reconstructions only then merge the
         # new results with the original reconstruction. 
         
+        new_recons = data.load_reconstruction()
+
         if len(partials) > 0:
             
             merged_recons = []
-            
-            new_recons = data.load_reconstruction()
             
             for ind, recon in enumerate(reconstructions):
                 if ind not in partials:
@@ -97,13 +97,9 @@ class Command:
             for recon in new_recons:
                 merged_recons.append( recon )
     
-            data.save_reconstruction( merged_recons )
-        
         elif image_subset:
             
             merged_recons = []
-            
-            new_recons = data.load_reconstruction()
             
             for id in image_subset:
                 for recon in reconstructions:
@@ -120,8 +116,25 @@ class Command:
             for recon in new_recons:
                 merged_recons.append( recon )
     
-            data.save_reconstruction( merged_recons )
+        else:
+            merged_recons = new_recons
+
+        # Subsets and splits don't prevent duplicates across partial reconstructions
+        # The first reconstruction with a particular image gets to keep it.
         
+        num_recons = len(merged_recons)
+        for ind,mrecon in enumerate(merged_recons):
+            for shot in mrecon.shots.values():
+                sid = shot.id
+                for subsequent_recon in merged_recons[ind+1:num_recons]:
+                    
+                    to_remove = [ s for s in subsequent_recon.shots.values() if s.id == sid ]
+                    
+                    for s in to_remove:
+                        del subsequent_recon.shots[s.id]
+
+        data.save_reconstruction( merged_recons )
+
         end = time.time()
         with open(data.profile_log(), 'a') as fout:
             fout.write('reconstruct: {0}\n'.format(end - start))

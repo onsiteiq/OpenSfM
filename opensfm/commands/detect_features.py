@@ -111,6 +111,8 @@ def detect(args):
 
         if image_camera_model.projection_type in ['equirectangular', 'spherical'] and data.config['matching_unfolded_cube']:
             
+            logger.info('Matching unfolded cube.')
+
             # For spherical cameras create an undistorted image for the purposes of
             # feature finding (and later matching). 
             
