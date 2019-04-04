@@ -80,7 +80,7 @@ class Command:
             gps_md['latitude'] = lla[0]
             gps_md['longitude'] = lla[1]
             gps_md['altitude'] = lla[2]
-            gps_md['dop'] = 65 # There is a question about what should be here...
+            gps_md['dop'] = data.config.get( 'default_gps_dop', 45 )
                 
         # Image Height and Image Width
         if d['width'] <= 0 or not data.config['use_exif_size']:
