@@ -49,8 +49,11 @@ class Command:
                         
                     gps_md['latitude'] = lla[0]
                     gps_md['longitude'] = lla[1]
-                    gps_md['altitude'] = lla[2]
-                    gps_md['dop'] = 35 # There is a question about what should be here...
+                    gps_md['altitude'] = lla[2] 
+                    # There is a question about what should be here. It may need to be set based on the floorplan
+                    # resolution to correspond to a particular pixel neighborhood size. Or we should move toward
+                    # physical coordinates by georeferencing our floorplans.
+                    gps_md['dop'] = data.config.get( 'default_gps_dop', 45 )
                 
                 data.save_exif(image, d)
 
