@@ -54,11 +54,14 @@ def align_reconstruction_similarity(reconstruction, gcp, config ):
     """
     align_method = config['align_method']
     if align_method == 'orientation_prior':
-        return align_reconstruction_orientation_prior_similarity(
-            reconstruction, config)
+        return align_reconstruction_orientation_prior_similarity( reconstruction, config )
     elif align_method == 'naive':
         return align_reconstruction_naive_similarity( reconstruction, gcp, config )
-
+    elif align_method == 'naive_and_orientation_prior':
+        res = align_reconstruction_naive_similarity( reconstruction, gcp, config )
+        if not res:
+            res = align_reconstruction_orientation_prior_similarity( reconstruction, config )
+        return res
 
 def align_reconstruction_naive_similarity(reconstruction, gcp, config ):
     """Align with GPS and GCP data using direct 3D-3D matches."""
@@ -116,27 +119,34 @@ def align_reconstruction_orientation_prior_similarity(reconstruction, config):
     orientation_type = config['align_orientation_prior']
     onplane, verticals = [], []
     for shot in reconstruction.shots.values():
-        X.append(shot.pose.get_origin())
-        Xp.append(shot.metadata.gps_position)
-        R = shot.pose.get_rotation_matrix()
-        x, y, z = get_horizontal_and_vertical_directions(
-            R, shot.metadata.orientation)
-        if orientation_type == 'no_roll':
-            onplane.append(x)
-            verticals.append(-y)
-        elif orientation_type == 'horizontal':
-            onplane.append(x)
-            onplane.append(z)
-            verticals.append(-y)
-        elif orientation_type == 'vertical':
-            onplane.append(x)
-            onplane.append(y)
-            verticals.append(-z)
+        if shot.metadata.gps_dop != 999999.0:
+            X.append(shot.pose.get_origin())
+            Xp.append(shot.metadata.gps_position)
+            R = shot.pose.get_rotation_matrix()
+            x, y, z = get_horizontal_and_vertical_directions(
+                R, shot.metadata.orientation)
+            if orientation_type == 'no_roll':
+                onplane.append(x)
+                verticals.append(-y)
+            elif orientation_type == 'horizontal':
+                onplane.append(x)
+                onplane.append(z)
+                verticals.append(y)
+            elif orientation_type == 'vertical':
+                onplane.append(x)
+                onplane.append(y)
+                verticals.append(-z)
 
     X = np.array(X)
     Xp = np.array(Xp)
     
     reconstruction.alignment.num_correspondences = len(X)
+
+    if len(X) < 2:
+        logger.debug( 'Orientation prior alignment NOT attempted ( {0} Correspondences )'.format(len(X)) )
+        return
+    
+    logger.debug( 'Orientation prior alignment attempted ( {0} Correspondences )'.format(len(X)) )
 
     # Estimate ground plane.
     p = multiview.fit_plane(X - X.mean(axis=0), onplane, verticals)
