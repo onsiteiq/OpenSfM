@@ -90,6 +90,91 @@ def _get_camera_from_bundle(ba, camera):
         camera.k2 = c.k2
 
 
+def _shot_id_to_int(shot_id):
+    """
+    Returns: shot id to integer
+    """
+    tokens = shot_id.split(".")
+    return int(tokens[0])
+
+
+def _int_to_shot_id(shot_int):
+    """
+    Returns: integer to shot id
+    """
+    return str(shot_int).zfill(10) + ".jpg"
+
+
+def _prev_shot_id(curr_shot_id):
+    """
+    Returns: previous shot id
+    """
+    return _int_to_shot_id(_shot_id_to_int(curr_shot_id) - 1)
+
+
+def _next_shot_id(curr_shot_id):
+    """
+    Returns: next shot id
+    """
+    return _int_to_shot_id(_shot_id_to_int(curr_shot_id) + 1)
+
+
+def _get_heading_distance(start_shot, end_shot):
+    """
+    estimate the direction based on position of previous 2 shots
+    :param start_shot:
+    :param end_shot:
+    :return: direction in degrees and euclidean distance
+    """
+    p_start = start_shot.pose.get_origin()
+    p_end = end_shot.pose.get_origin()
+
+    angle = np.arctan2(p_end[1]-p_start[1], p_end[0] - p_start[0])
+    dist = np.linalg.norm(p_end - p_start)
+    return np.degrees(angle), dist
+
+
+def get_position_prior(shots, shot_id):
+    """
+    calculate the position prior for shot_id
+    :param shots:
+    :param shot_id:
+    :return: position prior and standard deviation
+    """
+    p_prior = [0, 0, 0]
+    stddev = 999999.0
+
+    prev_shot_id = _prev_shot_id(shot_id)
+    prev_prev_shot_id = _prev_shot_id(prev_shot_id)
+    if (prev_shot_id in shots) and (prev_prev_shot_id in shots):
+        # get the current heading and distance traveled based on previous two shots
+        heading, distance = _get_heading_distance(shots[prev_prev_shot_id], shots[prev_shot_id])
+
+        # new heading is previous heading plus delta_heading
+        new_heading = np.radians(heading + shots[shot_id].metadata.delta_heading)
+
+        # normalize delta distance
+        ratio = shots[shot_id].metadata.delta_distance / shots[prev_shot_id].metadata.delta_distance
+        if 2 > ratio > 0.5:
+            new_distance = distance * ratio
+        else:
+            new_distance = distance
+
+        prev_position = shots[prev_shot_id].pose.get_origin()
+
+        #logger.info("get_position_prior: shot_id={}, delta x={}, delta y={}"
+                    #.format(shot_id, new_distance*np.cos(new_heading), new_distance*np.sin(new_heading)))
+
+        p_prior[0] = prev_position[0] + new_distance * np.cos(new_heading)
+        p_prior[1] = prev_position[1] + new_distance * np.sin(new_heading)
+        p_prior[2] = prev_position[2]
+
+        # hard-coded to 100
+        stddev = 100
+
+    return p_prior, stddev
+
+
 def bundle(graph, reconstruction, gcp, config):
     """Bundle adjust a reconstruction."""
     fix_cameras = not config['optimize_camera_parameters']
@@ -126,6 +211,12 @@ def bundle(graph, reconstruction, gcp, config):
             g = shot.metadata.gps_position
             ba.add_position_prior(str(shot.id), g[0], g[1], g[2],
                                   shot.metadata.gps_dop)
+
+    if config['bundle_use_pdr']:
+        for shot_id in reconstruction.shots:
+            if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
+                p, stddev = get_position_prior(reconstruction.shots, shot_id)
+                ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
 
     if config['bundle_use_gcp'] and gcp:
         for observation in gcp:
@@ -210,6 +301,10 @@ def bundle_single_view(graph, reconstruction, shot_id, config):
         ba.add_position_prior(str(shot.id), g[0], g[1], g[2],
                               shot.metadata.gps_dop)
 
+    if config['bundle_use_pdr'] and shot.metadata.gps_dop == 999999.0:
+        p, stddev = get_position_prior(reconstruction.shots, shot_id)
+        ba.add_position_prior(str(shot.id), p[0], p[1], p[2], stddev)
+
     ba.set_loss_function(config['loss_function'],
                          config['loss_function_threshold'])
     ba.set_reprojection_error_sd(config['reprojection_error_sd'])
@@ -238,19 +333,17 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, config):
     """Bundle adjust the local neighborhood of a shot."""
     chrono = Chronometer()
 
-    interior, boundary = shot_neighborhood(
+    neighbors = shot_neighborhood_sequential(
         graph, reconstruction, central_shot_id,
-        config['local_bundle_radius'],
         config['local_bundle_min_common_points'],
         config['local_bundle_max_shots'])
 
     logger.debug(
-        'Local bundle sets: interior {}  boundary {}  other {}'.format(
-            len(interior), len(boundary),
-            len(reconstruction.shots) - len(interior) - len(boundary)))
+        'Local bundle sets: neighbors {}  other {}'.format(
+            neighbors, len(reconstruction.shots) - len(neighbors)))
 
     point_ids = set()
-    for shot_id in interior:
+    for shot_id in neighbors:
         if shot_id in graph:
             for track in graph[shot_id]:
                 if track in reconstruction.points:
@@ -261,7 +354,7 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, config):
     for camera in reconstruction.cameras.values():
         _add_camera_to_bundle(ba, camera, constant=True)
 
-    for shot_id in interior | boundary:
+    for shot_id in neighbors:
         shot = reconstruction.shots[shot_id]
         r = shot.pose.rotation
         t = shot.pose.translation
@@ -269,7 +362,7 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, config):
             str(shot.id), str(shot.camera.id),
             r[0], r[1], r[2],
             t[0], t[1], t[2],
-            shot.id in boundary
+            False
         )
 
     for point_id in point_ids:
@@ -277,7 +370,7 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, config):
         x = point.coordinates
         ba.add_point(str(point.id), x[0], x[1], x[2], False)
 
-    for shot_id in interior | boundary:
+    for shot_id in neighbors:
         if shot_id in graph:
             for track in graph[shot_id]:
                 if track in point_ids:
@@ -285,15 +378,21 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, config):
                                        *graph[shot_id][track]['feature'])
 
     if config['bundle_use_gps']:
-        for shot_id in interior:
+        for shot_id in neighbors:
             shot = reconstruction.shots[shot_id]
             g = shot.metadata.gps_position
             ba.add_position_prior(str(shot.id), g[0], g[1], g[2],
                                   shot.metadata.gps_dop)
 
+    if config['bundle_use_pdr']:
+        for shot_id in neighbors:
+            if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
+                p, stddev = get_position_prior(reconstruction.shots, shot_id)
+                ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
+
     if config['bundle_use_gcp'] and gcp:
         for observation in gcp:
-            if observation.shot_id in interior:
+            if observation.shot_id in neighbors:
                 ba.add_ground_control_point_observation(
                     observation.shot_id,
                     observation.coordinates[0],
@@ -321,7 +420,7 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, config):
     ba.run()
     chrono.lap('run')
 
-    for shot_id in interior:
+    for shot_id in neighbors:
         shot = reconstruction.shots[shot_id]
         s = ba.get_shot(str(shot.id))
         shot.pose.rotation = [s.rx, s.ry, s.rz]
@@ -339,12 +438,48 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, config):
     report = {
         'wall_times': dict(chrono.lap_times()),
         'brief_report': ba.brief_report(),
-        'num_interior_images': len(interior),
-        'num_boundary_images': len(boundary),
+        'num_neighbor_images': len(neighbors),
         'num_other_images': (len(reconstruction.shots)
-                             - len(interior) - len(boundary)),
+                             - len(neighbors)),
     }
     return report
+
+
+def shot_neighborhood_sequential(graph, reconstruction, current_shot_id,
+                                 min_common_points, max_interior_size):
+    """Reconstructed shots (sequentially) precede a given shot
+
+    Returns:
+        - neighbors: the list of shots preceding current shot, that has at least
+        min_common_points with its immediate neighbors
+    """
+    neighbors = [current_shot_id]
+    curr = current_shot_id
+
+    while max_interior_size > len(neighbors):
+        prev = _prev_shot_id(curr)
+        if prev not in reconstruction.shots:
+            break
+
+        points = set()
+        for track_id in graph[prev]:
+            if track_id in reconstruction.points:
+                points.add(track_id)
+
+        common_points = 0
+        for track_id in points:
+            if curr in graph[track_id]:
+                common_points += 1
+
+        #logger.info("common_points={}".format(common_points))
+        if common_points >= min_common_points:
+            neighbors.append(prev)
+            curr = prev
+        else:
+            break
+
+    neighbors.sort()
+    return neighbors
 
 
 def shot_neighborhood(graph, reconstruction, central_shot_id, radius,
@@ -458,6 +593,7 @@ def get_image_metadata(data, image):
         x, y, z = geo.topocentric_from_lla(
             lat, lon, alt,
             reflla['latitude'], reflla['longitude'], reflla['altitude'])
+
         metadata.gps_position = [x, y, z]
         metadata.gps_dop = exif['gps'].get('dop', 15.0)
     else:
@@ -478,6 +614,8 @@ def get_image_metadata(data, image):
     if 'skey' in exif:
         metadata.skey = exif['skey']
 
+    metadata.delta_heading, metadata.delta_distance = data.load_pdr_shot(image)
+    logger.info("delta heading={}, distance={}".format(metadata.delta_heading, metadata.delta_distance))
     return metadata
 
 
@@ -715,6 +853,10 @@ def bootstrap_reconstruction(data, graph, im1, im2, p1, p2):
     shot2.metadata = get_image_metadata(data, im2)
     reconstruction.add_shot(shot2)
 
+    logger.info("bootstrap before bundle_single_view")
+    logger.info("shot 1 rot={}, trans={}, origin={}".format(shot1.pose.rotation, shot1.pose.translation, shot1.pose.get_origin()))
+    logger.info("shot 2 rot={}, trans={}, origin={}".format(shot2.pose.rotation, shot2.pose.translation, shot2.pose.get_origin()))
+
     triangulate_shot_features(graph, reconstruction, im1, data.config)
 
     logger.info("Triangulated: {}".format(len(reconstruction.points)))
@@ -728,6 +870,10 @@ def bootstrap_reconstruction(data, graph, im1, im2, p1, p2):
     bundle_single_view(graph, reconstruction, im2, data.config)
     retriangulate(graph, reconstruction, data.config)
     bundle_single_view(graph, reconstruction, im2, data.config)
+
+    logger.info("bootstrap after bundle_single_view")
+    logger.info("shot 1 rot={}, trans={}, origin={}".format(shot1.pose.rotation, shot1.pose.translation, shot1.pose.get_origin()))
+    logger.info("shot 2 rot={}, trans={}, origin={}".format(shot2.pose.rotation, shot2.pose.translation, shot2.pose.get_origin()))
 
     report['decision'] = 'Success'
     report['memory_usage'] = current_memory_usage()
@@ -1128,14 +1274,11 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
                 [reconstruction], 'reconstruction.{}.json'.format(
                     datetime.datetime.now().isoformat().replace(':', '_')))
 
-        candidates = reconstructed_points_for_images(graph, reconstruction, images)
-        if not candidates:
-            break
-
         logger.info("-------------------------------------------------------")
-        for image, num_tracks in candidates:
+        for image in images:
             ok, resrep = resect(data, graph, reconstruction, image)
             if not ok:
+                logger.info("resect failed on {0} - cannot be added".format(image))
                 continue
 
             logger.info("Adding {0} to the reconstruction".format(image))
@@ -1180,6 +1323,10 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
             logger.info("Some images can not be added")
             break
 
+        logger.info("grow_reconstruction")
+        for shot in reconstruction.shots.values():
+            logger.info("{} rot={}, trans={}, origin={}".format(shot.id, shot.pose.rotation, shot.pose.translation, shot.pose.get_origin()))
+
         max_recon_size = config.get( 'reconstruction_max_images', -1 )
         if max_recon_size != -1:
             if len( reconstruction.shots ) >= max_recon_size:
@@ -1217,9 +1364,16 @@ def incremental_reconstruction(data):
         gcp = data.load_ground_control_points()
     common_tracks = matching.all_common_tracks(graph, tracks)
     reconstructions = []
-    pairs = compute_image_pairs(common_tracks, data)
-    chrono.lap('compute_image_pairs')
-    report['num_candidate_image_pairs'] = len(pairs)
+
+    # FIXME for now, we force sequential ordering of the images, and
+    # skip the "reconstructability" calculation. we will need to switch
+    # to using pdr_shots and bootstrap reconstruction when movement is
+    # detected
+
+    #pairs = compute_image_pairs(common_tracks, data)
+    #chrono.lap('compute_image_pairs')
+    #report['num_candidate_image_pairs'] = len(pairs)
+
     report['reconstructions'] = []
 
     full_images = list(set(images))
@@ -1247,24 +1401,30 @@ def incremental_reconstruction(data):
         image_groups.append( full_images )
 
     for remaining_images in image_groups:
+        while len(remaining_images) > 2:
+            im1 = remaining_images[0]
+            im2 = remaining_images[1]
 
-        for im1, im2 in pairs:
-            if im1 in remaining_images and im2 in remaining_images:
-                rec_report = {}
-                report['reconstructions'].append(rec_report)
-                tracks, p1, p2 = common_tracks[im1, im2]
-                reconstruction, rec_report['bootstrap'] = bootstrap_reconstruction(
-                    data, graph, im1, im2, p1, p2)
+            rec_report = {}
+            report['reconstructions'].append(rec_report)
+            tracks, p1, p2 = common_tracks[im1, im2]
+            reconstruction, rec_report['bootstrap'] = bootstrap_reconstruction(
+                data, graph, im1, im2, p1, p2)
 
-                if reconstruction:
-                    remaining_images.remove(im1)
-                    remaining_images.remove(im2)
-                    reconstruction, rec_report['grow'] = grow_reconstruction(
-                        data, graph, reconstruction, remaining_images, gcp)
-                    reconstructions.append(reconstruction)
-                    reconstructions = sorted(reconstructions,
-                                             key=lambda x: -len(x.shots))
-                    data.save_reconstruction(reconstructions)
+            if reconstruction:
+                remaining_images.remove(im1)
+                remaining_images.remove(im2)
+                reconstruction, rec_report['grow'] = grow_reconstruction(
+                    data, graph, reconstruction, remaining_images, gcp)
+                reconstructions.append(reconstruction)
+                reconstructions = sorted(reconstructions,
+                                         key=lambda x: -len(x.shots))
+                data.save_reconstruction(reconstructions)
+
+                logger.info("{} images remaining".format(len(remaining_images)))
+            else:
+                # bootstrap didn't work, try the next pair
+                remaining_images.remove(im1)
 
     for k, r in enumerate(reconstructions):
         logger.info("Reconstruction {}: {} images, {} points".format(

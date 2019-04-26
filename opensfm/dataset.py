@@ -36,6 +36,7 @@ class DataSet:
     def __init__(self, data_path):
         """Init dataset associated to a folder."""
         self.data_path = data_path
+        self.pdr_shots = []
         self._load_config()
         self._load_image_list()
         self._load_mask_list()
@@ -693,8 +694,29 @@ class DataSet:
         """Load explicit points as opposed to GPS derived from EXIF metadata"""
         
         with open(self._gps_points_file()) as fin:
-            return io.read_gps_points_list( fin )    
-    
+            return io.read_gps_points_list( fin )
+
+    def _pdr_shot_file(self):
+        return os.path.join(self.data_path, 'pdr_shots.txt')
+
+    def pdr_shot_exist(self):
+        return os.path.isfile(self._pdr_shot_file())
+
+    def load_pdr_shot(self, shot_id):
+        """Load PDR delta heading/distance for shot_id"""
+
+        if not self.pdr_shots:
+            with open(self._pdr_shot_file()) as fin:
+                self.pdr_shots = fin.readlines()
+
+
+        # get index from shot id, and get the pdr_shot data
+        tokens = shot_id.split(".")
+        pdr_shot = self.pdr_shots[int(tokens[0])]
+
+        tokens = pdr_shot.split()
+        return float(tokens[0]), float(tokens[1])
+
     def _ground_control_points_file(self):
         return os.path.join(self.data_path, 'gcp_list.txt')
 
