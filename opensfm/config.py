@@ -25,7 +25,7 @@ surf_upright: 0               # See OpenCV doc
 
 # Params for AKAZE (See details in lib/src/third_party/akaze/AKAZEConfig.h)
 akaze_omax: 4                      # Maximum octave evolution of the image 2^sigma (coarsest scale sigma units)
-akaze_dthreshold: 0.001            # Detector response threshold to accept point
+akaze_dthreshold: 0.00005            # Detector response threshold to accept point
 akaze_descriptor: MSURF            # Feature type
 akaze_descriptor_size: 0           # Size of the descriptor in bits. 0->Full size
 akaze_descriptor_channels: 3       # Number of feature channels (1,2,3)

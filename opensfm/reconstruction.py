@@ -150,10 +150,12 @@ def get_position_prior(shots, shot_id):
         # get the current heading and distance traveled based on previous two shots
         heading, distance = _get_heading_distance(shots[prev_prev_shot_id], shots[prev_shot_id])
 
-        # new heading is previous heading plus delta_heading
-        new_heading = np.radians(heading + shots[shot_id].metadata.delta_heading)
+        # new heading is previous heading minus delta_heading
+        new_heading = np.radians(heading - shots[shot_id].metadata.delta_heading)
 
-        # normalize delta distance
+        # normalize delta distance. if the delta distance predicated by PDR is very small, then
+        # the ratio may go to extremes. in those cases, it's better to set new distance to be
+        # the same as distance of last shot
         ratio = shots[shot_id].metadata.delta_distance / shots[prev_shot_id].metadata.delta_distance
         if 2 > ratio > 0.5:
             new_distance = distance * ratio
@@ -162,15 +164,24 @@ def get_position_prior(shots, shot_id):
 
         prev_position = shots[prev_shot_id].pose.get_origin()
 
-        #logger.info("get_position_prior: shot_id={}, delta x={}, delta y={}"
-                    #.format(shot_id, new_distance*np.cos(new_heading), new_distance*np.sin(new_heading)))
-
         p_prior[0] = prev_position[0] + new_distance * np.cos(new_heading)
         p_prior[1] = prev_position[1] + new_distance * np.sin(new_heading)
         p_prior[2] = prev_position[2]
 
         # hard-coded to 100
         stddev = 100
+
+        # debugging
+        logger.info("get_position_prior: shot_id={}, heading={}, delta_heading={}, distance={}, new distance={}"
+                    .format(shot_id,
+                            heading, shots[shot_id].metadata.delta_heading,
+                            distance, new_distance))
+
+        #curr_position = shots[shot_id].pose.get_origin()
+        #logger.info("get_position_prior: shot_id={}, delta x={}, diff x={}, delta y={}, diff y={}"
+                    #.format(shot_id,
+                            #new_distance*np.cos(new_heading), curr_position[0]-prev_position[0],
+                            #new_distance*np.sin(new_heading), curr_position[1]-prev_position[1]))
 
     return p_prior, stddev
 
@@ -340,7 +351,7 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, config):
 
     logger.debug(
         'Local bundle sets: neighbors {}  other {}'.format(
-            neighbors, len(reconstruction.shots) - len(neighbors)))
+            len(neighbors), len(reconstruction.shots) - len(neighbors)))
 
     point_ids = set()
     for shot_id in neighbors:
@@ -1278,7 +1289,7 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
         for image in images:
             ok, resrep = resect(data, graph, reconstruction, image)
             if not ok:
-                logger.info("resect failed on {0} - cannot be added".format(image))
+                logger.info("resect failed on {} - report {}".format(image, resrep))
                 continue
 
             logger.info("Adding {0} to the reconstruction".format(image))
@@ -1294,6 +1305,7 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
             triangulate_shot_features(graph, reconstruction, image, config)
             np_after = len(reconstruction.points)
             step['triangulated_points'] = np_after - np_before
+            logger.info("grow_reconstruction: {} points in the reconstruction".format(np_after))
 
             if should_retriangulate.should():
                 logger.info("Re-triangulating")
@@ -1325,7 +1337,7 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
 
         logger.info("grow_reconstruction")
         for shot in reconstruction.shots.values():
-            logger.info("{} rot={}, trans={}, origin={}".format(shot.id, shot.pose.rotation, shot.pose.translation, shot.pose.get_origin()))
+            logger.info("shot_id={} origin={}".format(shot.id, shot.pose.get_origin()))
 
         max_recon_size = config.get( 'reconstruction_max_images', -1 )
         if max_recon_size != -1:
@@ -1338,6 +1350,11 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
     remove_outliers(graph, reconstruction, config)
     align_reconstruction(reconstruction, gcp, config)
     paint_reconstruction(data, graph, reconstruction)
+
+    if len(images) > 0:
+        prepend_id = _int_to_shot_id(_shot_id_to_int(images[0]) - 1)
+        images.insert(0, prepend_id)
+        logger.info("grow_reconstruction: adding {} back to list".format(prepend_id))
     return reconstruction, report
 
 
@@ -1373,6 +1390,11 @@ def incremental_reconstruction(data):
     #pairs = compute_image_pairs(common_tracks, data)
     #chrono.lap('compute_image_pairs')
     #report['num_candidate_image_pairs'] = len(pairs)
+
+    # debug - print # of common tracks between adjacent images
+    for (im1, im2), (tracks, p1, p2) in iteritems(common_tracks):
+        if _shot_id_to_int(im2) - _shot_id_to_int(im1) == 1:
+            logger.info("({}, {}, #={}".format(im1, im2, len(tracks)))
 
     report['reconstructions'] = []
 
