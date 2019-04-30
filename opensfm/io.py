@@ -467,13 +467,17 @@ def _read_gps_points_list_line( line, projection ):
     if len(words) > 5:
         split = int( words[5] )
     
+    compass = 0.0
+    if len(words) > 6:
+        compass = float( words[6] )
+    
     # Convert 3D coordinates
     if projection is not None:
         lon, lat = projection(easting, northing, inverse=True)
     else:
         lon, lat = easting, northing
         
-    return ( shot_id, lat, lon, alt, fence, split )
+    return ( shot_id, lat, lon, alt, fence, split, compass )
 
 def read_gps_points_list( fileobj ):
     """Read a gps points list file.
@@ -486,9 +490,9 @@ def read_gps_points_list( fileobj ):
     gps_dict = {}
     
     for line in lines[1:]:
-        ( shot_id, lat, lon, alt, fence, split ) = _read_gps_points_list_line( line, projection )
+        ( shot_id, lat, lon, alt, fence, split, compass ) = _read_gps_points_list_line( line, projection )
         
-        gps_dict[ shot_id ] = ( lat, lon, alt, fence, split )
+        gps_dict[ shot_id ] = ( lat, lon, alt, fence, split, compass )
        
     return gps_dict
     

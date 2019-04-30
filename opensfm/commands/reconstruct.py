@@ -18,6 +18,7 @@ class Command:
         parser.add_argument('--partials-only', nargs = '*', help = 'indices of partial reconstructions to reconstruct' )
         parser.add_argument('--exluded-images', nargs = '*', help = 'ids/names of images to exclude' )
         parser.add_argument('--image-subset', help = 'JSON file specifying a subset of images to reprocess' )
+        parser.add_argument('--direct-align', help = 'Direct alignment of an image subset', action='store_true' )
         
     def run(self, args):
         
@@ -79,7 +80,10 @@ class Command:
         
         # Run the incremental reconstruction
         
-        report = reconstruction.incremental_reconstruction( data )
+        if args.direct_align:
+            reconstruction.direct_align_reconstruction( data )
+        else:
+            report = reconstruction.incremental_reconstruction( data )
         
         # If we are re-processing partial reconstructions only then merge the
         # new results with the original reconstruction. 

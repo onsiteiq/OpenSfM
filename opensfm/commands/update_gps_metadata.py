@@ -41,19 +41,23 @@ class Command:
                 d.pop('gps', None)
 
                 # Set from gps_list.txt only
-                lla = gps_points.get( image )
-                if lla is not None:
-                 
+                lla_fen_spl_comp = gps_points.get( image )
+                if lla_fen_spl_comp is not None:
+                    
                     gps_md = {}
                     d['gps'] = gps_md
                         
-                    gps_md['latitude'] = lla[0]
-                    gps_md['longitude'] = lla[1]
-                    gps_md['altitude'] = lla[2] 
+                    gps_md['latitude'] = lla_fen_spl_comp[0]
+                    gps_md['longitude'] = lla_fen_spl_comp[1]
+                    gps_md['altitude'] = lla_fen_spl_comp[2] 
                     # There is a question about what should be here. It may need to be set based on the floorplan
                     # resolution to correspond to a particular pixel neighborhood size. Or we should move toward
                     # physical coordinates by georeferencing our floorplans.
                     gps_md['dop'] = data.config.get( 'default_gps_dop', 45 )
+                    
+                    # Compass
+                    if len(lla_fen_spl_comp) > 5:
+                        d['compass'] = lla_fen_spl_comp[5]
                 
                 data.save_exif(image, d)
 

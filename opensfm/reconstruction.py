@@ -21,6 +21,7 @@ from opensfm import multiview
 from opensfm import types
 from opensfm.align import align_reconstruction, apply_similarity
 from opensfm.context import parallel_map, current_memory_usage
+from opensfm import transformations as tf
 
 
 logger = logging.getLogger(__name__)
@@ -1191,6 +1192,58 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
     align_reconstruction(reconstruction, gcp, config)
     paint_reconstruction(data, graph, reconstruction)
     return reconstruction, report
+
+
+def direct_align_reconstruction( data ):
+
+    target_images = data.config.get( 'target_images', [] )
+    
+    report = {}
+    report['reconstructions'] = []
+    rec_report = {}
+    report['reconstructions'].append(rec_report)
+    rec_report['subset'] = target_images
+    
+    gps_points_dict = {}
+    if data.gps_points_exist():
+        gps_points_dict = data.load_gps_points()
+    
+    cameras = data.load_camera_models()
+    
+    reconstruction = types.Reconstruction()
+    reconstruction.cameras = cameras
+    
+    for img in target_images:
+    
+        camera = cameras[data.load_exif(img)['camera']]
+        
+        shot = types.Shot()
+        shot.id = img
+        shot.camera = camera
+        shot.pose = types.Pose()
+        shot.metadata = get_image_metadata( data, img )
+        
+        Rc = tf.rotation_matrix( np.deg2rad( shot.metadata.compass ), [ 0, 1, 0 ] )[:3, :3]
+        
+        shot.pose.set_rotation_matrix( Rc )
+        
+        Rplane = multiview.plane_horizontalling_rotation( [ 0, 1, 0] )
+        
+        t_shot = np.array( shot.metadata.gps_position )
+        
+        R = shot.pose.get_rotation_matrix()
+        
+        Rp = R.dot( Rplane.T )
+        tp = -Rp.dot( t_shot )
+        
+        shot.pose.set_rotation_matrix(Rp)
+        shot.pose.translation = list(tp)
+        
+        reconstruction.add_shot( shot )
+    
+    reconstruction.alignment.aligned = True
+    
+    return report
 
 
 def incremental_reconstruction(data):

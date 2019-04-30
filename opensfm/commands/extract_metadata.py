@@ -70,18 +70,22 @@ class Command:
         # EXIF data in Image
         d = exif.extract_exif_from_file( data.open_image_file(image), data )
 
-        lla = gps_points.get( image )
-        if lla is not None:
+        lla_fen_spl_comp = gps_points.get( image )
+        if lla_fen_spl_comp is not None:
             gps_md = d.get('gps')
             if gps_md is None:
                 gps_md = {}
                 d['gps'] = gps_md
                 
-            gps_md['latitude'] = lla[0]
-            gps_md['longitude'] = lla[1]
-            gps_md['altitude'] = lla[2]
+            gps_md['latitude'] = lla_fen_spl_comp[0]
+            gps_md['longitude'] = lla_fen_spl_comp[1]
+            gps_md['altitude'] = lla_fen_spl_comp[2]
             gps_md['dop'] = data.config.get( 'default_gps_dop', 45 )
-                
+        
+            # Compass
+            if len(lla_fen_spl_comp) > 5:
+                d['compass'] = lla_fen_spl_comp[5]
+        
         # Image Height and Image Width
         if d['width'] <= 0 or not data.config['use_exif_size']:
             d['height'], d['width'] = data.load_image(image).shape[:2]
