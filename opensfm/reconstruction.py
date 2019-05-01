@@ -1223,7 +1223,7 @@ def direct_align_reconstruction( data ):
         shot.pose = types.Pose()
         shot.metadata = get_image_metadata( data, img )
         
-        Rc = tf.rotation_matrix( np.deg2rad( shot.metadata.compass ), [ 0, 1, 0 ] )[:3, :3]
+        Rc = tf.rotation_matrix( np.deg2rad( -shot.metadata.compass ), [ 0, 1, 0 ] )[:3, :3]
         
         shot.pose.set_rotation_matrix( Rc )
         
@@ -1242,6 +1242,12 @@ def direct_align_reconstruction( data ):
         reconstruction.add_shot( shot )
     
     reconstruction.alignment.aligned = True
+    reconstruction.alignment.num_correspondences = len( target_images )
+
+    reconstructions = []
+    reconstructions.append( reconstruction )
+                    
+    data.save_reconstruction( reconstructions )
     
     return report
 

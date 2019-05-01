@@ -71,17 +71,20 @@ class Command:
         
         elif image_subset:
         
-            reconstructions = data.load_reconstruction()
+            if data.reconstruction_exists():
+                reconstructions = data.load_reconstruction()
+           
+                data.save_reconstruction( reconstructions , "reconstruction.json.bak" )
             
+            else:
+                reconstructions = []
+
             data.config['target_images'] = image_subset
-            
-            data.save_reconstruction( reconstructions , "reconstruction.json.bak" )
-        
         
         # Run the incremental reconstruction
         
         if args.direct_align:
-            reconstruction.direct_align_reconstruction( data )
+            report = reconstruction.direct_align_reconstruction( data )
         else:
             report = reconstruction.incremental_reconstruction( data )
         
