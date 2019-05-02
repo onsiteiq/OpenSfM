@@ -36,7 +36,6 @@ class DataSet:
     def __init__(self, data_path):
         """Init dataset associated to a folder."""
         self.data_path = data_path
-        self.pdr_shots = []
         self._load_config()
         self._load_image_list()
         self._load_mask_list()

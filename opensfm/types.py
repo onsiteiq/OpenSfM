@@ -143,8 +143,6 @@ class ShotMetadata(object):
         capture_time (real): the capture time.
         gps_dop (real): the GPS dop.
         gps_position (vector): the GPS position.
-        delta_heading (real): PDR heading change from last shot
-        delta_distance (real): PDR traveled distance from last shot
     """
 
     def __init__(self):
@@ -155,8 +153,6 @@ class ShotMetadata(object):
         self.compass = None
         self.capture_time = None
         self.skey = None
-        self.delta_heading = None
-        self.delta_distance = None
 
 
 class ShotMesh(object):
