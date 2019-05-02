@@ -475,6 +475,7 @@ def _read_gps_points_list_line( line, projection ):
         
     return ( shot_id, lat, lon, alt, fence, split )
 
+
 def read_gps_points_list( fileobj ):
     """Read a gps points list file.
 
@@ -491,7 +492,7 @@ def read_gps_points_list( fileobj ):
         gps_dict[ shot_id ] = ( lat, lon, alt, fence, split )
        
     return gps_dict
-    
+
 
 def mkdir_p(path):
     '''Make a directory including parent directories.

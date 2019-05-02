@@ -696,26 +696,22 @@ class DataSet:
         with open(self._gps_points_file()) as fin:
             return io.read_gps_points_list( fin )
 
-    def _pdr_shot_file(self):
+    def _pdr_shots_file(self):
         return os.path.join(self.data_path, 'pdr_shots.txt')
 
-    def pdr_shot_exist(self):
-        return os.path.isfile(self._pdr_shot_file())
+    def pdr_shots_exist(self):
+        return os.path.isfile(self._pdr_shots_file())
 
-    def load_pdr_shot(self, shot_id):
-        """Load PDR delta heading/distance for shot_id"""
+    def load_pdr_shots(self):
+        """Load PDR shots"""
 
-        if not self.pdr_shots:
-            with open(self._pdr_shot_file()) as fin:
-                self.pdr_shots = fin.readlines()
+        pdr_shots_dict = {}
+        with open(self._pdr_shots_file()) as fin:
+            for line in fin:
+                (shot_id, x, y, z, delta_heading, delta_distance) = line.split()
+                pdr_shots_dict[shot_id] = (float(x), float(y), float(z), float(delta_heading), float(delta_distance))
 
-
-        # get index from shot id, and get the pdr_shot data
-        tokens = shot_id.split(".")
-        pdr_shot = self.pdr_shots[int(tokens[0])]
-
-        tokens = pdr_shot.split()
-        return float(tokens[0]), float(tokens[1])
+        return pdr_shots_dict
 
     def _ground_control_points_file(self):
         return os.path.join(self.data_path, 'gcp_list.txt')

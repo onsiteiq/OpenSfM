@@ -20,8 +20,12 @@ from opensfm import matching
 from opensfm import multiview
 from opensfm import types
 from opensfm.align import align_reconstruction, apply_similarity
+from opensfm.align_pdr import align_pdr
 from opensfm.context import parallel_map, current_memory_usage
 
+# debug
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
 
 logger = logging.getLogger(__name__)
 
@@ -625,9 +629,56 @@ def get_image_metadata(data, image):
     if 'skey' in exif:
         metadata.skey = exif['skey']
 
-    metadata.delta_heading, metadata.delta_distance = data.load_pdr_shot(image)
-    logger.info("delta heading={}, distance={}".format(metadata.delta_heading, metadata.delta_distance))
     return metadata
+
+
+def align_pdr_position(data):
+    reflla = data.load_reference_lla()
+    topocentric_points_dict = {}
+    if data.gps_points_exist() and data.pdr_shots_exist():
+        gps_points_dict = data.load_gps_points()
+
+        for key, value in gps_points_dict.items():
+            x, y, z = geo.topocentric_from_lla(
+                value[0], value[1], value[2],
+                reflla['latitude'], reflla['longitude'], reflla['altitude'])
+            topocentric_points_dict[key] = (x, y, z)
+            #logger.info("gps positions {} = {}, {}, {}".format(key, x, y, z))
+
+        pdr_shots_dict = data.load_pdr_shots()
+        aligned_pdr_shots_dict = align_pdr(topocentric_points_dict, pdr_shots_dict)
+
+        # debug
+        debug_plot(topocentric_points_dict, aligned_pdr_shots_dict)
+
+
+def debug_plot(topocentric_points_dict, aligned_pdr_shots_dict):
+    """
+    draw floor plan and aligned pdr shot positions on top of it
+    """
+    # floor plan
+    img = mpimg.imread('./AX-104B_-_CONSTRUCTION_FLOORS_-_5.png')
+    fig, ax = plt.subplots()
+    ax.imshow(img)
+
+    shot_ids = sorted(aligned_pdr_shots_dict.keys())
+    X = []
+    Y = []
+    for shot_id in shot_ids:
+        value = aligned_pdr_shots_dict[shot_id]
+        X.append(value[0])
+        Y.append(value[1])
+        #logger.info("aligned pdr positions {} = {}, {}, {}".format(shot_id, value[0], value[1], value[2]))
+
+    plt.plot(X, Y, linestyle='-', color='red', linewidth=3)
+
+    for key, value in topocentric_points_dict.items():
+        circle = plt.Circle((value[0], value[1]), color='green', radius=100)
+        ax.add_artist(circle)
+        #logger.info("topocentric gps positions {} = {}, {}, {}".format(shot_id, value[0], value[1], value[2]))
+
+    plt.show()
+    fig.savefig('./aligned_pdr_path.png', dpi=200)
 
 
 def _two_view_reconstruction_inliers(b1, b2, R, t, threshold):
@@ -1380,7 +1431,6 @@ def incremental_reconstruction(data):
     if data.ground_control_points_exist():
         gcp = data.load_ground_control_points()
     common_tracks = matching.all_common_tracks(graph, tracks)
-    reconstructions = []
 
     # FIXME for now, we force sequential ordering of the images, and
     # skip the "reconstructability" calculation. we will need to switch
@@ -1396,13 +1446,15 @@ def incremental_reconstruction(data):
         if _shot_id_to_int(im2) - _shot_id_to_int(im1) == 1:
             logger.info("({}, {}, #={}".format(im1, im2, len(tracks)))
 
+    reconstructions = []
     report['reconstructions'] = []
+    image_groups = []
 
     full_images = list(set(images))
-
     full_images.sort()
 
-    image_groups = []
+    # load pdr data and align with gps points
+    align_pdr_position(data)
 
     # Breakup image sets along specified GPS locations
 

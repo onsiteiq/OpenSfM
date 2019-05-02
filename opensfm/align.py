@@ -79,8 +79,7 @@ def align_reconstruction_naive_similarity(reconstruction, gcp, config ):
             if shot.metadata.gps_dop != 999999.0:
                 X.append(shot.pose.get_origin())
                 Xp.append(shot.metadata.gps_position)
-                #print( "Used GPS for shot: " + shot.id )
-            
+
     if len(X) < 3:
         logger.debug( 'Similarity alignment NOT attempted ( {0} Correspondences )'.format(len(X)) )
         reconstruction.alignment.num_correspondences = 0
