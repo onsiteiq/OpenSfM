@@ -1223,24 +1223,29 @@ def direct_align_reconstruction( data ):
         shot.pose = types.Pose()
         shot.metadata = get_image_metadata( data, img )
         
-        Rc = tf.rotation_matrix( np.deg2rad( -shot.metadata.compass ), [ 0, 1, 0 ] )[:3, :3]
-        
-        shot.pose.set_rotation_matrix( Rc )
-        
-        Rplane = multiview.plane_horizontalling_rotation( [ 0, 1, 0] )
-        
-        t_shot = np.array( shot.metadata.gps_position )
-        
-        R = shot.pose.get_rotation_matrix()
-        
-        Rp = R.dot( Rplane.T )
-        tp = -Rp.dot( t_shot )
-        
-        shot.pose.set_rotation_matrix(Rp)
-        shot.pose.translation = list(tp)
-        
-        reconstruction.add_shot( shot )
-    
+        if shot.metadata.compass is not None:
+
+            Rc = tf.rotation_matrix( np.deg2rad( -shot.metadata.compass ), [ 0, 1, 0 ] )[:3, :3]
+            
+            shot.pose.set_rotation_matrix( Rc )
+            
+            Rplane = multiview.plane_horizontalling_rotation( [ 0, 1, 0] )
+            
+            t_shot = np.array( shot.metadata.gps_position )
+            
+            R = shot.pose.get_rotation_matrix()
+            
+            Rp = R.dot( Rplane.T )
+            tp = -Rp.dot( t_shot )
+            
+            shot.pose.set_rotation_matrix(Rp)
+            shot.pose.translation = list(tp)
+            
+            reconstruction.add_shot( shot )
+
+        else:
+            logger.warning("Image doesn't have corresponding GPS with compass: {}".format( img ) )
+
     reconstruction.alignment.aligned = True
     reconstruction.alignment.num_correspondences = len( target_images )
 
