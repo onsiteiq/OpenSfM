@@ -1479,6 +1479,10 @@ def incremental_reconstruction(data):
             im1 = remaining_images[0]
             im2 = remaining_images[1]
 
+            if (im1, im2) not in common_tracks:
+                remaining_images.remove(im1)
+                continue
+
             rec_report = {}
             report['reconstructions'].append(rec_report)
             tracks, p1, p2 = common_tracks[im1, im2]
