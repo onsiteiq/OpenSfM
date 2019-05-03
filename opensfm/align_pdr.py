@@ -1,6 +1,7 @@
 """affine transform pdr predictions to align with GPS points or SfM output."""
 
 import logging
+import math
 import numpy as np
 
 from opensfm import transformations as tf
@@ -8,7 +9,7 @@ from opensfm import transformations as tf
 logger = logging.getLogger(__name__)
 
 
-def align_pdr_global(gps_points_dict, pdr_shots_dict):
+def align_pdr_global(gps_points_dict, pdr_shots_dict, reconstruction_scale_factor):
     """
     *globally* align pdr predictions to GPS points
 
@@ -21,6 +22,11 @@ def align_pdr_global(gps_points_dict, pdr_shots_dict):
     """
     if len(gps_points_dict) < 3 or len(pdr_shots_dict) < 3:
         return {}
+
+    # reconstruct_scale_factor is from oiq_config.yaml, and it's feet per pixel
+    # 0.3048 is meter per foot. pdr output is in meters. so based on the two
+    # we can calculate the approximate scale
+    expected_scale = 1.0 / (reconstruction_scale_factor * 0.3048)
 
     aligned_pdr_shots_dict = {}
 
@@ -35,6 +41,13 @@ def align_pdr_global(gps_points_dict, pdr_shots_dict):
             pdr_coords.append(pdr_shots_dict[shot_id][0:3])
 
         s, A, b = get_affine_transform(gps_coords, pdr_coords)
+
+        #[x, y, z] = _rotation_matrix_to_euler_angles(A)
+        #logger.info("rotation=%f, %f, %f", x, y, z)
+
+        if not ((0.80 * expected_scale) < s < (1.2 * expected_scale)):
+            logger.info("s/expected_scale={}, discard".format(s/expected_scale))
+            continue
 
         start_shot_id = gps_shot_ids[i]
         end_shot_id = gps_shot_ids[i+2]
@@ -76,13 +89,22 @@ def align_pdr_local(sfm_points_dict, pdr_shots_dict, start_shot_id, end_shot_id)
     sfm_shot_ids = sorted(sfm_points_dict.keys())
     for i in range(len(sfm_shot_ids)):
         shot_id = sfm_shot_ids[i]
-        sfm_coords.append(sfm_points_dict[shot_id])
-        pdr_coords.append(pdr_shots_dict[shot_id][0:3])
+
+        if pdr_shots_dict[shot_id]:
+            sfm_coords.append(sfm_points_dict[shot_id])
+            pdr_coords.append(pdr_shots_dict[shot_id][0:3])
 
     s, A, b = get_affine_transform(sfm_coords, pdr_coords)
 
-    aligned_pdr_shots_dict = apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id, s, A, b)
+    #[x, y, z] = _rotation_matrix_to_euler_angles(A)
+    #if (0.80 < s < 1.2) and (math.fabs(z) < 20):
+        #aligned_pdr_shots_dict = apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id, s, A, b)
+        #return aligned_pdr_shots_dict
+    #else:
+        #logger.info("discard s=%f, z=%f", s, z)
+        #return {}
 
+    aligned_pdr_shots_dict = apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id, s, A, b)
     return aligned_pdr_shots_dict
 
 
@@ -139,4 +161,25 @@ def _int_to_shot_id(shot_int):
     Returns: integer to shot id
     """
     return str(shot_int).zfill(10) + ".jpg"
+
+
+def _rotation_matrix_to_euler_angles(R):
+    """
+    # The result is the same as MATLAB except the order
+    # of the euler angles ( x and z are swapped ).
+    """
+    sy = math.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0])
+
+    singular = sy < 1e-6
+
+    if not singular:
+        x = math.atan2(R[2, 1], R[2, 2])
+        y = math.atan2(-R[2, 0], sy)
+        z = math.atan2(R[1, 0], R[0, 0])
+    else:
+        x = math.atan2(-R[1, 2], R[1, 1])
+        y = math.atan2(-R[2, 0], sy)
+        z = 0
+
+    return np.array(np.degrees([x, y, z]))
 

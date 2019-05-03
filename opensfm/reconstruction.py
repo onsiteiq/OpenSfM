@@ -152,7 +152,10 @@ def get_position_prior(shots, shot_id, pdr_shots_dict):
     #debug_show_pdr_prior_distance(shots[shot_id].pose.get_origin(), prior[shot_id])
 
     # TODO: put stddev in config
-    return prior[shot_id], 999999.0
+    if prior:
+        return prior[shot_id], 100.0
+    else:
+        return [0, 0, 0], 999999.0
 
 
 def bundle(graph, reconstruction, gcp, pdr_shots_dict, config):
@@ -615,7 +618,8 @@ def init_pdr_position(reflla, gps_points_dict, pdr_shots_dict):
             reflla['latitude'], reflla['longitude'], reflla['altitude'])
         topocentric_gps_points_dict[key] = (x, y, z)
 
-    aligned_pdr_shots_dict = align_pdr_global(topocentric_gps_points_dict, pdr_shots_dict)
+    # FIXME: read oiq_config.yaml to get reconstruction_scale_factor (hardcoded to 0.0199 below)
+    aligned_pdr_shots_dict = align_pdr_global(topocentric_gps_points_dict, pdr_shots_dict, 0.0199)
 
     # debug
     debug_plot_pdr(topocentric_gps_points_dict, aligned_pdr_shots_dict)
@@ -656,7 +660,7 @@ def debug_plot_pdr(topocentric_gps_points_dict, aligned_pdr_shots_dict):
         #logger.info("topocentric gps positions {} = {}, {}, {}".format(shot_id, value[0], value[1], value[2]))
 
     plt.show()
-    fig.savefig('./aligned_pdr_path.png', dpi=200)
+    #fig.savefig('./aligned_pdr_path.png', dpi=200)
 
 
 def _two_view_reconstruction_inliers(b1, b2, R, t, threshold):
@@ -1522,7 +1526,7 @@ def debug_plot_reconstructions(reconstructions):
             ax.add_artist(circle)
 
     plt.show()
-    fig.savefig('./recon.png', dpi=200)
+    #fig.savefig('./recon.png', dpi=200)
 
 
 class Chronometer:
