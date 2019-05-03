@@ -90,7 +90,7 @@ def align_pdr_local(sfm_points_dict, pdr_shots_dict, start_shot_id, end_shot_id)
     for i in range(len(sfm_shot_ids)):
         shot_id = sfm_shot_ids[i]
 
-        if pdr_shots_dict[shot_id]:
+        if shot_id in pdr_shots_dict:
             sfm_coords.append(sfm_points_dict[shot_id])
             pdr_coords.append(pdr_shots_dict[shot_id][0:3])
 
