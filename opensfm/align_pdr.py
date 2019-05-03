@@ -127,8 +127,10 @@ def apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id, s, A, b):
     # transform pdr shots
     for i in range(start_index, end_index + 1):
         shot_id = _int_to_shot_id(i)
-        Xp = s * A.dot(pdr_shots_dict[shot_id][0:3]) + b
-        new_dict[shot_id] = Xp.tolist()
+
+        if shot_id in pdr_shots_dict:
+            Xp = s * A.dot(pdr_shots_dict[shot_id][0:3]) + b
+            new_dict[shot_id] = Xp.tolist()
 
     return new_dict
 
