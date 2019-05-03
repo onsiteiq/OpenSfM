@@ -80,9 +80,6 @@ def align_pdr_local(sfm_points_dict, pdr_shots_dict, start_shot_id, end_shot_id)
     :param end_shot_id: end shot id
     :return: aligned pdr shot predictions for shots between start/end_shot_id
     """
-    if len(sfm_points_dict) < 3:
-        return {}
-
     sfm_coords = []
     pdr_coords = []
 
@@ -93,6 +90,9 @@ def align_pdr_local(sfm_points_dict, pdr_shots_dict, start_shot_id, end_shot_id)
         if shot_id in pdr_shots_dict:
             sfm_coords.append(sfm_points_dict[shot_id])
             pdr_coords.append(pdr_shots_dict[shot_id][0:3])
+
+    if len(sfm_coords) < 3:
+        return {}
 
     s, A, b = get_affine_transform(sfm_coords, pdr_coords)
 
