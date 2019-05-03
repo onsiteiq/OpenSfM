@@ -36,6 +36,10 @@ class DataSet:
     def __init__(self, data_path):
         """Init dataset associated to a folder."""
         self.data_path = data_path
+        self.gps_points_dict = {}
+        self.pdr_shots_dict = {}
+        self.topocentric_gps_points_dict = {}
+        self.aligned_pdr_shots_dict = {}
         self._load_config()
         self._load_image_list()
         self._load_mask_list()
@@ -691,9 +695,19 @@ class DataSet:
     
     def load_gps_points(self):
         """Load explicit points as opposed to GPS derived from EXIF metadata"""
-        
-        with open(self._gps_points_file()) as fin:
-            return io.read_gps_points_list( fin )
+
+        if not self.gps_points_dict:
+            with open(self._gps_points_file()) as fin:
+                self.gps_points_dict = io.read_gps_points_list(fin)
+
+        return self.gps_points_dict
+
+    def load_topocentric_gps_points(self):
+        return self.topocentric_gps_points_dict
+
+    def save_topocentric_gps_points(self, topocentric_gps_points_dict):
+        """save a local copy of topocentric gps points"""
+        self.topocentric_gps_points_dict = topocentric_gps_points_dict
 
     def _pdr_shots_file(self):
         return os.path.join(self.data_path, 'pdr_shots.txt')
@@ -704,13 +718,20 @@ class DataSet:
     def load_pdr_shots(self):
         """Load PDR shots"""
 
-        pdr_shots_dict = {}
-        with open(self._pdr_shots_file()) as fin:
-            for line in fin:
-                (shot_id, x, y, z, delta_heading, delta_distance) = line.split()
-                pdr_shots_dict[shot_id] = (float(x), float(y), float(z), float(delta_heading), float(delta_distance))
+        if not self.pdr_shots_dict:
+            with open(self._pdr_shots_file()) as fin:
+                for line in fin:
+                    (shot_id, x, y, z, delta_heading, delta_distance) = line.split()
+                    self.pdr_shots_dict[shot_id] = (float(x), float(y), float(z), float(delta_heading), float(delta_distance))
 
-        return pdr_shots_dict
+        return self.pdr_shots_dict
+
+    def load_aligned_pdr_shots(self):
+        return self.aligned_pdr_shots_dict
+
+    def save_aligned_pdr_shots(self, aligned_pdr_shots_dict):
+        """save a copy of aligned pdr shots"""
+        self.aligned_pdr_shots_dict = aligned_pdr_shots_dict
 
     def _ground_control_points_file(self):
         return os.path.join(self.data_path, 'gcp_list.txt')

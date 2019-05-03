@@ -20,7 +20,7 @@ from opensfm import matching
 from opensfm import multiview
 from opensfm import types
 from opensfm.align import align_reconstruction, apply_similarity
-from opensfm.align_pdr import align_pdr
+from opensfm.align_pdr import align_pdr_global, align_pdr_local
 from opensfm.context import parallel_map, current_memory_usage
 
 # debug
@@ -123,74 +123,39 @@ def _next_shot_id(curr_shot_id):
     return _int_to_shot_id(_shot_id_to_int(curr_shot_id) + 1)
 
 
-def _get_heading_distance(start_shot, end_shot):
-    """
-    estimate the direction based on position of previous 2 shots
-    :param start_shot:
-    :param end_shot:
-    :return: direction in degrees and euclidean distance
-    """
-    p_start = start_shot.pose.get_origin()
-    p_end = end_shot.pose.get_origin()
-
-    angle = np.arctan2(p_end[1]-p_start[1], p_end[0] - p_start[0])
-    dist = np.linalg.norm(p_end - p_start)
-    return np.degrees(angle), dist
+def debug_show_pdr_prior_distance(orig, prediction):
+    distance = np.linalg.norm(prediction - orig)
+    logger.info("prior-orig distance = {}".format(distance))
 
 
-def get_position_prior(shots, shot_id):
+def get_position_prior(shots, shot_id, pdr_shots_dict):
     """
-    calculate the position prior for shot_id
-    :param shots:
-    :param shot_id:
+    calculate the position prior for shot_id based on pdr
+
+    :param shots: all shots in the current reconstruction
+    :param shot_id: shot id to calculate prior on
+    :param pdr_shots_dict: (original - not aligned) pdr shots
     :return: position prior and standard deviation
     """
-    p_prior = [0, 0, 0]
-    stddev = 999999.0
+    if not pdr_shots_dict or len(shots) < 3:
+        return [0, 0, 0], 999999.0
 
-    prev_shot_id = _prev_shot_id(shot_id)
-    prev_prev_shot_id = _prev_shot_id(prev_shot_id)
-    if (prev_shot_id in shots) and (prev_prev_shot_id in shots):
-        # get the current heading and distance traveled based on previous two shots
-        heading, distance = _get_heading_distance(shots[prev_prev_shot_id], shots[prev_shot_id])
+    sfm_points_dict = {}
 
-        # new heading is previous heading minus delta_heading
-        new_heading = np.radians(heading - shots[shot_id].metadata.delta_heading)
+    for id in shots.keys():
+        sfm_points_dict[id] = shots[id].pose.get_origin()
 
-        # normalize delta distance. if the delta distance predicated by PDR is very small, then
-        # the ratio may go to extremes. in those cases, it's better to set new distance to be
-        # the same as distance of last shot
-        ratio = shots[shot_id].metadata.delta_distance / shots[prev_shot_id].metadata.delta_distance
-        if 2 > ratio > 0.5:
-            new_distance = distance * ratio
-        else:
-            new_distance = distance
+    # get the prediction based on aligned pdr position
+    prior = align_pdr_local(sfm_points_dict, pdr_shots_dict, shot_id, shot_id)
 
-        prev_position = shots[prev_shot_id].pose.get_origin()
+    # debug
+    #debug_show_pdr_prior_distance(shots[shot_id].pose.get_origin(), prior[shot_id])
 
-        p_prior[0] = prev_position[0] + new_distance * np.cos(new_heading)
-        p_prior[1] = prev_position[1] + new_distance * np.sin(new_heading)
-        p_prior[2] = prev_position[2]
-
-        # hard-coded to 100
-        stddev = 100
-
-        # debugging
-        logger.info("get_position_prior: shot_id={}, heading={}, delta_heading={}, distance={}, new distance={}"
-                    .format(shot_id,
-                            heading, shots[shot_id].metadata.delta_heading,
-                            distance, new_distance))
-
-        #curr_position = shots[shot_id].pose.get_origin()
-        #logger.info("get_position_prior: shot_id={}, delta x={}, diff x={}, delta y={}, diff y={}"
-                    #.format(shot_id,
-                            #new_distance*np.cos(new_heading), curr_position[0]-prev_position[0],
-                            #new_distance*np.sin(new_heading), curr_position[1]-prev_position[1]))
-
-    return p_prior, stddev
+    # TODO: put stddev in config
+    return prior[shot_id], 999999.0
 
 
-def bundle(graph, reconstruction, gcp, config):
+def bundle(graph, reconstruction, gcp, pdr_shots_dict, config):
     """Bundle adjust a reconstruction."""
     fix_cameras = not config['optimize_camera_parameters']
 
@@ -230,7 +195,7 @@ def bundle(graph, reconstruction, gcp, config):
     if config['bundle_use_pdr']:
         for shot_id in reconstruction.shots:
             if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
-                p, stddev = get_position_prior(reconstruction.shots, shot_id)
+                p, stddev = get_position_prior(reconstruction.shots, shot_id, pdr_shots_dict)
                 ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
 
     if config['bundle_use_gcp'] and gcp:
@@ -283,6 +248,7 @@ def bundle(graph, reconstruction, gcp, config):
         'wall_times': dict(chrono.lap_times()),
         'brief_report': ba.brief_report(),
     }
+
     return report
 
 
@@ -317,7 +283,7 @@ def bundle_single_view(graph, reconstruction, shot_id, config):
                               shot.metadata.gps_dop)
 
     if config['bundle_use_pdr'] and shot.metadata.gps_dop == 999999.0:
-        p, stddev = get_position_prior(reconstruction.shots, shot_id)
+        p, stddev = get_position_prior(reconstruction.shots, shot_id, {})
         ba.add_position_prior(str(shot.id), p[0], p[1], p[2], stddev)
 
     ba.set_loss_function(config['loss_function'],
@@ -344,7 +310,7 @@ def bundle_single_view(graph, reconstruction, shot_id, config):
     shot.pose.translation = [s.tx, s.ty, s.tz]
 
 
-def bundle_local(graph, reconstruction, gcp, central_shot_id, config):
+def bundle_local(graph, reconstruction, gcp, pdr_shots_dict, central_shot_id, config):
     """Bundle adjust the local neighborhood of a shot."""
     chrono = Chronometer()
 
@@ -402,7 +368,7 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, config):
     if config['bundle_use_pdr']:
         for shot_id in neighbors:
             if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
-                p, stddev = get_position_prior(reconstruction.shots, shot_id)
+                p, stddev = get_position_prior(reconstruction.shots, shot_id, pdr_shots_dict)
                 ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
 
     if config['bundle_use_gcp'] and gcp:
@@ -632,30 +598,41 @@ def get_image_metadata(data, image):
     return metadata
 
 
-def align_pdr_position(data):
-    reflla = data.load_reference_lla()
-    topocentric_points_dict = {}
-    if data.gps_points_exist() and data.pdr_shots_exist():
-        gps_points_dict = data.load_gps_points()
+def init_pdr_position(reflla, gps_points_dict, pdr_shots_dict):
+    """
+    globally align pdr path to gps points
 
-        for key, value in gps_points_dict.items():
-            x, y, z = geo.topocentric_from_lla(
-                value[0], value[1], value[2],
-                reflla['latitude'], reflla['longitude'], reflla['altitude'])
-            topocentric_points_dict[key] = (x, y, z)
-            #logger.info("gps positions {} = {}, {}, {}".format(key, x, y, z))
+    :param reflla:
+    :param gps_points_dict:
+    :param pdr_shots_dict:
+    :return:
+    """
+    topocentric_gps_points_dict = {}
 
-        pdr_shots_dict = data.load_pdr_shots()
-        aligned_pdr_shots_dict = align_pdr(topocentric_points_dict, pdr_shots_dict)
+    for key, value in gps_points_dict.items():
+        x, y, z = geo.topocentric_from_lla(
+            value[0], value[1], value[2],
+            reflla['latitude'], reflla['longitude'], reflla['altitude'])
+        topocentric_gps_points_dict[key] = (x, y, z)
 
-        # debug
-        debug_plot(topocentric_points_dict, aligned_pdr_shots_dict)
+    aligned_pdr_shots_dict = align_pdr_global(topocentric_gps_points_dict, pdr_shots_dict)
+
+    # debug
+    #debug_plot_pdr(topocentric_gps_points_dict, aligned_pdr_shots_dict)
+
+    return topocentric_gps_points_dict, aligned_pdr_shots_dict
 
 
-def debug_plot(topocentric_points_dict, aligned_pdr_shots_dict):
+def debug_plot_pdr(topocentric_gps_points_dict, aligned_pdr_shots_dict):
     """
     draw floor plan and aligned pdr shot positions on top of it
     """
+    for key, value in topocentric_gps_points_dict.items():
+        logger.info("gps point {} = {} {} {}".format(key, value[0], value[1], value[2]))
+
+    for key, value in aligned_pdr_shots_dict.items():
+        logger.info("aligned pdr {} = {} {} {}".format(key, value[0], value[1], value[2]))
+
     # floor plan
     img = mpimg.imread('./AX-104B_-_CONSTRUCTION_FLOORS_-_5.png')
     fig, ax = plt.subplots()
@@ -672,7 +649,7 @@ def debug_plot(topocentric_points_dict, aligned_pdr_shots_dict):
 
     plt.plot(X, Y, linestyle='-', color='red', linewidth=3)
 
-    for key, value in topocentric_points_dict.items():
+    for key, value in topocentric_gps_points_dict.items():
         circle = plt.Circle((value[0], value[1]), color='green', radius=100)
         ax.add_artist(circle)
         #logger.info("topocentric gps positions {} = {}, {}, {}".format(shot_id, value[0], value[1], value[2]))
@@ -1323,7 +1300,11 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
     config = data.config
     report = {'steps': []}
 
-    bundle(graph, reconstruction, None, config)
+    pdr_shots_dict = {}
+    if data.pdr_shots_exist():
+        pdr_shots_dict = data.load_aligned_pdr_shots()
+
+    bundle(graph, reconstruction, None, pdr_shots_dict, config)
     remove_outliers(graph, reconstruction, config)
     align_reconstruction(reconstruction, gcp, config)
 
@@ -1360,9 +1341,9 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
 
             if should_retriangulate.should():
                 logger.info("Re-triangulating")
-                b1rep = bundle(graph, reconstruction, None, config)
+                b1rep = bundle(graph, reconstruction, None, pdr_shots_dict, config)
                 rrep = retriangulate(graph, reconstruction, config)
-                b2rep = bundle(graph, reconstruction, None, config)
+                b2rep = bundle(graph, reconstruction, None, pdr_shots_dict, config)
                 remove_outliers(graph, reconstruction, config)
                 align_reconstruction(reconstruction, gcp, config)
                 step['bundle'] = b1rep
@@ -1371,13 +1352,13 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
                 should_retriangulate.done()
                 should_bundle.done()
             elif should_bundle.should():
-                brep = bundle(graph, reconstruction, None, config)
+                brep = bundle(graph, reconstruction, None, pdr_shots_dict, config)
                 remove_outliers(graph, reconstruction, config)
                 align_reconstruction(reconstruction, gcp, config)
                 step['bundle'] = brep
                 should_bundle.done()
             elif config['local_bundle_radius'] > 0:
-                brep = bundle_local(graph, reconstruction, None, image, config)
+                brep = bundle_local(graph, reconstruction, None, pdr_shots_dict, image, config)
                 remove_outliers(graph, reconstruction, config)
                 step['local_bundle'] = brep
 
@@ -1397,7 +1378,7 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
 
     logger.info("-------------------------------------------------------")
 
-    bundle(graph, reconstruction, gcp, config)
+    bundle(graph, reconstruction, gcp, pdr_shots_dict, config)
     remove_outliers(graph, reconstruction, config)
     align_reconstruction(reconstruction, gcp, config)
     paint_reconstruction(data, graph, reconstruction)
@@ -1430,13 +1411,10 @@ def incremental_reconstruction(data):
     gcp = None
     if data.ground_control_points_exist():
         gcp = data.load_ground_control_points()
+
     common_tracks = matching.all_common_tracks(graph, tracks)
 
-    # FIXME for now, we force sequential ordering of the images, and
-    # skip the "reconstructability" calculation. we will need to switch
-    # to using pdr_shots and bootstrap reconstruction when movement is
-    # detected
-
+    # commented out below - we now reconstruct sequentially
     #pairs = compute_image_pairs(common_tracks, data)
     #chrono.lap('compute_image_pairs')
     #report['num_candidate_image_pairs'] = len(pairs)
@@ -1452,9 +1430,6 @@ def incremental_reconstruction(data):
 
     full_images = list(set(images))
     full_images.sort()
-
-    # load pdr data and align with gps points
-    align_pdr_position(data)
 
     # Breakup image sets along specified GPS locations
 
@@ -1473,6 +1448,18 @@ def incremental_reconstruction(data):
 
     else:
         image_groups.append( full_images )
+
+    pdr_shots_dict = {}
+    if data.pdr_shots_exist():
+        pdr_shots_dict = data.load_pdr_shots()
+
+    reflla = data.load_reference_lla()
+
+    # load pdr data and globally align with gps points
+    topocentric_gps_points_dict, aligned_pdr_shots_dict = \
+        init_pdr_position(reflla, gps_points_dict, pdr_shots_dict)
+    data.save_topocentric_gps_points(topocentric_gps_points_dict)
+    data.save_aligned_pdr_shots(aligned_pdr_shots_dict)
 
     for remaining_images in image_groups:
         while len(remaining_images) > 2:
@@ -1495,24 +1482,46 @@ def incremental_reconstruction(data):
                 reconstruction, rec_report['grow'] = grow_reconstruction(
                     data, graph, reconstruction, remaining_images, gcp)
                 reconstructions.append(reconstruction)
-                reconstructions = sorted(reconstructions,
-                                         key=lambda x: -len(x.shots))
-                data.save_reconstruction(reconstructions)
-
                 logger.info("{} images remaining".format(len(remaining_images)))
             else:
                 # bootstrap didn't work, try the next pair
                 remaining_images.remove(im1)
 
-    for k, r in enumerate(reconstructions):
-        logger.info("Reconstruction {}: {} images, {} points".format(
-            k, len(r.shots), len(r.points)))
-    logger.info("{} partial reconstructions in total.".format(
-        len(reconstructions)))
+    if reconstructions:
+        reconstructions = sorted(reconstructions, key=lambda x: -len(x.shots))
+        data.save_reconstruction(reconstructions)
+
+        debug_plot_reconstructions(reconstructions)
+
+        for k, r in enumerate(reconstructions):
+            logger.info("Reconstruction {}: {} images, {} points".format(
+                k, len(r.shots), len(r.points)))
+
+        logger.info("{} partial reconstructions in total.".format(len(reconstructions)))
+
     chrono.lap('compute_reconstructions')
     report['wall_times'] = dict(chrono.lap_times())
     report['not_reconstructed_images'] = list(remaining_images)
     return report
+
+
+def debug_plot_reconstructions(reconstructions):
+    """
+    draw floor plan and aligned pdr shot positions on top of it
+    """
+    # floor plan
+    img = mpimg.imread('./AX-104B_-_CONSTRUCTION_FLOORS_-_5.png')
+    fig, ax = plt.subplots()
+    ax.imshow(img)
+
+    for reconstruction in reconstructions:
+        for shot in reconstruction.shots.values():
+            p = shot.pose.get_origin()
+            circle = plt.Circle((p[0], p[1]), color='green', radius=50)
+            ax.add_artist(circle)
+
+    plt.show()
+    fig.savefig('./recon.png', dpi=200)
 
 
 class Chronometer:
