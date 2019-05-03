@@ -618,7 +618,7 @@ def init_pdr_position(reflla, gps_points_dict, pdr_shots_dict):
     aligned_pdr_shots_dict = align_pdr_global(topocentric_gps_points_dict, pdr_shots_dict)
 
     # debug
-    #debug_plot_pdr(topocentric_gps_points_dict, aligned_pdr_shots_dict)
+    debug_plot_pdr(topocentric_gps_points_dict, aligned_pdr_shots_dict)
 
     return topocentric_gps_points_dict, aligned_pdr_shots_dict
 
@@ -652,6 +652,7 @@ def debug_plot_pdr(topocentric_gps_points_dict, aligned_pdr_shots_dict):
     for key, value in topocentric_gps_points_dict.items():
         circle = plt.Circle((value[0], value[1]), color='green', radius=100)
         ax.add_artist(circle)
+        ax.text(value[0], value[1], str(_shot_id_to_int(key)), fontsize=8)
         #logger.info("topocentric gps positions {} = {}, {}, {}".format(shot_id, value[0], value[1], value[2]))
 
     plt.show()
