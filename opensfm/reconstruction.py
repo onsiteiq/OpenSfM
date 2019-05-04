@@ -129,6 +129,13 @@ def debug_show_pdr_prior_distance(orig, prediction):
 
 
 def get_position_prior(shots, shot_id, pdr_shots_dict):
+    if shot_id in pdr_shots_dict:
+        return pdr_shots_dict[shot_id], 100.0
+    else:
+        return [0, 0, 0], 999999.0
+
+
+def get_position_prior_old(shots, shot_id, pdr_shots_dict):
     """
     calculate the position prior for shot_id based on pdr
 

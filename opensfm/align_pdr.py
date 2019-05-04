@@ -23,9 +23,10 @@ def align_pdr_global(gps_points_dict, pdr_shots_dict, reconstruction_scale_facto
     if len(gps_points_dict) < 3 or len(pdr_shots_dict) < 3:
         return {}
 
-    # reconstruct_scale_factor is from oiq_config.yaml, and it's feet per pixel
-    # 0.3048 is meter per foot. pdr output is in meters. so based on the two
-    # we can calculate the approximate scale
+    # reconstruct_scale_factor is from oiq_config.yaml, and it's feet per pixel.
+    # 0.3048 is meter per foot. 1.0 / (reconstruction_scale_factor * 0.3048) is
+    # therefore pixels/meter, and since pdr output is in meters, it's the
+    # expected scale
     expected_scale = 1.0 / (reconstruction_scale_factor * 0.3048)
 
     aligned_pdr_shots_dict = {}
