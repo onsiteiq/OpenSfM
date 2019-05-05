@@ -4,9 +4,67 @@ import logging
 import math
 import numpy as np
 
+from opensfm import multiview
 from opensfm import transformations as tf
 
 logger = logging.getLogger(__name__)
+
+
+def align_pdr_global_2d(gps_points_dict, pdr_shots_dict, reconstruction_scale_factor):
+    """
+    *globally* align pdr predictions to GPS points
+
+    Move a sliding window through the gps points and get 2 neighboring points at a time;
+    use them to piece-wise affine transform pdr predictions to align with GPS points
+
+    :param gps_points_dict: gps points in topocentric coordinates
+    :param pdr_shots_dict: position of each shot as predicted by pdr
+    :return: aligned pdr shot predictions
+    """
+    if len(gps_points_dict) < 2 or len(pdr_shots_dict) < 2:
+        return {}
+
+    # reconstruct_scale_factor is from oiq_config.yaml, and it's feet per pixel.
+    # 0.3048 is meter per foot. 1.0 / (reconstruction_scale_factor * 0.3048) is
+    # therefore pixels/meter, and since pdr output is in meters, it's the
+    # expected scale
+    expected_scale = 1.0 / (reconstruction_scale_factor * 0.3048)
+
+    aligned_pdr_shots_dict = {}
+
+    gps_shot_ids = sorted(gps_points_dict.keys())
+    for i in range(len(gps_shot_ids) - 1):
+        gps_coords = []
+        pdr_coords = []
+
+        for j in range(2):
+            shot_id = gps_shot_ids[i+j]
+            gps_coords.append(gps_points_dict[shot_id])
+            pdr_coords.append([pdr_shots_dict[shot_id][0], -pdr_shots_dict[shot_id][1], 0])
+
+        s, A, b = get_affine_transform_2d(gps_coords, pdr_coords)
+
+        [x, y, z] = _rotation_matrix_to_euler_angles(A)
+        logger.info("rotation=%f, %f, %f", x, y, z)
+
+        if not ((0.50 * expected_scale) < s < (2.0 * expected_scale)):
+            logger.info("s/expected_scale={}, discard".format(s/expected_scale))
+            continue
+
+        start_shot_id = gps_shot_ids[i]
+        end_shot_id = gps_shot_ids[i+1]
+
+        # in first iteration, we transform pdr from first shot
+        # in last iteration, we transform pdr until last shot
+        if i == 0:
+            start_shot_id = _int_to_shot_id(0)
+        elif i == len(gps_points_dict)-2:
+            end_shot_id = _int_to_shot_id(len(pdr_shots_dict)-1)
+
+        new_dict = apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id, s, A, b)
+        aligned_pdr_shots_dict.update(new_dict)
+
+    return aligned_pdr_shots_dict
 
 
 def align_pdr_global(gps_points_dict, pdr_shots_dict, reconstruction_scale_factor):
@@ -23,13 +81,15 @@ def align_pdr_global(gps_points_dict, pdr_shots_dict, reconstruction_scale_facto
     if len(gps_points_dict) < 3 or len(pdr_shots_dict) < 3:
         return {}
 
+    aligned_pdr_shots_dict = {}
+
     # reconstruct_scale_factor is from oiq_config.yaml, and it's feet per pixel.
     # 0.3048 is meter per foot. 1.0 / (reconstruction_scale_factor * 0.3048) is
     # therefore pixels/meter, and since pdr output is in meters, it's the
     # expected scale
     expected_scale = 1.0 / (reconstruction_scale_factor * 0.3048)
 
-    aligned_pdr_shots_dict = {}
+    last_deviation = 1.0
 
     gps_shot_ids = sorted(gps_points_dict.keys())
     for i in range(len(gps_shot_ids) - 2):
@@ -43,25 +103,32 @@ def align_pdr_global(gps_points_dict, pdr_shots_dict, reconstruction_scale_facto
 
         s, A, b = get_affine_transform(gps_coords, pdr_coords)
 
-        #[x, y, z] = _rotation_matrix_to_euler_angles(A)
-        #logger.info("rotation=%f, %f, %f", x, y, z)
+        # the closer s is to expected_scale, the better the fit, and the less the deviation
+        deviation = math.fabs(1.0 - s/expected_scale)
 
-        if not ((0.80 * expected_scale) < s < (1.2 * expected_scale)):
-            logger.info("s/expected_scale={}, discard".format(s/expected_scale))
-            continue
+        [x, y, z] = _rotation_matrix_to_euler_angles(A)
+        logger.info("deviation=%f, rotation=%f, %f, %f", deviation, x, y, z)
 
-        start_shot_id = gps_shot_ids[i]
-        end_shot_id = gps_shot_ids[i+2]
-
-        # in first iteration, we transform pdr from first shot
         # in last iteration, we transform pdr until last shot
         if i == 0:
+            # in first iteration, we transform pdr from first shot
             start_shot_id = _int_to_shot_id(0)
-        elif i == len(gps_points_dict)-3:
-            end_shot_id = _int_to_shot_id(len(pdr_shots_dict)-1)
+            end_shot_id = gps_shot_ids[2]
+        else:
+            if deviation < last_deviation:
+                start_shot_id = gps_shot_ids[i]
+            else:
+                start_shot_id = gps_shot_ids[i+1]
+
+            if i == len(gps_points_dict)-3:
+                end_shot_id = _int_to_shot_id(len(pdr_shots_dict)-1)
+            else:
+                end_shot_id = gps_shot_ids[i+2]
 
         new_dict = apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id, s, A, b)
         aligned_pdr_shots_dict.update(new_dict)
+
+        last_deviation = deviation
 
     return aligned_pdr_shots_dict
 
@@ -136,8 +203,31 @@ def apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id, s, A, b):
     return new_dict
 
 
+def get_affine_transform_2d(gps_coords, pdr_coords):
+    """
+    get affine transform between pdr an GPS coordinates (dim 2)
+
+    """
+    X = np.array(pdr_coords)
+    Xp = np.array(gps_coords)
+
+    # Estimate 2d similarity to align to GPS
+    T = tf.affine_matrix_from_points(X.T[:2], Xp.T[:2], shear=False)
+    s = np.linalg.det(T[:2, :2]) ** 0.5
+    A = np.eye(3)
+    A[:2, :2] = T[:2, :2] / s
+    b = np.array([
+        T[0, 2],
+        T[1, 2],
+        Xp[:, 2].mean() - s * X[:, 2].mean()  # vertical alignment
+    ])
+
+    return s, A, b
+
+
 def get_affine_transform(gps_coords, pdr_coords):
-    """Align pdr output with GPS data.
+    """
+    get affine transform between pdr an GPS coordinates (dim 3)
 
     """
     # Compute similarity Xp = s A X + b

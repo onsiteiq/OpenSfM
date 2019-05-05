@@ -645,7 +645,7 @@ def debug_plot_pdr(topocentric_gps_points_dict, aligned_pdr_shots_dict):
         logger.info("aligned pdr {} = {} {} {}".format(key, value[0], value[1], value[2]))
 
     # floor plan
-    img = mpimg.imread('./AX-104B_-_CONSTRUCTION_FLOORS_-_5.png')
+    img = mpimg.imread('./AX-104B_-_CONSTRUCTION_FLOORS_-_7.png')
     fig, ax = plt.subplots()
     ax.imshow(img)
 
@@ -1522,7 +1522,7 @@ def debug_plot_reconstructions(reconstructions):
     draw floor plan and aligned pdr shot positions on top of it
     """
     # floor plan
-    img = mpimg.imread('./AX-104B_-_CONSTRUCTION_FLOORS_-_5.png')
+    img = mpimg.imread('./AX-104B_-_CONSTRUCTION_FLOORS_-_7.png')
     fig, ax = plt.subplots()
     ax.imshow(img)
 
