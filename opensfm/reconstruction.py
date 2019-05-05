@@ -128,23 +128,23 @@ def debug_show_pdr_prior_distance(orig, prediction):
     logger.info("prior-orig distance = {}".format(distance))
 
 
-def get_position_prior(shots, shot_id, pdr_shots_dict):
-    if shot_id in pdr_shots_dict:
-        return pdr_shots_dict[shot_id], 100.0
+def get_position_prior(shots, shot_id, global_predictions_dict):
+    if shot_id in global_predictions_dict:
+        return global_predictions_dict[shot_id][:3], global_predictions_dict[shot_id][3]
     else:
         return [0, 0, 0], 999999.0
 
 
-def get_position_prior_old(shots, shot_id, pdr_shots_dict):
+def get_position_prior_old(shots, shot_id, global_predictions_dict):
     """
     calculate the position prior for shot_id based on pdr
 
     :param shots: all shots in the current reconstruction
     :param shot_id: shot id to calculate prior on
-    :param pdr_shots_dict: (original - not aligned) pdr shots
+    :param global_predictions_dict: pdr shots predictions
     :return: position prior and standard deviation
     """
-    if not pdr_shots_dict or len(shots) < 3:
+    if not global_predictions_dict or len(shots) < 3:
         return [0, 0, 0], 999999.0
 
     sfm_points_dict = {}
@@ -153,7 +153,7 @@ def get_position_prior_old(shots, shot_id, pdr_shots_dict):
         sfm_points_dict[id] = shots[id].pose.get_origin()
 
     # get the prediction based on aligned pdr position
-    prior = align_pdr_local(sfm_points_dict, pdr_shots_dict, shot_id, shot_id)
+    prior = align_pdr_local(sfm_points_dict, global_predictions_dict, shot_id, shot_id)
 
     # debug
     #debug_show_pdr_prior_distance(shots[shot_id].pose.get_origin(), prior[shot_id])
@@ -165,7 +165,7 @@ def get_position_prior_old(shots, shot_id, pdr_shots_dict):
         return [0, 0, 0], 999999.0
 
 
-def bundle(graph, reconstruction, gcp, pdr_shots_dict, config):
+def bundle(graph, reconstruction, gcp, global_predictions_dict, config):
     """Bundle adjust a reconstruction."""
     fix_cameras = not config['optimize_camera_parameters']
 
@@ -205,7 +205,7 @@ def bundle(graph, reconstruction, gcp, pdr_shots_dict, config):
     if config['bundle_use_pdr']:
         for shot_id in reconstruction.shots:
             if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
-                p, stddev = get_position_prior(reconstruction.shots, shot_id, pdr_shots_dict)
+                p, stddev = get_position_prior(reconstruction.shots, shot_id, global_predictions_dict)
                 ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
 
     if config['bundle_use_gcp'] and gcp:
@@ -320,7 +320,7 @@ def bundle_single_view(graph, reconstruction, shot_id, config):
     shot.pose.translation = [s.tx, s.ty, s.tz]
 
 
-def bundle_local(graph, reconstruction, gcp, pdr_shots_dict, central_shot_id, config):
+def bundle_local(graph, reconstruction, gcp, global_predictions_dict, central_shot_id, config):
     """Bundle adjust the local neighborhood of a shot."""
     chrono = Chronometer()
 
@@ -378,7 +378,7 @@ def bundle_local(graph, reconstruction, gcp, pdr_shots_dict, central_shot_id, co
     if config['bundle_use_pdr']:
         for shot_id in neighbors:
             if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
-                p, stddev = get_position_prior(reconstruction.shots, shot_id, pdr_shots_dict)
+                p, stddev = get_position_prior(reconstruction.shots, shot_id, global_predictions_dict)
                 ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
 
     if config['bundle_use_gcp'] and gcp:
@@ -613,8 +613,8 @@ def init_pdr_position(reflla, gps_points_dict, pdr_shots_dict):
     globally align pdr path to gps points
 
     :param reflla:
-    :param gps_points_dict:
-    :param pdr_shots_dict:
+    :param gps_points_dict: gps points
+    :param pdr_shots_dict: original, unaligned pdr shots predictions
     :return:
     """
     topocentric_gps_points_dict = {}
@@ -626,34 +626,37 @@ def init_pdr_position(reflla, gps_points_dict, pdr_shots_dict):
         topocentric_gps_points_dict[key] = (x, y, z)
 
     # FIXME: read oiq_config.yaml to get reconstruction_scale_factor (hardcoded to 0.0199 below)
-    aligned_pdr_shots_dict = align_pdr_global(topocentric_gps_points_dict, pdr_shots_dict, 0.0199)
+    global_predictions_dict = align_pdr_global(topocentric_gps_points_dict, pdr_shots_dict, 0.0199)
 
     # debug
-    debug_plot_pdr(topocentric_gps_points_dict, aligned_pdr_shots_dict)
+    debug_plot_pdr(topocentric_gps_points_dict, global_predictions_dict)
 
-    return topocentric_gps_points_dict, aligned_pdr_shots_dict
+    return topocentric_gps_points_dict, global_predictions_dict
 
 
-def debug_plot_pdr(topocentric_gps_points_dict, aligned_pdr_shots_dict):
+def debug_plot_pdr(topocentric_gps_points_dict, global_predictions_dict):
     """
     draw floor plan and aligned pdr shot positions on top of it
     """
+    logger.info("debug_plot_pdr {}".format(len(global_predictions_dict)))
+
     for key, value in topocentric_gps_points_dict.items():
         logger.info("gps point {} = {} {} {}".format(key, value[0], value[1], value[2]))
 
-    for key, value in aligned_pdr_shots_dict.items():
-        logger.info("aligned pdr {} = {} {} {}".format(key, value[0], value[1], value[2]))
+    for key, value in global_predictions_dict.items():
+        logger.info("aligned pdr point {} = {} {} {}, dop = {}".
+                    format(key, value[0], value[1], value[2], value[3]))
 
     # floor plan
     img = mpimg.imread('./AX-104B_-_CONSTRUCTION_FLOORS_-_7.png')
     fig, ax = plt.subplots()
     ax.imshow(img)
 
-    shot_ids = sorted(aligned_pdr_shots_dict.keys())
+    shot_ids = sorted(global_predictions_dict.keys())
     X = []
     Y = []
     for shot_id in shot_ids:
-        value = aligned_pdr_shots_dict[shot_id]
+        value = global_predictions_dict[shot_id]
         X.append(value[0])
         Y.append(value[1])
         #logger.info("aligned pdr positions {} = {}, {}, {}".format(shot_id, value[0], value[1], value[2]))
@@ -1312,11 +1315,11 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
     config = data.config
     report = {'steps': []}
 
-    pdr_shots_dict = {}
+    global_predictions_dict = {}
     if data.pdr_shots_exist():
-        pdr_shots_dict = data.load_aligned_pdr_shots()
+        global_predictions_dict = data.load_global_predictions()
 
-    bundle(graph, reconstruction, None, pdr_shots_dict, config)
+    bundle(graph, reconstruction, None, global_predictions_dict, config)
     remove_outliers(graph, reconstruction, config)
     align_reconstruction(reconstruction, gcp, config)
 
@@ -1353,9 +1356,9 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
 
             if should_retriangulate.should():
                 logger.info("Re-triangulating")
-                b1rep = bundle(graph, reconstruction, None, pdr_shots_dict, config)
+                b1rep = bundle(graph, reconstruction, None, global_predictions_dict, config)
                 rrep = retriangulate(graph, reconstruction, config)
-                b2rep = bundle(graph, reconstruction, None, pdr_shots_dict, config)
+                b2rep = bundle(graph, reconstruction, None, global_predictions_dict, config)
                 remove_outliers(graph, reconstruction, config)
                 align_reconstruction(reconstruction, gcp, config)
                 step['bundle'] = b1rep
@@ -1364,13 +1367,13 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
                 should_retriangulate.done()
                 should_bundle.done()
             elif should_bundle.should():
-                brep = bundle(graph, reconstruction, None, pdr_shots_dict, config)
+                brep = bundle(graph, reconstruction, None, global_predictions_dict, config)
                 remove_outliers(graph, reconstruction, config)
                 align_reconstruction(reconstruction, gcp, config)
                 step['bundle'] = brep
                 should_bundle.done()
             elif config['local_bundle_radius'] > 0:
-                brep = bundle_local(graph, reconstruction, None, pdr_shots_dict, image, config)
+                brep = bundle_local(graph, reconstruction, None, global_predictions_dict, image, config)
                 remove_outliers(graph, reconstruction, config)
                 step['local_bundle'] = brep
 
@@ -1390,7 +1393,7 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
 
     logger.info("-------------------------------------------------------")
 
-    bundle(graph, reconstruction, gcp, pdr_shots_dict, config)
+    bundle(graph, reconstruction, gcp, global_predictions_dict, config)
     remove_outliers(graph, reconstruction, config)
     align_reconstruction(reconstruction, gcp, config)
     paint_reconstruction(data, graph, reconstruction)
@@ -1468,10 +1471,10 @@ def incremental_reconstruction(data):
     reflla = data.load_reference_lla()
 
     # load pdr data and globally align with gps points
-    topocentric_gps_points_dict, aligned_pdr_shots_dict = \
+    topocentric_gps_points_dict, global_predictions_dict = \
         init_pdr_position(reflla, gps_points_dict, pdr_shots_dict)
     data.save_topocentric_gps_points(topocentric_gps_points_dict)
-    data.save_aligned_pdr_shots(aligned_pdr_shots_dict)
+    data.save_global_predictions(global_predictions_dict)
 
     for remaining_images in image_groups:
         while len(remaining_images) > 2:
