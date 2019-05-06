@@ -20,7 +20,7 @@ from opensfm import matching
 from opensfm import multiview
 from opensfm import types
 from opensfm.align import align_reconstruction, apply_similarity
-from opensfm.align_pdr import align_pdr_global, align_pdr_local, bootstrap_reorient
+from opensfm.align_pdr import align_pdr_global, align_pdr_local
 from opensfm.context import parallel_map, current_memory_usage
 
 # debug
@@ -324,17 +324,19 @@ def bundle_local(graph, reconstruction, gcp, global_predictions_dict, central_sh
     """Bundle adjust the local neighborhood of a shot."""
     chrono = Chronometer()
 
-    neighbors = shot_neighborhood_sequential(
+    interior, boundary = shot_neighborhood(
         graph, reconstruction, central_shot_id,
+        config['local_bundle_radius'],
         config['local_bundle_min_common_points'],
         config['local_bundle_max_shots'])
 
     logger.debug(
-        'Local bundle sets: neighbors {}  other {}'.format(
-            len(neighbors), len(reconstruction.shots) - len(neighbors)))
+        'Local bundle sets: interior {}  boundary {}  other {}'.format(
+            len(interior), len(boundary),
+            len(reconstruction.shots) - len(interior) - len(boundary)))
 
     point_ids = set()
-    for shot_id in neighbors:
+    for shot_id in interior:
         if shot_id in graph:
             for track in graph[shot_id]:
                 if track in reconstruction.points:
@@ -345,7 +347,7 @@ def bundle_local(graph, reconstruction, gcp, global_predictions_dict, central_sh
     for camera in reconstruction.cameras.values():
         _add_camera_to_bundle(ba, camera, constant=True)
 
-    for shot_id in neighbors:
+    for shot_id in interior | boundary:
         shot = reconstruction.shots[shot_id]
         r = shot.pose.rotation
         t = shot.pose.translation
@@ -353,7 +355,7 @@ def bundle_local(graph, reconstruction, gcp, global_predictions_dict, central_sh
             str(shot.id), str(shot.camera.id),
             r[0], r[1], r[2],
             t[0], t[1], t[2],
-            False
+            shot.id in boundary
         )
 
     for point_id in point_ids:
@@ -361,7 +363,7 @@ def bundle_local(graph, reconstruction, gcp, global_predictions_dict, central_sh
         x = point.coordinates
         ba.add_point(str(point.id), x[0], x[1], x[2], False)
 
-    for shot_id in neighbors:
+    for shot_id in interior | boundary:
         if shot_id in graph:
             for track in graph[shot_id]:
                 if track in point_ids:
@@ -369,21 +371,21 @@ def bundle_local(graph, reconstruction, gcp, global_predictions_dict, central_sh
                                        *graph[shot_id][track]['feature'])
 
     if config['bundle_use_gps']:
-        for shot_id in neighbors:
+        for shot_id in interior:
             shot = reconstruction.shots[shot_id]
             g = shot.metadata.gps_position
             ba.add_position_prior(str(shot.id), g[0], g[1], g[2],
                                   shot.metadata.gps_dop)
 
     if config['bundle_use_pdr']:
-        for shot_id in neighbors:
+        for shot_id in interior:
             if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
                 p, stddev = get_position_prior(reconstruction.shots, shot_id, global_predictions_dict)
                 ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
 
     if config['bundle_use_gcp'] and gcp:
         for observation in gcp:
-            if observation.shot_id in neighbors:
+            if observation.shot_id in interior:
                 ba.add_ground_control_point_observation(
                     observation.shot_id,
                     observation.coordinates[0],
@@ -411,7 +413,7 @@ def bundle_local(graph, reconstruction, gcp, global_predictions_dict, central_sh
     ba.run()
     chrono.lap('run')
 
-    for shot_id in neighbors:
+    for shot_id in interior:
         shot = reconstruction.shots[shot_id]
         s = ba.get_shot(str(shot.id))
         shot.pose.rotation = [s.rx, s.ry, s.rz]
@@ -429,48 +431,12 @@ def bundle_local(graph, reconstruction, gcp, global_predictions_dict, central_sh
     report = {
         'wall_times': dict(chrono.lap_times()),
         'brief_report': ba.brief_report(),
-        'num_neighbor_images': len(neighbors),
+        'num_interior_images': len(interior),
+        'num_boundary_images': len(boundary),
         'num_other_images': (len(reconstruction.shots)
-                             - len(neighbors)),
+                             - len(interior) - len(boundary)),
     }
     return report
-
-
-def shot_neighborhood_sequential(graph, reconstruction, current_shot_id,
-                                 min_common_points, max_interior_size):
-    """Reconstructed shots (sequentially) precede a given shot
-
-    Returns:
-        - neighbors: the list of shots preceding current shot, that has at least
-        min_common_points with its immediate neighbors
-    """
-    neighbors = [current_shot_id]
-    curr = current_shot_id
-
-    while max_interior_size > len(neighbors):
-        prev = _prev_shot_id(curr)
-        if prev not in reconstruction.shots:
-            break
-
-        points = set()
-        for track_id in graph[prev]:
-            if track_id in reconstruction.points:
-                points.add(track_id)
-
-        common_points = 0
-        for track_id in points:
-            if curr in graph[track_id]:
-                common_points += 1
-
-        #logger.info("common_points={}".format(common_points))
-        if common_points >= min_common_points:
-            neighbors.append(prev)
-            curr = prev
-        else:
-            break
-
-    neighbors.sort()
-    return neighbors
 
 
 def shot_neighborhood(graph, reconstruction, central_shot_id, radius,
@@ -584,7 +550,6 @@ def get_image_metadata(data, image):
         x, y, z = geo.topocentric_from_lla(
             lat, lon, alt,
             reflla['latitude'], reflla['longitude'], reflla['altitude'])
-
         metadata.gps_position = [x, y, z]
         metadata.gps_dop = exif['gps'].get('dop', 15.0)
     else:
@@ -648,7 +613,7 @@ def debug_plot_pdr(topocentric_gps_points_dict, global_predictions_dict):
                     format(key, value[0], value[1], value[2], value[3]))
 
     # floor plan
-    img = mpimg.imread('./AX-104B_-_CONSTRUCTION_FLOORS_-_7.png')
+    img = mpimg.imread('./AX-104B_-_CONSTRUCTION_FLOORS_-_5.png')
     fig, ax = plt.subplots()
     ax.imshow(img)
 
@@ -924,10 +889,6 @@ def bootstrap_reconstruction(data, graph, im1, im2, p1, p2):
     bundle_single_view(graph, reconstruction, im2, data.config)
     retriangulate(graph, reconstruction, data.config)
     bundle_single_view(graph, reconstruction, im2, data.config)
-
-    if data.pdr_shots_exist():
-        global_predictions_dict = data.load_global_predictions()
-        bootstrap_reorient(reconstruction, global_predictions_dict)
 
     logger.info("bootstrap after bundle_single_view")
     logger.info("shot 1 rot={}, trans={}, origin={}".format(shot1.pose.rotation, shot1.pose.translation, shot1.pose.get_origin()))
@@ -1336,8 +1297,12 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
                 [reconstruction], 'reconstruction.{}.json'.format(
                     datetime.datetime.now().isoformat().replace(':', '_')))
 
+        candidates = reconstructed_points_for_images(graph, reconstruction, images)
+        if not candidates:
+            break
+
         logger.info("-------------------------------------------------------")
-        for image in images:
+        for image, num_tracks in candidates:
             ok, resrep = resect(data, graph, reconstruction, image)
             if not ok:
                 logger.info("resect failed on {} - report {}".format(image, resrep))
@@ -1401,11 +1366,6 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
     remove_outliers(graph, reconstruction, config)
     align_reconstruction(reconstruction, gcp, config)
     paint_reconstruction(data, graph, reconstruction)
-
-    if len(images) > 0:
-        prepend_id = _int_to_shot_id(_shot_id_to_int(images[0]) - 1)
-        images.insert(0, prepend_id)
-        logger.info("grow_reconstruction: adding {} back to list".format(prepend_id))
     return reconstruction, report
 
 
@@ -1430,25 +1390,18 @@ def incremental_reconstruction(data):
     gcp = None
     if data.ground_control_points_exist():
         gcp = data.load_ground_control_points()
-
     common_tracks = matching.all_common_tracks(graph, tracks)
-
-    # commented out below - we now reconstruct sequentially
-    #pairs = compute_image_pairs(common_tracks, data)
-    #chrono.lap('compute_image_pairs')
-    #report['num_candidate_image_pairs'] = len(pairs)
-
-    # debug - print # of common tracks between adjacent images
-    for (im1, im2), (tracks, p1, p2) in iteritems(common_tracks):
-        if _shot_id_to_int(im2) - _shot_id_to_int(im1) == 1:
-            logger.info("({}, {}, #={}".format(im1, im2, len(tracks)))
-
     reconstructions = []
+    pairs = compute_image_pairs(common_tracks, data)
+    chrono.lap('compute_image_pairs')
+    report['num_candidate_image_pairs'] = len(pairs)
     report['reconstructions'] = []
-    image_groups = []
 
     full_images = list(set(images))
+
     full_images.sort()
+
+    image_groups = []
 
     # Breakup image sets along specified GPS locations
 
@@ -1481,33 +1434,24 @@ def incremental_reconstruction(data):
     data.save_global_predictions(global_predictions_dict)
 
     for remaining_images in image_groups:
-        while len(remaining_images) > 2:
-            im1 = remaining_images[0]
-            im2 = remaining_images[1]
 
-            if (im1, im2) not in common_tracks:
-                remaining_images.remove(im1)
-                continue
+        for im1, im2 in pairs:
+            if im1 in remaining_images and im2 in remaining_images:
+                rec_report = {}
+                report['reconstructions'].append(rec_report)
+                tracks, p1, p2 = common_tracks[im1, im2]
+                reconstruction, rec_report['bootstrap'] = bootstrap_reconstruction(
+                    data, graph, im1, im2, p1, p2)
 
-            rec_report = {}
-            report['reconstructions'].append(rec_report)
-            tracks, p1, p2 = common_tracks[im1, im2]
-            reconstruction, rec_report['bootstrap'] = bootstrap_reconstruction(
-                data, graph, im1, im2, p1, p2)
-
-            if reconstruction:
-                remaining_images.remove(im1)
-                remaining_images.remove(im2)
-                reconstruction, rec_report['grow'] = grow_reconstruction(
-                    data, graph, reconstruction, remaining_images, gcp)
-                reconstructions.append(reconstruction)
-                logger.info("{} images remaining".format(len(remaining_images)))
-            else:
-                # bootstrap didn't work, try the next pair
-                remaining_images.remove(im1)
+                if reconstruction:
+                    remaining_images.remove(im1)
+                    remaining_images.remove(im2)
+                    reconstruction, rec_report['grow'] = grow_reconstruction(
+                        data, graph, reconstruction, remaining_images, gcp)
+                    reconstructions.append(reconstruction)
 
     if reconstructions:
-        reconstructions = sorted(reconstructions, key=lambda x: -len(x.shots))
+        reconstructions = sorted(reconstructions,key=lambda x: -len(x.shots))
         data.save_reconstruction(reconstructions)
 
         debug_plot_reconstructions(reconstructions)
@@ -1529,7 +1473,7 @@ def debug_plot_reconstructions(reconstructions):
     draw floor plan and aligned pdr shot positions on top of it
     """
     # floor plan
-    img = mpimg.imread('./AX-104B_-_CONSTRUCTION_FLOORS_-_7.png')
+    img = mpimg.imread('./AX-104B_-_CONSTRUCTION_FLOORS_-_5.png')
     fig, ax = plt.subplots()
     ax.imshow(img)
 

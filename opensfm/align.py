@@ -11,6 +11,7 @@ from opensfm import transformations as tf
 
 logger = logging.getLogger(__name__)
 
+
 def align_reconstruction(reconstruction, gcp, config ):
     """Align a reconstruction with GPS and GCP data."""
     res = align_reconstruction_similarity(reconstruction, gcp, config )
@@ -62,6 +63,7 @@ def align_reconstruction_similarity(reconstruction, gcp, config ):
         if not res:
             res = align_reconstruction_orientation_prior_similarity( reconstruction, config )
         return res
+
 
 def align_reconstruction_naive_similarity(reconstruction, gcp, config ):
     """Align with GPS and GCP data using direct 3D-3D matches."""

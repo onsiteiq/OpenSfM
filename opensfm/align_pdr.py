@@ -10,6 +10,63 @@ from opensfm import transformations as tf
 logger = logging.getLogger(__name__)
 
 
+def bootstrap_reorient(reconstruction, global_predictions_dict):
+    """
+    orient the two view reconstruction to pdr priors
+    """
+    X, Xp = [], []
+    onplane, verticals = [], []
+    for shot in reconstruction.shots.values():
+        X.append(shot.pose.get_origin())
+        Xp.append(global_predictions_dict[shot.id][:3])
+        R = shot.pose.get_rotation_matrix()
+        onplane.append(R[0,:])
+        onplane.append(R[2,:])
+        verticals.append(R[1,:])
+
+    X = np.array(X)
+    Xp = np.array(Xp)
+
+    # Estimate ground plane.
+    p = multiview.fit_plane(X - X.mean(axis=0), onplane, verticals)
+    Rplane = multiview.plane_horizontalling_rotation(p)
+    X = Rplane.dot(X.T).T
+
+    # Estimate 2d similarity to align to GPS
+    if (len(X) < 2 or
+            X.std(axis=0).max() < 1e-8 or  # All points are the same.
+            Xp.std(axis=0).max() < 0.01):  # All GPS points are the same.
+        # Set the arbitrary scale proportional to the number of cameras.
+        s = len(X) / max(1e-8, X.std(axis=0).max())
+        A = Rplane
+        b = Xp.mean(axis=0) - X.mean(axis=0)
+    else:
+        T = tf.affine_matrix_from_points(X.T[:2], Xp.T[:2], shear=False)
+        s = np.linalg.det(T[:2, :2]) ** 0.5
+        A = np.eye(3)
+        A[:2, :2] = T[:2, :2] / s
+        A = A.dot(Rplane)
+        b = np.array([
+            T[0, 2],
+            T[1, 2],
+            Xp[:, 2].mean() - s * X[:, 2].mean()  # vertical alignment
+        ])
+
+    # Align points.
+    for point in reconstruction.points.values():
+        Xp = s * A.dot(point.coordinates) + b
+        point.coordinates = Xp.tolist()
+
+    # Align cameras.
+    for shot in reconstruction.shots.values():
+        R = shot.pose.get_rotation_matrix()
+        t = np.array(shot.pose.translation)
+        Rp = R.dot(A.T)
+        tp = -Rp.dot(b) + s * t
+        shot.pose.set_rotation_matrix(Rp)
+        shot.pose.translation = list(tp)
+
+
 def align_pdr_global_2d(gps_points_dict, pdr_shots_dict, reconstruction_scale_factor):
     """
     *globally* align pdr predictions to GPS points
