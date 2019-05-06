@@ -128,13 +128,6 @@ def debug_show_pdr_prior_distance(orig, prediction):
     logger.info("prior-orig distance = {}".format(distance))
 
 
-def get_position_prior(shots, shot_id, global_predictions_dict):
-    if shot_id in global_predictions_dict:
-        return global_predictions_dict[shot_id][:3], global_predictions_dict[shot_id][3]
-    else:
-        return [0, 0, 0], 999999.0
-
-
 def get_position_prior_old(shots, shot_id, global_predictions_dict):
     """
     calculate the position prior for shot_id based on pdr
@@ -201,12 +194,6 @@ def bundle(graph, reconstruction, gcp, global_predictions_dict, config):
             g = shot.metadata.gps_position
             ba.add_position_prior(str(shot.id), g[0], g[1], g[2],
                                   shot.metadata.gps_dop)
-
-    if config['bundle_use_pdr']:
-        for shot_id in reconstruction.shots:
-            if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
-                p, stddev = get_position_prior(reconstruction.shots, shot_id, global_predictions_dict)
-                ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
 
     if config['bundle_use_gcp'] and gcp:
         for observation in gcp:
@@ -292,10 +279,6 @@ def bundle_single_view(graph, reconstruction, shot_id, config):
         ba.add_position_prior(str(shot.id), g[0], g[1], g[2],
                               shot.metadata.gps_dop)
 
-    if config['bundle_use_pdr'] and shot.metadata.gps_dop == 999999.0:
-        p, stddev = get_position_prior(reconstruction.shots, shot_id, {})
-        ba.add_position_prior(str(shot.id), p[0], p[1], p[2], stddev)
-
     ba.set_loss_function(config['loss_function'],
                          config['loss_function_threshold'])
     ba.set_reprojection_error_sd(config['reprojection_error_sd'])
@@ -374,12 +357,6 @@ def bundle_local(graph, reconstruction, gcp, global_predictions_dict, central_sh
             g = shot.metadata.gps_position
             ba.add_position_prior(str(shot.id), g[0], g[1], g[2],
                                   shot.metadata.gps_dop)
-
-    if config['bundle_use_pdr']:
-        for shot_id in neighbors:
-            if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
-                p, stddev = get_position_prior(reconstruction.shots, shot_id, global_predictions_dict)
-                ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
 
     if config['bundle_use_gcp'] and gcp:
         for observation in gcp:
@@ -648,7 +625,7 @@ def debug_plot_pdr(topocentric_gps_points_dict, global_predictions_dict):
                     format(key, value[0], value[1], value[2], value[3]))
 
     # floor plan
-    img = mpimg.imread('./AX-104B_-_CONSTRUCTION_FLOORS_-_7.png')
+    img = mpimg.imread('./AX-104B_-_CONSTRUCTION_FLOORS_-_5.png')
     fig, ax = plt.subplots()
     ax.imshow(img)
 
@@ -924,10 +901,6 @@ def bootstrap_reconstruction(data, graph, im1, im2, p1, p2):
     bundle_single_view(graph, reconstruction, im2, data.config)
     retriangulate(graph, reconstruction, data.config)
     bundle_single_view(graph, reconstruction, im2, data.config)
-
-    if data.pdr_shots_exist():
-        global_predictions_dict = data.load_global_predictions()
-        bootstrap_reorient(reconstruction, global_predictions_dict)
 
     logger.info("bootstrap after bundle_single_view")
     logger.info("shot 1 rot={}, trans={}, origin={}".format(shot1.pose.rotation, shot1.pose.translation, shot1.pose.get_origin()))
@@ -1323,10 +1296,6 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
     if data.pdr_shots_exist():
         global_predictions_dict = data.load_global_predictions()
 
-    bundle(graph, reconstruction, None, global_predictions_dict, config)
-    remove_outliers(graph, reconstruction, config)
-    align_reconstruction(reconstruction, gcp, config)
-
     should_bundle = ShouldBundle(data, reconstruction)
     should_retriangulate = ShouldRetriangulate(data, reconstruction)
     while True:
@@ -1381,9 +1350,13 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
                 remove_outliers(graph, reconstruction, config)
                 step['local_bundle'] = brep
 
+            if data.pdr_shots_exist() and (not reconstruction.alignment.aligned):
+                bootstrap_reorient(reconstruction, global_predictions_dict)
+
             break
         else:
-            logger.info("Some images can not be added")
+            if len(images) > 0:
+                logger.info("Some images can not be added")
             break
 
         logger.info("grow_reconstruction")
@@ -1529,7 +1502,7 @@ def debug_plot_reconstructions(reconstructions):
     draw floor plan and aligned pdr shot positions on top of it
     """
     # floor plan
-    img = mpimg.imread('./AX-104B_-_CONSTRUCTION_FLOORS_-_7.png')
+    img = mpimg.imread('./AX-104B_-_CONSTRUCTION_FLOORS_-_5.png')
     fig, ax = plt.subplots()
     ax.imshow(img)
 
