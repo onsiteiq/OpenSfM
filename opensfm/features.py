@@ -126,11 +126,6 @@ def extract_features_sift(image, config):
             logger.debug('done')
             break
 
-    feat_max = config.get( 'feature_max_frames', 20000 )
-    if len(points) > feat_max:
-        points = sample( points, feat_max )
-        logger.debug('Sampling only {0} points.'.format( len(points) ))
-
     points, desc = descriptor.compute(image, points)
     if config['feature_root']:
         desc = root_feature(desc)
@@ -295,6 +290,13 @@ def extract_features(color_image, config, mask=None):
     else:
         raise ValueError('Unknown feature type '
                          '(must be SURF, SIFT, AKAZE, HAHOG or ORB)')
+
+    feat_max = config.get( 'feature_max_frames', 60000 )
+    if len(points) > feat_max:
+        idx = np.random.choice( np.arange( len(points) ), feat_max, replace=False)
+        points = points[idx]
+        desc = desc[idx]
+        logger.debug('Sampling only {0} points.'.format( len(points) ))
 
     xs = points[:, 0].round().astype(int)
     ys = points[:, 1].round().astype(int)
