@@ -1380,9 +1380,10 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
                 logger.info("Some images can not be added")
             break
 
-        logger.info("grow_reconstruction")
-        for shot in reconstruction.shots.values():
-            logger.info("shot_id={} origin={}".format(shot.id, shot.pose.get_origin()))
+        # debugging
+        #logger.info("grow_reconstruction")
+        #for shot in reconstruction.shots.values():
+            #logger.info("shot_id={} origin={}".format(shot.id, shot.pose.get_origin()))
 
         max_recon_size = config.get( 'reconstruction_max_images', -1 )
         if max_recon_size != -1:

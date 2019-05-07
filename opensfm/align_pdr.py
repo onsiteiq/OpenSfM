@@ -187,7 +187,7 @@ def align_pdr_global(gps_points_dict, pdr_shots_dict, reconstruction_scale_facto
             continue
 
         # debugging
-        logger.info("deviation=%f, rotation=%f, %f, %f", deviation, x, y, z)
+        #logger.info("deviation=%f, rotation=%f, %f, %f", deviation, x, y, z)
 
         # based on deviation, we choose different starting pdr shot to transform
         if deviation < last_deviation:
@@ -239,7 +239,7 @@ def align_pdr_local(sfm_points_dict, pdr_shots_dict, reconstruction_scale_factor
 
     direction_stddev = np.std(np.array(sfm_directions))
 
-    if np.degrees(direction_stddev) > 30.0:
+    if np.degrees(direction_stddev) > 15.0:
         # if directions differ by a lot, we use affine alignment
         updates = align_pdr_local_affine(sfm_points_dict, pdr_shots_dict, reconstruction_scale_factor,
                                          num_history, num_predictions)
@@ -272,7 +272,6 @@ def align_pdr_local_extrapolate(ref_coord, ref_dir, delta_heading_distance_dict)
            shots based on pdr calculation
     :return: updated pdr predictions for next len(delta_heading_distance_dict) shots
     """
-    logger.info("align_pdr_local_extrapolate")
     updates = {}
 
     last_dir = ref_dir
@@ -303,7 +302,6 @@ def align_pdr_local_affine(sfm_points_dict, pdr_shots_dict, reconstruction_scale
     :param num_predictions: number of shots to extrapolate prediction
     :return: updated pdr predictions for num_to_predict shots
     """
-    logger.info("align_pdr_local_affine")
     # reconstruct_scale_factor is from oiq_config.yaml, and it's feet per pixel.
     # 0.3048 is meter per foot. 1.0 / (reconstruction_scale_factor * 0.3048) is
     # therefore pixels/meter, and since pdr output is in meters, it's the
