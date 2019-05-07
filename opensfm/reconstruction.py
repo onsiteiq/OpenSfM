@@ -1188,7 +1188,7 @@ def remove_outliers(graph, reconstruction, config):
         outliers = []
         for track in reconstruction.points:
             error = reconstruction.points[track].reprojection_error
-            if error > threshold:
+            if error is not None and error > threshold:
                 outliers.append(track)
         for track in outliers:
             del reconstruction.points[track]
@@ -1381,10 +1381,10 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
             if data.pdr_shots_exist():
                 if not reconstruction.alignment.aligned:
                     align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict)
-                #else:
-                    #pdr_shots_dict = data.load_pdr_shots()
-                    #updates = update_pdr_predictions(reconstruction, pdr_shots_dict)
-                    #pdr_predictions_dict.update(updates)
+                else:
+                    pdr_shots_dict = data.load_pdr_shots()
+                    updates = update_pdr_predictions(reconstruction, pdr_shots_dict)
+                    pdr_predictions_dict.update(updates)
 
             break
         else:

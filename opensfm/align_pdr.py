@@ -170,10 +170,23 @@ def align_pdr_global(gps_points_dict, pdr_shots_dict, reconstruction_scale_facto
         s, A, b = get_affine_transform(gps_coords, pdr_coords)
 
         # the closer s is to expected_scale, the better the fit, and the less the deviation
-        deviation = math.fabs(1.0 - s/expected_scale)
+        ratio = s/expected_scale
+        if ratio > 1.0:
+            ratio = 1/ratio
+
+        # if deviation is very large, skip it
+        deviation = math.fabs(1.0 - ratio)
+        if deviation > 0.5:
+            last_deviation = 1.0
+            continue
+
+        # if x/y rotation is not close to 0, then likely it's 'flipped' and no good
+        [x, y, z] = _rotation_matrix_to_euler_angles(A)
+        if math.fabs(x) > 1.0 or math.fabs(y) > 1.0:
+            last_deviation = 1.0
+            continue
 
         # debugging
-        [x, y, z] = _rotation_matrix_to_euler_angles(A)
         logger.info("deviation=%f, rotation=%f, %f, %f", deviation, x, y, z)
 
         # based on deviation, we choose different starting pdr shot to transform
@@ -182,15 +195,11 @@ def align_pdr_global(gps_points_dict, pdr_shots_dict, reconstruction_scale_facto
         else:
             pdr_start_shot_id = gps_shot_ids[1]
 
-        pdr_end_shot_id = gps_shot_ids[-1]
+        pdr_end_shot_id = _int_to_shot_id(len(pdr_shots_dict)-1)
 
-        # handle boundary conditions
         if i == 0:
             # in first iteration, we transform pdr from first shot
             pdr_start_shot_id = _int_to_shot_id(0)
-        elif i == len(gps_points_dict)-stride_len:
-            # in last iteration, we transform pdr until last shot
-            pdr_end_shot_id = _int_to_shot_id(len(pdr_shots_dict)-1)
 
         new_dict = apply_affine_transform(pdr_shots_dict, pdr_start_shot_id, pdr_end_shot_id,
                                           s, A, b,
@@ -244,9 +253,18 @@ def align_pdr_local(sfm_points_dict, pdr_shots_dict, reconstruction_scale_factor
     s, A, b = get_affine_transform(sfm_coords, pdr_coords)
 
     # the closer s is to expected_scale, the better the fit, and the less the deviation
-    deviation = math.fabs(1.0 - s / expected_scale)
+    ratio = s/expected_scale
+    if ratio > 1.0:
+        ratio = 1/ratio
 
-    if not (deviation > 0.1):
+    # if deviation is very large, skip it
+    deviation = math.fabs(1.0 - ratio)
+    if deviation > 0.5:
+        return {}
+
+    # if x/y rotation is not close to 0, then likely it's 'flipped' and no good
+    [x, y, z] = _rotation_matrix_to_euler_angles(A)
+    if math.fabs(x) > 1.0 or math.fabs(y) > 1.0:
         return {}
 
     range_start_idx = _shot_id_to_int(ids[-1])
@@ -260,7 +278,7 @@ def align_pdr_local(sfm_points_dict, pdr_shots_dict, reconstruction_scale_factor
     return updates
 
 
-def apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id, s, A, b, gps_shot_ids={}, deviation=0):
+def apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id, s, A, b, gps_shot_ids=[], deviation=0.0):
     """Apply a similarity (y = s A x + b) to a reconstruction.
 
     :param pdr_shots_dict: all pdr predictions
@@ -345,8 +363,8 @@ def get_dop(shot_id, gps_shot_ids, deviation):
     shot_id_int = _shot_id_to_int(shot_id)
 
     distances = []
-    for id in gps_shot_ids:
-        distances.append(abs(_shot_id_to_int(id)-shot_id_int))
+    for gps_id in gps_shot_ids:
+        distances.append(abs(_shot_id_to_int(gps_id)-shot_id_int))
 
     # TODO: read default dop 100 from config
     dop = 100 + min(distances)*10*(1+deviation)
