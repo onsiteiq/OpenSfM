@@ -39,7 +39,7 @@ class DataSet:
         self.gps_points_dict = {}
         self.pdr_shots_dict = {}
         self.topocentric_gps_points_dict = {}
-        self.global_predictions_dict = {}
+        self.pdr_predictions_dict = {}
         self._load_config()
         self._load_image_list()
         self._load_mask_list()
@@ -726,12 +726,12 @@ class DataSet:
 
         return self.pdr_shots_dict
 
-    def load_global_predictions(self):
-        return self.global_predictions_dict
+    def load_pdr_predictions(self):
+        return self.pdr_predictions_dict
 
-    def save_global_predictions(self, global_predictions_dict):
+    def save_pdr_predictions(self, pdr_predictions_dict):
         """save a copy of aligned pdr shots"""
-        self.global_predictions_dict = global_predictions_dict
+        self.pdr_predictions_dict = pdr_predictions_dict
 
     def _ground_control_points_file(self):
         return os.path.join(self.data_path, 'gcp_list.txt')
