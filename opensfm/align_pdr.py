@@ -239,7 +239,7 @@ def align_pdr_local(sfm_points_dict, pdr_shots_dict, reconstruction_scale_factor
 
     direction_stddev = np.std(np.array(sfm_directions))
 
-    if np.degrees(direction_stddev) > 10.0:
+    if np.degrees(direction_stddev) > 20.0:
         # if directions differ by a lot, we use affine alignment
         updates = align_pdr_local_affine(sfm_points_dict, pdr_shots_dict, reconstruction_scale_factor,
                                          num_history, num_predictions)
@@ -284,7 +284,7 @@ def align_pdr_local_extrapolate(ref_coord, ref_dir, delta_heading_distance_dict)
         y = last_coord[1] + delta_heading_distance_dict[shot_id][1]*np.sin(curr_dir)
         z = last_coord[2]
         curr_coord = [x, y, z]
-        updates[shot_id] = [x, y, z, 50]
+        updates[shot_id] = [x, y, z, 100]
 
         last_dir = curr_dir
         last_coord = curr_coord
@@ -435,7 +435,7 @@ def get_dop(shot_id, deviation, gps_shot_ids):
         # TODO: read default dop 100 from config
         dop = 100 + min(distances)*10*(1+deviation)
     else:
-        dop = 50 * (1+deviation)
+        dop = 100 * (1+deviation)
 
     return dop
 
