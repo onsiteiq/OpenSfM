@@ -274,8 +274,7 @@ def align_pdr_local_extrapolate(ref_coord, ref_dir, delta_heading_distance_dict)
         y = last_coord[1] + delta_heading_distance_dict[shot_id][1]*np.sin(curr_dir)
         z = last_coord[2]
         curr_coord = [x, y, z]
-
-        updates[shot_id] = [curr_coord, 100]
+        updates[shot_id] = [x, y, z, 100]
 
         last_dir = curr_dir
         last_coord = curr_coord
