@@ -211,7 +211,79 @@ def align_pdr_global(gps_points_dict, pdr_shots_dict, reconstruction_scale_facto
     return pdr_predictions_dict
 
 
-def align_pdr_local(sfm_points_dict, pdr_shots_dict, reconstruction_scale_factor, min_distance=5, num_predictions=10):
+def align_pdr_local(sfm_points_dict, pdr_shots_dict, reconstruction_scale_factor, num_history=3, num_predictions=3):
+    """
+    *locally* align pdr predictions to SfM output. the SfM points have been aligned with
+    GPS points
+
+    :param sfm_points_dict: sfm point coordinates
+    :param pdr_shots_dict: original predictions
+    :param reconstruction_scale_factor: scale factor feet per pixel
+    :param num_history: number of sfm shots to use for the calculation
+    :param num_predictions: number of shots beyond current last shot to align
+    :return: updated pdr predictions for num_predictions shots
+    """
+    if len(sfm_points_dict) < num_history:
+        return {}
+
+    sfm_shot_ids = sorted(sfm_points_dict.keys())
+
+    sfm_coords = []
+    for shot_id in sfm_shot_ids[-num_history:]:
+        sfm_coords.append(sfm_points_dict[shot_id])
+
+    sfm_directions = []
+    for i in range(1, len(sfm_coords)):
+        direction = np.arctan2(sfm_coords[i][1] - sfm_coords[i-1][1], sfm_coords[i][0] - sfm_coords[i-1][0])
+        sfm_directions.append(direction)
+
+    direction_stddev = np.std(np.array(sfm_directions))
+
+    direction_stddev = 0.06
+    if np.degrees(direction_stddev) > 5.0:
+        # if directions differ by a lot, we use affine alignment
+        updates = align_pdr_local_affine(sfm_points_dict, pdr_shots_dict, reconstruction_scale_factor, num_predictions)
+    else:
+        # if we are walking on roughly a straight line, then just extrapolate
+        ref_coord = sfm_coords[-1]
+        ref_dir = np.mean(np.array(sfm_directions))
+
+        start_idx = min(len(pdr_shots_dict)-1, _shot_id_to_int(sfm_shot_ids[-1]) + 1)
+        end_idx = min(len(pdr_shots_dict)-1, start_idx + num_predictions)
+
+        delta_heading_distance_dict = {}
+        for i in range(start_idx, end_idx):
+            shot_id = _int_to_shot_id(i)
+            pdr_info = pdr_shots_dict[shot_id]
+            delta_heading_distance_dict[shot_id] = (pdr_info[3], pdr_info[4])
+
+        updates = align_pdr_local_extrapolate(ref_coord, ref_dir, delta_heading_distance_dict)
+
+    return updates
+
+
+def align_pdr_local_extrapolate(ref_coord, ref_dir, delta_heading_distance_dict):
+    updates = {}
+
+    last_dir = ref_dir
+    last_coord = ref_coord
+
+    for shot_id in sorted(delta_heading_distance_dict.keys()):
+        curr_dir = last_dir + delta_heading_distance_dict[shot_id][0]
+        x = last_coord[0] + delta_heading_distance_dict[shot_id][1]*np.cos(curr_dir)
+        y = last_coord[1] + delta_heading_distance_dict[shot_id][1]*np.sin(curr_dir)
+        z = last_coord[2]
+        curr_coord = [x, y, z]
+
+        updates[shot_id] = [curr_coord, 100]
+
+        last_dir = curr_dir
+        last_coord = curr_coord
+
+    return updates
+
+
+def align_pdr_local_affine(sfm_points_dict, pdr_shots_dict, reconstruction_scale_factor, num_predictions, min_distance=5):
     """
     *locally* align pdr predictions to SfM output. the SfM points have been aligned with
     GPS points

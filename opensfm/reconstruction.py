@@ -172,12 +172,6 @@ def bundle(graph, reconstruction, gcp, pdr_predictions_dict, config):
             ba.add_position_prior(str(shot.id), g[0], g[1], g[2],
                                   shot.metadata.gps_dop)
 
-    if config['bundle_use_pdr']:
-        for shot_id in reconstruction.shots:
-            if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
-                p, stddev = get_position_prior(shot_id, pdr_predictions_dict)
-                ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
-
     if config['bundle_use_gcp'] and gcp:
         for observation in gcp:
             if observation.shot_id in reconstruction.shots:
@@ -344,12 +338,6 @@ def bundle_local(graph, reconstruction, gcp, pdr_predictions_dict, central_shot_
             g = shot.metadata.gps_position
             ba.add_position_prior(str(shot.id), g[0], g[1], g[2],
                                   shot.metadata.gps_dop)
-
-    if config['bundle_use_pdr']:
-        for shot_id in neighbors:
-            if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
-                p, stddev = get_position_prior(shot_id, pdr_predictions_dict)
-                ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
 
     if config['bundle_use_gcp'] and gcp:
         for observation in gcp:

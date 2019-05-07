@@ -719,16 +719,16 @@ class DataSet:
         """
         Load PDR shots
 
-        Note we flipped y below because the coordinate system of imu output and of gps/sfm are different.
-        When we do alignment with gps points or sfm output, if we do it 3 points at a time, this isn't a
-        problem, but if we do 2 points at a time it is.
+        Note we flipped y and delta heading below because the coordinate system of imu output and
+        of gps/sfm are different. When we do alignment with gps points or sfm output, if we do it
+        3 points at a time, this isn't a problem, but if we do 2 points at a time it is.
         """
 
         if not self.pdr_shots_dict:
             with open(self._pdr_shots_file()) as fin:
                 for line in fin:
                     (shot_id, x, y, z, delta_heading, delta_distance) = line.split()
-                    self.pdr_shots_dict[shot_id] = (float(x), -float(y), float(z), float(delta_heading), float(delta_distance))
+                    self.pdr_shots_dict[shot_id] = (float(x), -float(y), float(z), -float(delta_heading), float(delta_distance))
 
         return self.pdr_shots_dict
 
