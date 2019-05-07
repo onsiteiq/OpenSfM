@@ -239,7 +239,7 @@ def align_pdr_local(sfm_points_dict, pdr_shots_dict, reconstruction_scale_factor
 
     direction_stddev = np.std(np.array(sfm_directions))
 
-    if np.degrees(direction_stddev) > 20.0:
+    if np.degrees(direction_stddev) > 30.0:
         # if directions differ by a lot, we use affine alignment
         updates = align_pdr_local_affine(sfm_points_dict, pdr_shots_dict, reconstruction_scale_factor,
                                          num_history, num_predictions)

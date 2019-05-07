@@ -1533,7 +1533,7 @@ def debug_plot_reconstructions(reconstructions):
     for reconstruction in reconstructions:
         for shot in reconstruction.shots.values():
             p = shot.pose.get_origin()
-            circle = plt.Circle((p[0], p[1]), color='green', radius=50)
+            circle = plt.Circle((p[0], p[1]), color='green', radius=25)
             ax.add_artist(circle)
 
     plt.show()
