@@ -22,7 +22,7 @@ from opensfm import types
 from opensfm.align import align_reconstruction, apply_similarity
 from opensfm.align_pdr import align_pdr_global, align_pdr_local, align_reconstruction_to_pdr
 from opensfm.context import parallel_map, current_memory_usage
-#from opensfm.debug_plot import debug_plot_pdr, debug_plot_reconstructions
+from opensfm.debug_plot import debug_plot_pdr, debug_plot_reconstructions
 
 logger = logging.getLogger(__name__)
 
@@ -584,7 +584,7 @@ def init_pdr_predictions(reflla, gps_points_dict, pdr_shots_dict):
     pdr_predictions_dict = align_pdr_global(topocentric_gps_points_dict, pdr_shots_dict, 0.0199)
 
     # debug
-    #debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict)
+    debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict)
 
     return topocentric_gps_points_dict, pdr_predictions_dict
 
@@ -1461,12 +1461,12 @@ def incremental_reconstruction(data):
 
     if reconstructions:
         # plot updated pdr predictions
-        #debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict)
+        debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict)
 
         reconstructions = sorted(reconstructions, key=lambda x: -len(x.shots))
         data.save_reconstruction(reconstructions)
 
-        #debug_plot_reconstructions(reconstructions)
+        debug_plot_reconstructions(reconstructions)
 
         for k, r in enumerate(reconstructions):
             logger.info("Reconstruction {}: {} images, {} points".format(

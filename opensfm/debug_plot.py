@@ -1,7 +1,12 @@
+import os
+import glob
 import logging
 
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
+debug = True
+
+if debug:
+    import matplotlib.pyplot as plt
+    import matplotlib.image as mpimg
 
 logger = logging.getLogger(__name__)
 
@@ -10,6 +15,9 @@ def debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict):
     """
     draw floor plan and aligned pdr shot positions on top of it
     """
+    if not debug:
+        return
+
     logger.info("debug_plot_pdr {}".format(len(pdr_predictions_dict)))
 
     for key, value in topocentric_gps_points_dict.items():
@@ -20,7 +28,13 @@ def debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict):
                     format(key, value[0], value[1], value[2], value[3]))
 
     # floor plan
-    img = mpimg.imread('./AX-104B_-_CONSTRUCTION_FLOORS_-_5.png')
+    floor_plan_paths = glob.glob('./*FLOOR*.png')
+
+    if not floor_plan_paths or not os.path.exists(floor_plan_paths[0]):
+        return
+
+    img = mpimg.imread(floor_plan_paths[0])
+
     fig, ax = plt.subplots()
     ax.imshow(img)
 
@@ -49,15 +63,28 @@ def debug_plot_reconstructions(reconstructions):
     """
     draw floor plan and aligned pdr shot positions on top of it
     """
+    if not debug:
+        return
+
     # floor plan
-    img = mpimg.imread('./AX-104B_-_CONSTRUCTION_FLOORS_-_5.png')
+    floor_plan_paths = glob.glob('./*FLOOR*.png')
+
+    if not floor_plan_paths or not os.path.exists(floor_plan_paths[0]):
+        return
+
+    img = mpimg.imread(floor_plan_paths[0])
+
     fig, ax = plt.subplots()
     ax.imshow(img)
 
     for reconstruction in reconstructions:
         for shot in reconstruction.shots.values():
+            if reconstruction.alignment.aligned:
+                color = 'green'
+            else:
+                color = 'red'
             p = shot.pose.get_origin()
-            circle = plt.Circle((p[0], p[1]), color='green', radius=25)
+            circle = plt.Circle((p[0], p[1]), color=color, radius=25)
             ax.add_artist(circle)
 
     plt.show()
