@@ -1,6 +1,9 @@
 import os
+import json
 import glob
 import logging
+
+from opensfm import io
 
 debug = True
 
@@ -97,3 +100,10 @@ def _shot_id_to_int(shot_id):
     """
     tokens = shot_id.split(".")
     return int(tokens[0])
+
+
+# Entry point
+if __name__ == "__main__":
+    with open('reconstruction.json') as fin:
+        reconstructions = io.reconstructions_from_json(json.load(fin))
+        debug_plot_reconstructions(reconstructions)
