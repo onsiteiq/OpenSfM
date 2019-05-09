@@ -285,17 +285,19 @@ def bundle_local(graph, reconstruction, gcp, pdr_predictions_dict, central_shot_
     """Bundle adjust the local neighborhood of a shot."""
     chrono = Chronometer()
 
-    neighbors = shot_neighborhood_sequential(
+    interior, boundary = shot_neighborhood(
         graph, reconstruction, central_shot_id,
+        config['local_bundle_radius'],
         config['local_bundle_min_common_points'],
         config['local_bundle_max_shots'])
 
     logger.debug(
-        'Local bundle sets: neighbors {}  other {}'.format(
-            len(neighbors), len(reconstruction.shots) - len(neighbors)))
+        'Local bundle sets: interior {}  boundary {}  other {}'.format(
+            len(interior), len(boundary),
+            len(reconstruction.shots) - len(interior) - len(boundary)))
 
     point_ids = set()
-    for shot_id in neighbors:
+    for shot_id in interior:
         if shot_id in graph:
             for track in graph[shot_id]:
                 if track in reconstruction.points:
@@ -306,7 +308,7 @@ def bundle_local(graph, reconstruction, gcp, pdr_predictions_dict, central_shot_
     for camera in reconstruction.cameras.values():
         _add_camera_to_bundle(ba, camera, constant=True)
 
-    for shot_id in neighbors:
+    for shot_id in interior | boundary:
         shot = reconstruction.shots[shot_id]
         r = shot.pose.rotation
         t = shot.pose.translation
@@ -314,7 +316,7 @@ def bundle_local(graph, reconstruction, gcp, pdr_predictions_dict, central_shot_
             str(shot.id), str(shot.camera.id),
             r[0], r[1], r[2],
             t[0], t[1], t[2],
-            False
+            shot.id in boundary
         )
 
     for point_id in point_ids:
@@ -322,7 +324,7 @@ def bundle_local(graph, reconstruction, gcp, pdr_predictions_dict, central_shot_
         x = point.coordinates
         ba.add_point(str(point.id), x[0], x[1], x[2], False)
 
-    for shot_id in neighbors:
+    for shot_id in interior | boundary:
         if shot_id in graph:
             for track in graph[shot_id]:
                 if track in point_ids:
@@ -330,15 +332,21 @@ def bundle_local(graph, reconstruction, gcp, pdr_predictions_dict, central_shot_
                                        *graph[shot_id][track]['feature'])
 
     if config['bundle_use_gps']:
-        for shot_id in neighbors:
+        for shot_id in interior:
             shot = reconstruction.shots[shot_id]
             g = shot.metadata.gps_position
             ba.add_position_prior(str(shot.id), g[0], g[1], g[2],
                                   shot.metadata.gps_dop)
 
+    if config['bundle_use_pdr']:
+        for shot_id in boundary:
+            if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
+                p, stddev = get_position_prior(reconstruction.shots, shot_id, pdr_predictions_dict)
+                ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
+
     if config['bundle_use_gcp'] and gcp:
         for observation in gcp:
-            if observation.shot_id in neighbors:
+            if observation.shot_id in interior:
                 ba.add_ground_control_point_observation(
                     observation.shot_id,
                     observation.coordinates[0],
@@ -366,7 +374,7 @@ def bundle_local(graph, reconstruction, gcp, pdr_predictions_dict, central_shot_
     ba.run()
     chrono.lap('run')
 
-    for shot_id in neighbors:
+    for shot_id in interior:
         shot = reconstruction.shots[shot_id]
         s = ba.get_shot(str(shot.id))
         shot.pose.rotation = [s.rx, s.ry, s.rz]
@@ -384,9 +392,10 @@ def bundle_local(graph, reconstruction, gcp, pdr_predictions_dict, central_shot_
     report = {
         'wall_times': dict(chrono.lap_times()),
         'brief_report': ba.brief_report(),
-        'num_neighbor_images': len(neighbors),
+        'num_interior_images': len(interior),
+        'num_boundary_images': len(boundary),
         'num_other_images': (len(reconstruction.shots)
-                             - len(neighbors)),
+                             - len(interior) - len(boundary)),
     }
     return report
 
