@@ -341,7 +341,7 @@ def bundle_local(graph, reconstruction, gcp, pdr_predictions_dict, central_shot_
     if config['bundle_use_pdr']:
         for shot_id in boundary:
             if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
-                p, stddev = get_position_prior(reconstruction.shots, shot_id, pdr_predictions_dict)
+                p, stddev = get_position_prior(shot_id, pdr_predictions_dict)
                 ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
 
     if config['bundle_use_gcp'] and gcp:
