@@ -6,7 +6,7 @@ import logging
 
 from opensfm import io
 
-debug = True
+debug = False
 
 if debug:
     import matplotlib.pyplot as plt
