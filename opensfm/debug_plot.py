@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import glob
 import logging
@@ -86,9 +87,16 @@ def debug_plot_reconstructions(reconstructions):
                 color = 'green'
             else:
                 color = 'red'
+
+            if shot.metadata.gps_dop != 999999.0:
+                radius = 50
+            else:
+                radius = 25
+
             p = shot.pose.get_origin()
-            circle = plt.Circle((p[0], p[1]), color=color, radius=25)
+            circle = plt.Circle((p[0], p[1]), color=color, radius=radius)
             ax.add_artist(circle)
+            ax.text(p[0], p[1], str(_shot_id_to_int(shot.id)), fontsize=6)
 
     plt.show()
     #fig.savefig('./recon.png', dpi=200)
@@ -104,6 +112,9 @@ def _shot_id_to_int(shot_id):
 
 # Entry point
 if __name__ == "__main__":
-    with open('reconstruction.json') as fin:
+    filename = str(sys.argv[1])
+    if not filename:
+        filename = "reconstruction.json"
+    with open(filename) as fin:
         reconstructions = io.reconstructions_from_json(json.load(fin))
         debug_plot_reconstructions(reconstructions)
