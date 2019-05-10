@@ -74,6 +74,7 @@ def debug_plot_reconstructions(reconstructions):
     floor_plan_paths = glob.glob('./*FLOOR*.png')
 
     if not floor_plan_paths or not os.path.exists(floor_plan_paths[0]):
+        print("No floor plan image found. Quitting")
         return
 
     img = mpimg.imread(floor_plan_paths[0])
@@ -112,8 +113,13 @@ def _shot_id_to_int(shot_id):
 
 # Entry point
 if __name__ == "__main__":
-    filename = str(sys.argv[1])
-    if not filename:
+    debug = True
+    import matplotlib.pyplot as plt
+    import matplotlib.image as mpimg
+
+    if len(sys.argv) > 1:
+        filename = str(sys.argv[1])
+    else:
         filename = "reconstruction.json"
     with open(filename) as fin:
         reconstructions = io.reconstructions_from_json(json.load(fin))
