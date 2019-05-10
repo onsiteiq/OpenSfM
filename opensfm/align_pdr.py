@@ -17,40 +17,36 @@ def align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict):
     X, Xp = [], []
     onplane, verticals = [], []
     for shot in reconstruction.shots.values():
-        X.append(shot.pose.get_origin())
-        Xp.append(pdr_predictions_dict[shot.id][:3])
-        R = shot.pose.get_rotation_matrix()
-        onplane.append(R[0,:])
-        onplane.append(R[2,:])
-        verticals.append(R[1,:])
+        if shot.id in pdr_predictions_dict:
+            X.append(shot.pose.get_origin())
+            Xp.append(pdr_predictions_dict[shot.id][:3])
+            R = shot.pose.get_rotation_matrix()
+            onplane.append(R[0,:])
+            onplane.append(R[2,:])
+            verticals.append(R[1,:])
 
     X = np.array(X)
     Xp = np.array(Xp)
+
+    if len(X) < 2:
+        return
 
     # Estimate ground plane.
     p = multiview.fit_plane(X - X.mean(axis=0), onplane, verticals)
     Rplane = multiview.plane_horizontalling_rotation(p)
     X = Rplane.dot(X.T).T
 
-    # Estimate 2d similarity to align to GPS
-    if (len(X) < 2 or
-            X.std(axis=0).max() < 1e-8 or  # All points are the same.
-            Xp.std(axis=0).max() < 0.01):  # All GPS points are the same.
-        # Set the arbitrary scale proportional to the number of cameras.
-        s = len(X) / max(1e-8, X.std(axis=0).max())
-        A = Rplane
-        b = Xp.mean(axis=0) - X.mean(axis=0)
-    else:
-        T = tf.affine_matrix_from_points(X.T[:2], Xp.T[:2], shear=False)
-        s = np.linalg.det(T[:2, :2]) ** 0.5
-        A = np.eye(3)
-        A[:2, :2] = T[:2, :2] / s
-        A = A.dot(Rplane)
-        b = np.array([
-            T[0, 2],
-            T[1, 2],
-            Xp[:, 2].mean() - s * X[:, 2].mean()  # vertical alignment
-        ])
+    # Estimate 2d similarity to align to pdr predictions
+    T = tf.affine_matrix_from_points(X.T[:2], Xp.T[:2], shear=False)
+    s = np.linalg.det(T[:2, :2]) ** 0.5
+    A = np.eye(3)
+    A[:2, :2] = T[:2, :2] / s
+    A = A.dot(Rplane)
+    b = np.array([
+        T[0, 2],
+        T[1, 2],
+        Xp[:, 2].mean() - s * X[:, 2].mean()  # vertical alignment
+    ])
 
     # Align points.
     for point in reconstruction.points.values():
@@ -157,6 +153,7 @@ def align_pdr_global(gps_points_dict, pdr_shots_dict, scale_factor, stride_len=3
     last_deviation = 1.0
 
     all_gps_shot_ids = sorted(gps_points_dict.keys())
+    first_iteration = True
     for i in range(len(all_gps_shot_ids) - stride_len + 1):
         gps_coords = []
         pdr_coords = []
@@ -198,9 +195,10 @@ def align_pdr_global(gps_points_dict, pdr_shots_dict, scale_factor, stride_len=3
 
         pdr_end_shot_id = _int_to_shot_id(len(pdr_shots_dict)-1)
 
-        if i == 0:
+        if first_iteration:
             # in first iteration, we transform pdr from first shot
             pdr_start_shot_id = _int_to_shot_id(0)
+            first_iteration = False
 
         new_dict = apply_affine_transform(pdr_shots_dict, pdr_start_shot_id, pdr_end_shot_id,
                                           s, A, b,
