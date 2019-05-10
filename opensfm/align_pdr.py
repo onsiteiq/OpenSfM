@@ -67,7 +67,7 @@ def align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict):
         shot.pose.translation = list(tp)
 
 
-def align_pdr_global_2d(gps_points_dict, pdr_shots_dict, reconstruction_scale_factor):
+def align_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor):
     """
     *globally* align pdr predictions to GPS points
 
@@ -75,16 +75,17 @@ def align_pdr_global_2d(gps_points_dict, pdr_shots_dict, reconstruction_scale_fa
 
     :param gps_points_dict: gps points in topocentric coordinates
     :param pdr_shots_dict: position of each shot as predicted by pdr
+    :param scale_factor: reconstruction_scale_factor
     :return: aligned pdr shot predictions
     """
     if len(gps_points_dict) < 2 or len(pdr_shots_dict) < 2:
         return {}
 
-    # reconstruct_scale_factor is from oiq_config.yaml, and it's feet per pixel.
+    # reconstruction_scale_factor is from oiq_config.yaml, and it's feet per pixel.
     # 0.3048 is meter per foot. 1.0 / (reconstruction_scale_factor * 0.3048) is
     # therefore pixels/meter, and since pdr output is in meters, it's the
     # expected scale
-    expected_scale = 1.0 / (reconstruction_scale_factor * 0.3048)
+    expected_scale = 1.0 / (scale_factor * 0.3048)
 
     pdr_predictions_dict = {}
 
@@ -129,7 +130,7 @@ def align_pdr_global_2d(gps_points_dict, pdr_shots_dict, reconstruction_scale_fa
     return pdr_predictions_dict
 
 
-def align_pdr_global(gps_points_dict, pdr_shots_dict, reconstruction_scale_factor, stride_len=3):
+def align_pdr_global(gps_points_dict, pdr_shots_dict, scale_factor, stride_len=3):
     """
     *globally* align pdr predictions to GPS points
 
@@ -138,7 +139,7 @@ def align_pdr_global(gps_points_dict, pdr_shots_dict, reconstruction_scale_facto
 
     :param gps_points_dict: gps points in topocentric coordinates
     :param pdr_shots_dict: position of each shot as predicted by pdr
-    :param reconstruction_scale_factor: scale factor feet per pixel
+    :param scale_factor: reconstruction_scale_factor - scale factor feet per pixel
     :return: aligned pdr shot predictions - [x, y, z, dop]
     """
     if len(gps_points_dict) < stride_len or len(pdr_shots_dict) < stride_len:
@@ -147,11 +148,11 @@ def align_pdr_global(gps_points_dict, pdr_shots_dict, reconstruction_scale_facto
 
     pdr_predictions_dict = {}
 
-    # reconstruct_scale_factor is from oiq_config.yaml, and it's feet per pixel.
+    # reconstruction_scale_factor is from oiq_config.yaml, and it's feet per pixel.
     # 0.3048 is meter per foot. 1.0 / (reconstruction_scale_factor * 0.3048) is
     # therefore pixels/meter, and since pdr output is in meters, it's the
     # expected scale
-    expected_scale = 1.0 / (reconstruction_scale_factor * 0.3048)
+    expected_scale = 1.0 / (scale_factor * 0.3048)
 
     last_deviation = 1.0
 
@@ -211,14 +212,14 @@ def align_pdr_global(gps_points_dict, pdr_shots_dict, reconstruction_scale_facto
     return pdr_predictions_dict
 
 
-def align_pdr_local(sfm_points_dict, pdr_shots_dict, reconstruction_scale_factor, num_history=3, num_predictions=3):
+def align_pdr_local(sfm_points_dict, pdr_shots_dict, scale_factor, num_history=3, num_predictions=3):
     """
     *locally* align pdr predictions to SfM output. the SfM points have been aligned with
     GPS points
 
     :param sfm_points_dict: sfm point coordinates
     :param pdr_shots_dict: original predictions
-    :param reconstruction_scale_factor: scale factor feet per pixel
+    :param scale_factor: reconstruction_scale_factor - scale factor feet per pixel
     :param num_history: number of sfm shots to use for the calculation
     :param num_predictions: number of shots beyond current last shot to align
     :return: updated pdr predictions for num_predictions shots
@@ -241,7 +242,7 @@ def align_pdr_local(sfm_points_dict, pdr_shots_dict, reconstruction_scale_factor
 
     if np.degrees(direction_stddev) > 15.0:
         # if directions differ by a lot, we use affine alignment
-        updates = align_pdr_local_affine(sfm_points_dict, pdr_shots_dict, reconstruction_scale_factor,
+        updates = align_pdr_local_affine(sfm_points_dict, pdr_shots_dict, scale_factor,
                                          num_history, num_predictions)
     else:
         # if we are walking on roughly a straight line, then just extrapolate
@@ -291,22 +292,22 @@ def align_pdr_local_extrapolate(ref_coord, ref_dir, delta_heading_distance_dict)
     return updates
 
 
-def align_pdr_local_affine(sfm_points_dict, pdr_shots_dict, reconstruction_scale_factor, num_history, num_predictions):
+def align_pdr_local_affine(sfm_points_dict, pdr_shots_dict, scale_factor, num_history, num_predictions):
     """
     estimating the affine transform between a set of SfM point coordinates and a set of
     original pdr predictions. Then affine transform the pdr predictions
 
     :param sfm_points_dict: sfm point coordinates
     :param pdr_shots_dict: original predictions
-    :param reconstruction_scale_factor: scale factor feet per pixel
+    :param scale_factor: reconstruction_scale_factor - scale factor feet per pixel
     :param num_predictions: number of shots to extrapolate prediction
     :return: updated pdr predictions for num_to_predict shots
     """
-    # reconstruct_scale_factor is from oiq_config.yaml, and it's feet per pixel.
+    # reconstruction_scale_factor is from oiq_config.yaml, and it's feet per pixel.
     # 0.3048 is meter per foot. 1.0 / (reconstruction_scale_factor * 0.3048) is
     # therefore pixels/meter, and since pdr output is in meters, it's the
     # expected scale
-    expected_scale = 1.0 / (reconstruction_scale_factor * 0.3048)
+    expected_scale = 1.0 / (scale_factor * 0.3048)
 
     sfm_coords = []
     pdr_coords = []

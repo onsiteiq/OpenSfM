@@ -572,7 +572,7 @@ def get_image_metadata(data, image):
     return metadata
 
 
-def init_pdr_predictions(reflla, gps_points_dict, pdr_shots_dict):
+def init_pdr_predictions(reflla, gps_points_dict, pdr_shots_dict, scale_factor):
     """
     globally align pdr path to gps points
 
@@ -589,8 +589,7 @@ def init_pdr_predictions(reflla, gps_points_dict, pdr_shots_dict):
             reflla['latitude'], reflla['longitude'], reflla['altitude'])
         topocentric_gps_points_dict[key] = (x, y, z)
 
-    # FIXME: read oiq_config.yaml to get reconstruction_scale_factor (hardcoded to 0.0199 below)
-    pdr_predictions_dict = align_pdr_global(topocentric_gps_points_dict, pdr_shots_dict, 0.0199)
+    pdr_predictions_dict = align_pdr_global(topocentric_gps_points_dict, pdr_shots_dict, scale_factor)
 
     # debug
     debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict)
@@ -598,7 +597,7 @@ def init_pdr_predictions(reflla, gps_points_dict, pdr_shots_dict):
     return topocentric_gps_points_dict, pdr_predictions_dict
 
 
-def update_pdr_predictions(reconstruction, pdr_shots_dict):
+def update_pdr_predictions(reconstruction, pdr_shots_dict, scale_factor):
     """
     locally update pdr predictions based on sfm
 
@@ -618,8 +617,7 @@ def update_pdr_predictions(reconstruction, pdr_shots_dict):
         sfm_points_dict[shot.id] = shot.pose.get_origin()
 
     # get updated predictions
-    # FIXME: read oiq_config.yaml to get reconstruction_scale_factor (hardcoded to 0.0199 below)
-    updates = align_pdr_local(sfm_points_dict, pdr_shots_dict, 0.0199)
+    updates = align_pdr_local(sfm_points_dict, pdr_shots_dict, scale_factor)
 
     return updates
 
@@ -1338,7 +1336,7 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
                     align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict)
                 else:
                     pdr_shots_dict = data.load_pdr_shots()
-                    updates = update_pdr_predictions(reconstruction, pdr_shots_dict)
+                    updates = update_pdr_predictions(reconstruction, pdr_shots_dict, config['reconstruction_scale_factor'])
                     pdr_predictions_dict.update(updates)
 
             break
@@ -1438,7 +1436,7 @@ def incremental_reconstruction(data):
 
     # load pdr data and globally align with gps points
     topocentric_gps_points_dict, pdr_predictions_dict = \
-        init_pdr_predictions(reflla, gps_points_dict, pdr_shots_dict)
+        init_pdr_predictions(reflla, gps_points_dict, pdr_shots_dict, data.config['reconstruction_scale_factor'])
     data.save_topocentric_gps_points(topocentric_gps_points_dict)
     data.save_pdr_predictions(pdr_predictions_dict)
 
