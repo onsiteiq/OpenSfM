@@ -5,6 +5,7 @@ import glob
 import logging
 
 from opensfm import io
+from opensfm import geo
 
 debug = False
 
@@ -82,6 +83,12 @@ def debug_plot_reconstructions(reconstructions):
     fig, ax = plt.subplots()
     ax.imshow(img)
 
+    topocentric_gps_points_dict = _load_topocentric_gps_points()
+    for key, value in topocentric_gps_points_dict.items():
+        circle = plt.Circle((value[0], value[1]), color='blue', radius=50)
+        ax.add_artist(circle)
+        ax.text(value[0], value[1], str(_shot_id_to_int(key)), color='white', fontsize=6)
+
     for reconstruction in reconstructions:
         for shot in reconstruction.shots.values():
             if reconstruction.alignment.aligned:
@@ -111,6 +118,24 @@ def _shot_id_to_int(shot_id):
     return int(tokens[0])
 
 
+def _load_topocentric_gps_points():
+    topocentric_gps_points_dict = {}
+
+    with open("gps_list.txt") as fin:
+        gps_points_dict = io.read_gps_points_list(fin)
+
+    with io.open_rt("reference_lla.json") as fin:
+        reflla = io.json_load(fin)
+
+    for key, value in gps_points_dict.items():
+        x, y, z = geo.topocentric_from_lla(
+            value[0], value[1], value[2],
+            reflla['latitude'], reflla['longitude'], reflla['altitude'])
+        topocentric_gps_points_dict[key] = (x, y, z)
+
+    return topocentric_gps_points_dict
+
+
 # Entry point
 if __name__ == "__main__":
     debug = True
@@ -121,6 +146,8 @@ if __name__ == "__main__":
         filename = str(sys.argv[1])
     else:
         filename = "reconstruction.json"
+
     with open(filename) as fin:
         reconstructions = io.reconstructions_from_json(json.load(fin))
-        debug_plot_reconstructions(reconstructions)
+
+    debug_plot_reconstructions(reconstructions)
