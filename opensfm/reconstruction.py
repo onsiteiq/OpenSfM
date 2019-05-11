@@ -20,7 +20,8 @@ from opensfm import matching
 from opensfm import multiview
 from opensfm import types
 from opensfm.align import align_reconstruction, apply_similarity
-from opensfm.align_pdr import align_pdr_global, align_pdr_local, align_reconstruction_to_pdr
+from opensfm.align_pdr import init_pdr_predictions, update_pdr_predictions, get_pdr_position_prior, \
+    align_reconstruction_to_pdr
 from opensfm.context import parallel_map, current_memory_usage
 from opensfm.debug_plot import debug_plot_pdr, debug_plot_reconstructions
 
@@ -118,18 +119,6 @@ def _next_shot_id(curr_shot_id):
     Returns: next shot id
     """
     return _int_to_shot_id(_shot_id_to_int(curr_shot_id) + 1)
-
-
-def debug_show_pdr_prior_distance(orig, prediction):
-    distance = np.linalg.norm(prediction - orig)
-    logger.info("prior-orig distance = {}".format(distance))
-
-
-def get_position_prior(shot_id, pdr_predictions_dict):
-    if shot_id in pdr_predictions_dict:
-        return pdr_predictions_dict[shot_id][:3], pdr_predictions_dict[shot_id][3]
-    else:
-        return [0, 0, 0], 999999.0
 
 
 def bundle(graph, reconstruction, gcp, pdr_predictions_dict, config):
@@ -254,7 +243,7 @@ def bundle_single_view(graph, reconstruction, shot_id, pdr_predictions_dict, con
                               shot.metadata.gps_dop)
 
     if config['bundle_use_pdr'] and shot.metadata.gps_dop == 999999.0:
-        p, stddev = get_position_prior(shot_id, pdr_predictions_dict)
+        p, stddev = get_pdr_position_prior(shot_id, pdr_predictions_dict)
         ba.add_position_prior(str(shot.id), p[0], p[1], p[2], stddev)
 
     ba.set_loss_function(config['loss_function'],
@@ -341,7 +330,7 @@ def bundle_local(graph, reconstruction, gcp, pdr_predictions_dict, central_shot_
     if config['bundle_use_pdr']:
         for shot_id in interior | boundary:
             if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
-                p, stddev = get_position_prior(shot_id, pdr_predictions_dict)
+                p, stddev = get_pdr_position_prior(shot_id, pdr_predictions_dict)
                 ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
 
     if config['bundle_use_gcp'] and gcp:
@@ -570,56 +559,6 @@ def get_image_metadata(data, image):
         metadata.skey = exif['skey']
 
     return metadata
-
-
-def init_pdr_predictions(reflla, gps_points_dict, pdr_shots_dict, scale_factor):
-    """
-    globally align pdr path to gps points
-
-    :param reflla:
-    :param gps_points_dict: gps points
-    :param pdr_shots_dict: original, unaligned pdr shots predictions
-    :return:topocentric_gps_points_dict, pdr_predictions_dict
-    """
-    topocentric_gps_points_dict = {}
-
-    for key, value in gps_points_dict.items():
-        x, y, z = geo.topocentric_from_lla(
-            value[0], value[1], value[2],
-            reflla['latitude'], reflla['longitude'], reflla['altitude'])
-        topocentric_gps_points_dict[key] = (x, y, z)
-
-    pdr_predictions_dict = align_pdr_global(topocentric_gps_points_dict, pdr_shots_dict, scale_factor)
-
-    # debug
-    debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict)
-
-    return topocentric_gps_points_dict, pdr_predictions_dict
-
-
-def update_pdr_predictions(reconstruction, pdr_shots_dict, scale_factor):
-    """
-    locally update pdr predictions based on sfm
-
-    :param reconstruction:
-    :param pdr_predictions_dict:
-    :return:
-    """
-    if not reconstruction.alignment.aligned:
-        return {}
-
-    if len(reconstruction.shots) < 3:
-        return {}
-
-    sfm_points_dict = {}
-
-    for shot in reconstruction.shots.values():
-        sfm_points_dict[shot.id] = shot.pose.get_origin()
-
-    # get updated predictions
-    updates = align_pdr_local(sfm_points_dict, pdr_shots_dict, scale_factor)
-
-    return updates
 
 
 def _two_view_reconstruction_inliers(b1, b2, R, t, threshold):
@@ -1338,17 +1277,13 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
                     pdr_shots_dict = data.load_pdr_shots()
                     updates = update_pdr_predictions(reconstruction, pdr_shots_dict, config['reconstruction_scale_factor'])
                     pdr_predictions_dict.update(updates)
+                    data.save_pdr_predictions(pdr_predictions_dict)
 
             break
         else:
             if len(images) > 0:
                 logger.info("Some images can not be added")
             break
-
-        # debugging
-        #logger.info("grow_reconstruction")
-        #for shot in reconstruction.shots.values():
-            #logger.info("shot_id={} origin={}".format(shot.id, shot.pose.get_origin()))
 
         max_recon_size = config.get( 'reconstruction_max_images', -1 )
         if max_recon_size != -1:
@@ -1428,17 +1363,17 @@ def incremental_reconstruction(data):
     else:
         image_groups.append( full_images )
 
+    reflla = data.load_reference_lla()
+
     pdr_shots_dict = {}
     if data.pdr_shots_exist():
         pdr_shots_dict = data.load_pdr_shots()
 
-    reflla = data.load_reference_lla()
-
-    # load pdr data and globally align with gps points
-    topocentric_gps_points_dict, pdr_predictions_dict = \
-        init_pdr_predictions(reflla, gps_points_dict, pdr_shots_dict, data.config['reconstruction_scale_factor'])
-    data.save_topocentric_gps_points(topocentric_gps_points_dict)
-    data.save_pdr_predictions(pdr_predictions_dict)
+        # load pdr data and globally align with gps points
+        topocentric_gps_points_dict, pdr_predictions_dict = \
+            init_pdr_predictions(reflla, gps_points_dict, pdr_shots_dict, data.config['reconstruction_scale_factor'])
+        data.save_topocentric_gps_points(topocentric_gps_points_dict)
+        data.save_pdr_predictions(pdr_predictions_dict)
 
     for remaining_images in image_groups:
         while len(remaining_images) > 2:
@@ -1467,13 +1402,15 @@ def incremental_reconstruction(data):
                 remaining_images.remove(im1)
 
     if reconstructions:
-        # plot updated pdr predictions
-        debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict)
-
         reconstructions = sorted(reconstructions, key=lambda x: -len(x.shots))
         data.save_reconstruction(reconstructions)
 
+        # debugging - plot reconstructions
         debug_plot_reconstructions(reconstructions)
+
+        # debugging - plot updated pdr predictions
+        if data.pdr_shots_exist():
+            debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict)
 
         for k, r in enumerate(reconstructions):
             logger.info("Reconstruction {}: {} images, {} points".format(

@@ -4,10 +4,70 @@ import logging
 import math
 import numpy as np
 
+from opensfm import geo
 from opensfm import multiview
 from opensfm import transformations as tf
 
+from opensfm.debug_plot import debug_plot_pdr
+
 logger = logging.getLogger(__name__)
+
+
+def init_pdr_predictions(reflla, gps_points_dict, pdr_shots_dict, scale_factor):
+    """
+    globally align pdr path to gps points
+
+    :param reflla:
+    :param gps_points_dict: gps points
+    :param pdr_shots_dict: original, unaligned pdr shots predictions
+    :return:topocentric_gps_points_dict, pdr_predictions_dict
+    """
+    topocentric_gps_points_dict = {}
+
+    for key, value in gps_points_dict.items():
+        x, y, z = geo.topocentric_from_lla(
+            value[0], value[1], value[2],
+            reflla['latitude'], reflla['longitude'], reflla['altitude'])
+        topocentric_gps_points_dict[key] = (x, y, z)
+
+    pdr_predictions_dict = align_pdr_global(topocentric_gps_points_dict, pdr_shots_dict, scale_factor)
+
+    # debug
+    debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict)
+
+    return topocentric_gps_points_dict, pdr_predictions_dict
+
+
+def update_pdr_predictions(reconstruction, pdr_shots_dict, scale_factor):
+    """
+    locally update pdr predictions based on sfm
+
+    :param reconstruction:
+    :param pdr_predictions_dict:
+    :return:
+    """
+    if not reconstruction.alignment.aligned:
+        return {}
+
+    if len(reconstruction.shots) < 3:
+        return {}
+
+    sfm_points_dict = {}
+
+    for shot in reconstruction.shots.values():
+        sfm_points_dict[shot.id] = shot.pose.get_origin()
+
+    # get updated predictions
+    updates = align_pdr_local(sfm_points_dict, pdr_shots_dict, scale_factor)
+
+    return updates
+
+
+def get_pdr_position_prior(shot_id, pdr_predictions_dict):
+    if shot_id in pdr_predictions_dict:
+        return pdr_predictions_dict[shot_id][:3], pdr_predictions_dict[shot_id][3]
+    else:
+        return [0, 0, 0], 999999.0
 
 
 def align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict):
