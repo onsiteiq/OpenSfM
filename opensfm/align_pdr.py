@@ -1,8 +1,11 @@
 """affine transform pdr predictions to align with GPS points or SfM output."""
 
+import operator
 import logging
 import math
 import numpy as np
+
+from itertools import combinations
 
 from opensfm import geo
 from opensfm import multiview
@@ -72,24 +75,32 @@ def get_pdr_position_prior(shot_id, pdr_predictions_dict):
 
 def align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict):
     """
-    orient the two view reconstruction to pdr priors
+    orient the reconstruction to pdr priors
     """
-    X, Xp = [], []
-    onplane, verticals = [], []
+    pdr_shots = {}
     for shot in reconstruction.shots.values():
         if shot.id in pdr_predictions_dict:
-            X.append(shot.pose.get_origin())
-            Xp.append(pdr_predictions_dict[shot.id][:3])
-            R = shot.pose.get_rotation_matrix()
-            onplane.append(R[0,:])
-            onplane.append(R[2,:])
-            verticals.append(R[1,:])
+            pdr_shots[shot.id] = pdr_predictions_dict[shot.id][:3]
+
+    if len(pdr_shots) < 2:
+        return
+
+    two_shots = pdr_shots
+    if len(pdr_shots) > 2:
+        two_shots = get_farthest_two_shots(pdr_shots)
+
+    X, Xp = [], []
+    onplane, verticals = [], []
+    for shot_id in two_shots:
+        X.append(reconstruction.shots[shot_id].pose.get_origin())
+        Xp.append(two_shots[shot_id])
+        R = reconstruction.shots[shot_id].pose.get_rotation_matrix()
+        onplane.append(R[0,:])
+        onplane.append(R[2,:])
+        verticals.append(R[1,:])
 
     X = np.array(X)
     Xp = np.array(Xp)
-
-    if len(X) < 2:
-        return
 
     # Estimate ground plane.
     p = multiview.fit_plane(X - X.mean(axis=0), onplane, verticals)
@@ -495,6 +506,18 @@ def get_dop(shot_id, deviation, gps_shot_ids):
         dop = 100 * (1+deviation)
 
     return dop
+
+
+def get_farthest_two_shots(pdr_shots):
+    """get two shots that are most far apart"""
+    distances = {}
+    pdr_shot_ids = pdr_shots.keys()
+    for (i, j) in combinations(pdr_shot_ids, 2):
+        distances[(i, j)] = np.linalg.norm(np.array(pdr_shots[i]) - np.array(pdr_shots[j]))
+
+    (shot1, shot2) = max(distances.items(), key=operator.itemgetter(1))[0]
+
+    return {shot1: pdr_shots[shot1], shot2: pdr_shots[shot2]}
 
 
 def _shot_id_to_int(shot_id):
