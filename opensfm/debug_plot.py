@@ -89,13 +89,21 @@ def debug_plot_reconstructions(reconstructions):
         ax.add_artist(circle)
         ax.text(value[0], value[1], str(_shot_id_to_int(key)), color='white', fontsize=6)
 
-    for reconstruction in reconstructions:
-        for shot in reconstruction.shots.values():
-            if reconstruction.alignment.aligned:
-                color = 'green'
-            else:
-                color = 'red'
+    # show each recon in different colors
+    colors = ["green", "blue", "cyan", "magenta", "yellow", "white"]
+    color_ind = 0
 
+    for reconstruction in reconstructions:
+        if color_ind < len(colors):
+            color = colors[color_ind]
+            color_ind += 1
+        else:
+            color = colors[-1]
+
+        if not reconstruction.alignment.aligned:
+            color = 'red'
+
+        for shot in reconstruction.shots.values():
             if shot.metadata.gps_dop != 999999.0:
                 radius = 50
             else:

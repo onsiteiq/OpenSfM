@@ -48,7 +48,7 @@ def apply_similarity(reconstruction, s, A, b):
         shot.pose.translation = list(tp)
 
 
-def align_reconstruction_similarity(reconstruction, gcp, config ):
+def align_reconstruction_similarity(reconstruction, gcp, config):
     """Align reconstruction with GPS and GCP data.
 
     Config parameter `align_method` can be used to choose the alignment method.
@@ -68,25 +68,27 @@ def align_reconstruction_similarity(reconstruction, gcp, config ):
         return res
 
 
-def align_reconstruction_naive_similarity(reconstruction, gcp, config ):
+def align_reconstruction_naive_similarity(reconstruction, gcp, config):
     """Align with GPS and GCP data using direct 3D-3D matches."""
     gps_shots = []
     for shot in reconstruction.shots.values():
         if shot.metadata.gps_dop != 999999.0:
             gps_shots.append(shot)
 
-    if len(gps_shots) < 3:
-        logger.debug( 'Similarity alignment NOT attempted ( {0} Correspondences )'.format(len(gps_shots)) )
-        reconstruction.alignment.num_correspondences = 0
-        return
-
-    three_shots = gps_shots
+    filtered_shots = gps_shots
     if len(gps_shots) > 3:
-        three_shots = get_farthest_three_shots(gps_shots)
+        #filtered_shots = get_farthest_three_shots(gps_shots)
+        filtered_shots = get_filtered_shots(gps_shots, config)
 
-    reconstruction.alignment.num_correspondences = 3
-    logger.debug('Similarity alignment attempted on shots {}, {}, and {}'.
-                 format(three_shots[0].id, three_shots[1].id, three_shots[2].id))
+    if len(filtered_shots) < 3:
+        reconstruction.alignment.num_correspondences = 0
+        logger.debug('Similarity alignment NOT attempted ( {0} Correspondences )'.format(len(gps_shots)))
+        return
+    else:
+        reconstruction.alignment.num_correspondences = len(filtered_shots)
+        logger.debug('Similarity alignment attempted on shots')
+        for shot in filtered_shots:
+            logger.debug("{}".format(shot.id))
 
     X, Xp = [], []
 
@@ -98,7 +100,7 @@ def align_reconstruction_naive_similarity(reconstruction, gcp, config ):
 
     # Get camera center correspondences
     if config['align_use_gps']:
-        for shot in three_shots:
+        for shot in filtered_shots:
             X.append(shot.pose.get_origin())
             Xp.append(shot.metadata.gps_position)
 
@@ -118,7 +120,7 @@ def align_reconstruction_naive_similarity(reconstruction, gcp, config ):
     [x, y, z] = _rotation_matrix_to_euler_angles(A)
     logger.debug('Similarity alignment result s={}, rot xyz={} {} {}'.format(s, x, y, z))
     if s > 1.1 or s < 0.9 or math.fabs(x) > 10.0 or math.fabs(y) > 10.0 or math.fabs(z) > 45.0:
-        logger.debug('Similarity alignment result looks suspicious. Revert to orientation prior alignment')
+        logger.debug('Similarity alignment result looks suspicious. Discard')
         return
 
     return s, A, b
@@ -144,21 +146,27 @@ def align_reconstruction_orientation_prior_similarity(reconstruction, config):
         if shot.metadata.gps_dop != 999999.0:
             gps_shots.append(shot)
 
-    if len(gps_shots) < 2:
-        return
-
-    two_shots = gps_shots
+    filtered_shots = gps_shots
     if len(gps_shots) > 2:
-        two_shots = get_farthest_two_shots(gps_shots)
+        #filtered_shots = get_farthest_two_shots(gps_shots)
+        filtered_shots = get_filtered_shots(gps_shots, config)
 
-    reconstruction.alignment.num_correspondences = 2
-    logger.debug('Orientation prior alignment attempted on {} and {}'.format(two_shots[0].id, two_shots[1].id))
+    if len(filtered_shots) < 2:
+        reconstruction.alignment.num_correspondences = 0
+        logger.debug('Orientation prior alignment NOT attempted')
+        return
+    else:
+        reconstruction.alignment.num_correspondences = len(filtered_shots)
+        logger.debug('Orientation prior alignment attempted on shots')
+        for shot in filtered_shots:
+            logger.debug("{}".format(shot.id))
+
 
     X, Xp = [], []
     orientation_type = config['align_orientation_prior']
     onplane, verticals = [], []
 
-    for shot in two_shots:
+    for shot in filtered_shots:
         X.append(shot.pose.get_origin())
         Xp.append(shot.metadata.gps_position)
         R = shot.pose.get_rotation_matrix()
@@ -268,7 +276,7 @@ def triangulate_all_gcp(reconstruction, gcp_observations):
     return triangulated, measured
 
 
-def area(a, b, c) :
+def area(a, b, c):
     return 0.5 * np.linalg.norm( np.cross( b-a, c-a ) )
 
 
@@ -288,6 +296,32 @@ def get_farthest_three_shots(gps_shots):
         areas[(i, j, k)] = area(np.array(i.metadata.gps_position), np.array(j.metadata.gps_position), np.array(k.metadata.gps_position))
 
     return max(areas.items(), key=operator.itemgetter(1))[0]
+
+
+def get_filtered_shots(gps_shots, config):
+    """filter out shots that are too close together"""
+
+    # minimum distance between two gps points that we will use, in feet
+    # TODO: move this constant to config
+    min_gps_distance = 3
+
+    scale_factor = config['reconstruction_scale_factor']
+    min_distance_pixels = min_gps_distance / scale_factor
+
+    distances = {}
+    for (i, j) in combinations(gps_shots, 2):
+        distances[(i, j)] = np.linalg.norm(np.array(i.metadata.gps_position) - np.array(j.metadata.gps_position))
+
+    while len(gps_shots) > 2:
+        (i, j) = min(distances.items(), key=operator.itemgetter(1))[0]
+        if distances[(i, j)] < min_distance_pixels:
+            if i in gps_shots:
+                gps_shots.remove(i)
+            del distances[(i, j)]
+        else:
+            break
+
+    return gps_shots
 
 
 def _rotation_matrix_to_euler_angles(R):

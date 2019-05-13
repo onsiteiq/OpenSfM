@@ -879,8 +879,6 @@ def resect(data, graph, reconstruction, shot_id):
     inliers = np.linalg.norm(reprojected_bs - bs, axis=1) < threshold
     ninliers = int(sum(inliers))
 
-    logger.info("{} resection inliers: {} / {}".format(
-        shot_id, ninliers, len(bs)))
     report = {
         'num_common_points': len(bs),
         'num_inliers': ninliers,
@@ -1229,7 +1227,7 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
         for image in images:
             ok, resrep = resect(data, graph, reconstruction, image)
             if not ok:
-                logger.info("resect failed on {} - report {}".format(image, resrep))
+                #logger.debug("resect failed on {} - report {}".format(image, resrep))
                 continue
 
             logger.info("Adding {0} to the reconstruction".format(image))
