@@ -90,7 +90,7 @@ def debug_plot_reconstructions(reconstructions):
         ax.text(value[0], value[1], str(_shot_id_to_int(key)), color='white', fontsize=6)
 
     # show each recon in different colors
-    colors = ["green", "blue", "cyan", "magenta", "yellow", "white"]
+    colors = ["green", "blue", "cyan", "magenta", "yellow"]
     color_ind = 0
 
     for reconstruction in reconstructions:
