@@ -19,11 +19,11 @@ from opensfm import log
 from opensfm import matching
 from opensfm import multiview
 from opensfm import types
-from opensfm.align import align_reconstruction, apply_similarity
+from opensfm.align import align_reconstruction, align_reconstruction_segments, apply_similarity
 from opensfm.align_pdr import init_pdr_predictions, update_pdr_predictions, get_pdr_position_prior, \
     align_reconstruction_to_pdr
 from opensfm.context import parallel_map, current_memory_usage
-from opensfm.debug_plot import debug_plot_pdr, debug_plot_reconstructions
+from opensfm.debug_plot import debug_plot_pdr, debug_plot_reconstructions, debug_save_reconstruction, debug_print_origin
 
 logger = logging.getLogger(__name__)
 
@@ -1227,7 +1227,6 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
         for image in images:
             ok, resrep = resect(data, graph, reconstruction, image)
             if not ok:
-                #logger.debug("resect failed on {} - report {}".format(image, resrep))
                 continue
 
             logger.info("Adding {0} to the reconstruction".format(image))
@@ -1292,13 +1291,10 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
 
     bundle(graph, reconstruction, gcp, pdr_predictions_dict, config)
     remove_outliers(graph, reconstruction, config)
-    align_reconstruction(reconstruction, gcp, config)
+    #align_reconstruction(reconstruction, gcp, config)
+    align_reconstruction_segments(reconstruction, gcp, config)
     paint_reconstruction(data, graph, reconstruction)
 
-    if len(images) > 0:
-        prepend_id = _int_to_shot_id(_shot_id_to_int(images[0]) - 1)
-        images.insert(0, prepend_id)
-        logger.info("grow_reconstruction: adding {} back to list".format(prepend_id))
     return reconstruction, report
 
 

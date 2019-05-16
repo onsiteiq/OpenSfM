@@ -3,6 +3,9 @@ import sys
 import json
 import glob
 import logging
+import six
+
+from six import iteritems
 
 from opensfm import io
 from opensfm import geo
@@ -85,7 +88,7 @@ def debug_plot_reconstructions(reconstructions):
 
     topocentric_gps_points_dict = _load_topocentric_gps_points()
     for key, value in topocentric_gps_points_dict.items():
-        circle = plt.Circle((value[0], value[1]), color='blue', radius=50)
+        circle = plt.Circle((value[0], value[1]), color='black', radius=50)
         ax.add_artist(circle)
         ax.text(value[0], value[1], str(_shot_id_to_int(key)), color='white', fontsize=6)
 
@@ -118,12 +121,43 @@ def debug_plot_reconstructions(reconstructions):
     #fig.savefig('./recon.png', dpi=200)
 
 
+def debug_print_origin(reconstruction, start_shot_idx, end_shot_idx):
+    """
+    print origin of shots between start/end_shot_idx
+    """
+    logger.debug("debug_print_origin: origin of shots between {} and {}".format(start_shot_idx, end_shot_idx))
+    for i in range(start_shot_idx, end_shot_idx):
+        id = _int_to_shot_id(i)
+        if id in reconstruction.shots:
+            o = reconstruction.shots[id].pose.get_origin()
+            logger.debug("debug_print_origin: id={}, pos={} {} {}".format(i, o[0], o[1], o[2]))
+
+
+def debug_save_reconstruction(data, graph, reconstruction, curr_shot_idx, start_shot_idx, end_shot_idx):
+    """
+    save partial recon if shot idx falls between start/end_shot_idx
+    """
+    if curr_shot_idx in range(start_shot_idx, end_shot_idx):
+        """Set the color of the points from the color of the tracks."""
+        for k, point in iteritems(reconstruction.points):
+            point.color = six.next(six.itervalues(graph[k]))['feature_color']
+        data.save_reconstruction(
+            [reconstruction], 'reconstruction.{}.json'.format(curr_shot_idx))
+
+
 def _shot_id_to_int(shot_id):
     """
     Returns: shot id to integer
     """
     tokens = shot_id.split(".")
     return int(tokens[0])
+
+
+def _int_to_shot_id(shot_int):
+    """
+    Returns: integer to shot id
+    """
+    return str(shot_int).zfill(10) + ".jpg"
 
 
 def _load_topocentric_gps_points():

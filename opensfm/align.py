@@ -15,14 +15,63 @@ from opensfm import transformations as tf
 logger = logging.getLogger(__name__)
 
 
-def align_reconstruction(reconstruction, gcp, config ):
+def align_reconstruction(reconstruction, gcp, config):
     """Align a reconstruction with GPS and GCP data."""
-    res = align_reconstruction_similarity(reconstruction, gcp, config )
+    res = align_reconstruction_similarity(reconstruction, gcp, config)
     reconstruction.alignment.aligned = False
     if res:
         s, A, b = res
         apply_similarity(reconstruction, s, A, b)
         reconstruction.alignment.aligned = True
+
+
+def align_reconstruction_segments(reconstruction, gcp, config, stride_len=6):
+    """
+    same as align_reconstruction but one segment (stride_len gps points) at a time,
+    stride_len must >= 2
+    """
+    gps_shots = []
+    for shot in reconstruction.shots.values():
+        if shot.metadata.gps_dop != 999999.0:
+            gps_shots.append(shot)
+
+    filtered_gps_shots = get_filtered_shots(gps_shots, config)
+
+    if len(filtered_gps_shots) <= stride_len:
+        align_reconstruction(reconstruction, gcp, config)
+        return
+
+    filtered_gps_shots_dict = {}
+    for shot in filtered_gps_shots:
+        filtered_gps_shots_dict[shot.id] = shot
+
+    all_shot_ids = sorted(filtered_gps_shots_dict.keys())
+    num_of_strides = len(all_shot_ids) // stride_len
+    for i in range(num_of_strides):
+        next_shots = []
+        for j in range(stride_len):
+            next_shots.append(filtered_gps_shots_dict[all_shot_ids[i*stride_len+j]])
+
+        if i == num_of_strides - 1:
+            left = len(all_shot_ids) - num_of_strides*stride_len
+            for k in range(left):
+                next_shots.append(filtered_gps_shots_dict[all_shot_ids[num_of_strides*stride_len + k]])
+
+        res = get_sab_3d(reconstruction, next_shots, gcp, config)
+        if res:
+            s, A, b = res
+
+            if i == 0:
+                start_shot_ind = 0
+            else:
+                start_shot_ind = _shot_id_to_int(all_shot_ids[i*stride_len-1]) + 1
+
+            if i == num_of_strides - 1:
+                end_shot_ind = 999999
+            else:
+                end_shot_ind = _shot_id_to_int(all_shot_ids[(i+1)*stride_len-1])
+
+            apply_similarity_segment(reconstruction, start_shot_ind, end_shot_ind, s, A, b)
 
 
 def apply_similarity(reconstruction, s, A, b):
@@ -46,6 +95,22 @@ def apply_similarity(reconstruction, s, A, b):
         tp = -Rp.dot(b) + s * t
         shot.pose.set_rotation_matrix(Rp)
         shot.pose.translation = list(tp)
+
+
+def apply_similarity_segment(reconstruction, start_shot_ind, end_shot_ind, s, A, b):
+    """
+    applies similarity transform to shots between start/end_shot_id in
+    the reconstruction. affect shot pose only, not points
+    """
+    logger.debug("apply_similarity_segment: start/end shot index {} {}".format(start_shot_ind, end_shot_ind))
+    for shot in reconstruction.shots.values():
+        if start_shot_ind <= _shot_id_to_int(shot.id) <= end_shot_ind:
+            R = shot.pose.get_rotation_matrix()
+            t = np.array(shot.pose.translation)
+            Rp = R.dot(A.T)
+            tp = -Rp.dot(b) + s * t
+            shot.pose.set_rotation_matrix(Rp)
+            shot.pose.translation = list(tp)
 
 
 def align_reconstruction_similarity(reconstruction, gcp, config):
@@ -75,21 +140,25 @@ def align_reconstruction_naive_similarity(reconstruction, gcp, config):
         if shot.metadata.gps_dop != 999999.0:
             gps_shots.append(shot)
 
-    filtered_shots = gps_shots
-    if len(gps_shots) > 3:
-        #filtered_shots = get_farthest_three_shots(gps_shots)
-        filtered_shots = get_filtered_shots(gps_shots, config)
-
-    if len(filtered_shots) < 3:
+    if len(gps_shots) < 3:
         reconstruction.alignment.num_correspondences = 0
         logger.debug('Similarity alignment NOT attempted ( {0} Correspondences )'.format(len(gps_shots)))
         return
-    else:
-        reconstruction.alignment.num_correspondences = len(filtered_shots)
-        logger.debug('Similarity alignment attempted on shots')
-        for shot in filtered_shots:
-            logger.debug("{}".format(shot.id))
 
+    filtered_shots = gps_shots
+    if len(gps_shots) > 3:
+        #filtered_shots = get_filtered_shots(gps_shots, config)
+        filtered_shots = get_farthest_three_shots(gps_shots)
+
+    reconstruction.alignment.num_correspondences = len(filtered_shots)
+    logger.debug('Similarity alignment attempted on shots')
+    for shot in filtered_shots:
+        logger.debug("{}".format(shot.id))
+
+    return get_sab_3d(reconstruction, filtered_shots, gcp, config)
+
+
+def get_sab_3d(reconstruction, filtered_shots, gcp, config):
     X, Xp = [], []
 
     # Get Ground Control Point correspondences
@@ -119,7 +188,8 @@ def align_reconstruction_naive_similarity(reconstruction, gcp, config):
     # and if any of them is true, we revert to 2-point method for alignment (orientation prior)
     [x, y, z] = _rotation_matrix_to_euler_angles(A)
     logger.debug('Similarity alignment result s={}, rot xyz={} {} {}'.format(s, x, y, z))
-    if s > 1.1 or s < 0.9 or math.fabs(x) > 10.0 or math.fabs(y) > 10.0 or math.fabs(z) > 45.0:
+    #if s > 1.1 or s < 0.9 or math.fabs(x) > 10.0 or math.fabs(y) > 10.0 or math.fabs(z) > 45.0:
+    if math.fabs(x) > 10.0 or math.fabs(y) > 10.0:
         logger.debug('Similarity alignment result looks suspicious. Discard')
         return
 
@@ -146,22 +216,22 @@ def align_reconstruction_orientation_prior_similarity(reconstruction, config):
         if shot.metadata.gps_dop != 999999.0:
             gps_shots.append(shot)
 
-    filtered_shots = gps_shots
-    if len(gps_shots) > 2:
-        #filtered_shots = get_farthest_two_shots(gps_shots)
-        filtered_shots = get_filtered_shots(gps_shots, config)
-
-    if len(filtered_shots) < 2:
+    if len(gps_shots) < 2:
         reconstruction.alignment.num_correspondences = 0
         logger.debug('Orientation prior alignment NOT attempted')
         return
-    else:
-        reconstruction.alignment.num_correspondences = len(filtered_shots)
-        logger.debug('Orientation prior alignment attempted on shots')
-        for shot in filtered_shots:
-            logger.debug("{}".format(shot.id))
+
+    filtered_shots = get_filtered_shots(gps_shots, config)
+
+    reconstruction.alignment.num_correspondences = len(filtered_shots)
+    logger.debug('Orientation prior alignment attempted on shots')
+    for shot in filtered_shots:
+        logger.debug("{}".format(shot.id))
+
+    return get_sab_2d(filtered_shots, config)
 
 
+def get_sab_2d(filtered_shots, config):
     X, Xp = [], []
     orientation_type = config['align_orientation_prior']
     onplane, verticals = [], []
@@ -208,7 +278,7 @@ def align_reconstruction_orientation_prior_similarity(reconstruction, config):
     logger.debug('Orientation alignment result s={}, rot xyz={} {} {}'.format(s, x, y, z))
     if s > 1.1 or s < 0.9 or math.fabs(z) > 45.0:
         logger.debug('Orientation alignment result looks suspicious. Discard')
-        return
+        #return
 
     return s, A, b
 
@@ -343,3 +413,11 @@ def _rotation_matrix_to_euler_angles(R):
         z = 0
 
     return np.array(np.degrees([x, y, z]))
+
+
+def _shot_id_to_int(shot_id):
+    """
+    Returns: shot id to integer
+    """
+    tokens = shot_id.split(".")
+    return int(tokens[0])
