@@ -4,6 +4,7 @@ import json
 import glob
 import logging
 import six
+import cv2
 
 from six import iteritems
 
@@ -41,7 +42,8 @@ def debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict):
     if not floor_plan_paths or not os.path.exists(floor_plan_paths[0]):
         return
 
-    img = mpimg.imread(floor_plan_paths[0])
+    #img = mpimg.imread(floor_plan_paths[0])
+    img = cv2.imread(floor_plan_paths[0], cv2.IMREAD_COLOR)
 
     fig, ax = plt.subplots()
     ax.imshow(img)
@@ -81,7 +83,8 @@ def debug_plot_reconstructions(reconstructions):
         print("No floor plan image found. Quitting")
         return
 
-    img = mpimg.imread(floor_plan_paths[0])
+    #img = mpimg.imread(floor_plan_paths[0])
+    img = cv2.imread(floor_plan_paths[0], cv2.IMREAD_COLOR)
 
     fig, ax = plt.subplots()
     ax.imshow(img)
