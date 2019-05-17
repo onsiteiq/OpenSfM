@@ -47,6 +47,7 @@ def align_reconstruction_segments(reconstruction, gcp, config, stride_len=6):
 
     all_shot_ids = sorted(filtered_gps_shots_dict.keys())
     num_of_strides = len(all_shot_ids) // stride_len
+    align_method = config['align_method']
     for i in range(num_of_strides):
         next_shots = []
         for j in range(stride_len):
@@ -57,7 +58,16 @@ def align_reconstruction_segments(reconstruction, gcp, config, stride_len=6):
             for k in range(left):
                 next_shots.append(filtered_gps_shots_dict[all_shot_ids[num_of_strides*stride_len + k]])
 
-        res = get_sab_3d(reconstruction, next_shots, gcp, config)
+        res = None
+        if align_method == 'orientation_prior':
+            res = get_sab_2d(next_shots, config)
+        elif align_method == 'naive':
+            res = get_sab_3d(reconstruction, next_shots, gcp, config)
+        elif align_method == 'naive_and_orientation_prior':
+            res = get_sab_3d(reconstruction, next_shots, gcp, config)
+            if not res:
+                res = get_sab_2d(next_shots, config)
+
         if res:
             s, A, b = res
 
@@ -183,14 +193,14 @@ def get_sab_3d(reconstruction, filtered_shots, gcp, config):
     A /= s
 
     # we use pdr input to guide the reconstruction (see align_reconstruction_to_pdr), so s should
-    # be close to 1; x/y rotation should be close to 0, if not then likely it's 'flipped' which
-    # could happen when the 3 points are close a degenerate configuration. so we check for these
-    # and if any of them is true, we revert to 2-point method for alignment (orientation prior)
+    # be ideally close to 1; x/y rotation should be close to 0. if x/y rotation is instead close
+    # to +/- 180 degrees, it's 'flipped' which could happen when the 3 points are close a degenerate
+    # configuration. if it is otherwise significant, say above +/- 10 degrees, it's likely the gps
+    # points are not accurate. so we check for these and revert to 2-point method for alignment
+    # (orientation prior) if necessary
     [x, y, z] = _rotation_matrix_to_euler_angles(A)
-    logger.debug('Similarity alignment result s={}, rot xyz={} {} {}'.format(s, x, y, z))
-    #if s > 1.1 or s < 0.9 or math.fabs(x) > 10.0 or math.fabs(y) > 10.0 or math.fabs(z) > 45.0:
     if math.fabs(x) > 10.0 or math.fabs(y) > 10.0:
-        logger.debug('Similarity alignment result looks suspicious. Discard')
+        logger.debug('Similarity alignment result s={}, rot xyz={} {} {} looks suspicious. Discard'.format(s, x, y, z))
         return
 
     return s, A, b
@@ -274,11 +284,8 @@ def get_sab_2d(filtered_shots, config):
         Xp[:, 2].mean() - s * X[:, 2].mean()  # vertical alignment
     ])
 
-    [x, y, z] = _rotation_matrix_to_euler_angles(A)
-    logger.debug('Orientation alignment result s={}, rot xyz={} {} {}'.format(s, x, y, z))
-    if s > 1.1 or s < 0.9 or math.fabs(z) > 45.0:
-        logger.debug('Orientation alignment result looks suspicious. Discard')
-        #return
+    if s > 1.1 or s < 0.9:
+        logger.debug('Orientation alignment result looks suspicious')
 
     return s, A, b
 
