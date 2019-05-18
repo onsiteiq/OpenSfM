@@ -1078,7 +1078,7 @@ def remove_outliers(graph, reconstruction, config):
         outliers = []
         for track in reconstruction.points:
             error = reconstruction.points[track].reprojection_error
-            if error is not None and error > threshold:
+            if error > threshold:
                 outliers.append(track)
         for track in outliers:
             del reconstruction.points[track]
@@ -1214,6 +1214,10 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
     if data.pdr_shots_exist():
         pdr_predictions_dict = data.load_pdr_predictions()
 
+    bundle(graph, reconstruction, None, pdr_predictions_dict, config)
+    remove_outliers(graph, reconstruction, config)
+    align_reconstruction(reconstruction, gcp, config)
+
     should_bundle = ShouldBundle(data, reconstruction)
     should_retriangulate = ShouldRetriangulate(data, reconstruction)
     while True:
@@ -1279,7 +1283,7 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
             break
         else:
             if len(images) > 0:
-                logger.info("Some images can not be added")
+                logger.info("Some images can not be added {}".format(images))
             break
 
         max_recon_size = config.get( 'reconstruction_max_images', -1 )
