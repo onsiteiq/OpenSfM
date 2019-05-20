@@ -247,10 +247,11 @@ def bundle_single_view(graph, reconstruction, shot_id, pdr_predictions_dict, con
         ba.add_position_prior(str(shot.id), p[0], p[1], p[2], stddev)
 
         # debug
-        prev_shot_id = _prev_shot_id(shot_id)
-        if prev_shot_id in reconstruction.shots:
-            v = p - reconstruction.shots[prev_shot_id].pose.get_origin()
-            logger.debug("pdr prior for {} displacement {} {} {}".format(shot_id, v[0], v[1], v[2]))
+        if stddev != 999999.0:
+            prev_shot_id = _prev_shot_id(shot_id)
+            if prev_shot_id in reconstruction.shots:
+                v = p - reconstruction.shots[prev_shot_id].pose.get_origin()
+                logger.debug("pdr prior for {} displacement {} {} {}".format(shot_id, v[0], v[1], v[2]))
 
     ba.set_loss_function(config['loss_function'],
                          config['loss_function_threshold'])
@@ -1379,7 +1380,7 @@ def incremental_reconstruction(data):
 
 def incremental_reconstruction_sequential(data):
     """Run the entire incremental reconstruction pipeline."""
-    logger.info("Starting incremental reconstruction")
+    logger.info("Starting incremental reconstruction sequentially")
     report = {}
     chrono = Chronometer()
     if not data.reference_lla_exists() and not data.config['use_provided_reference_lla']:
