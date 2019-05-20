@@ -46,8 +46,14 @@ class Command:
         colors = {}
         for im in data.images():
             p, f, c = data.load_features(im)
-            features[im] = p[:, :2]
-            colors[im] = c
+            if p is not None:
+                features[im] = p[:, :2]
+                colors[im] = c
+            else:
+                features[im] = []
+                colors[im] = []
+                
+
         return features, colors
 
     def load_matches(self, data):

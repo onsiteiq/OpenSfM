@@ -74,10 +74,13 @@ def mask_and_normalize_features(points, desc, colors, width, height, mask=None):
     """Remove features outside the mask and normalize image coordinates."""
 
     if mask is not None:
-        ids = np.array([_in_mask(point, width, height, mask) for point in points])
-        points = points[ids]
-        desc = desc[ids]
-        colors = colors[ids]
+
+        if len(points) > 0:
+
+            ids = np.array([_in_mask(point, width, height, mask) for point in points])
+            points = points[ids]
+            desc = desc[ids]
+            colors = colors[ids]
 
     points[:, :2] = normalized_image_coordinates(points[:, :2], width, height)
     return points, desc, colors

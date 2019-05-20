@@ -433,13 +433,16 @@ class DataSet:
         return os.path.isfile(self._feature_file(image))
 
     def load_features(self, image):
-        feature_type = self.config['feature_type']
-        s = np.load(self._feature_file(image))
-        if feature_type == 'HAHOG' and self.config['hahog_normalize_to_uchar']:
-            descriptors = s['descriptors'].astype(np.float32)
-        else:
-            descriptors = s['descriptors']
-        return s['points'], descriptors, s['colors'].astype(float)
+        try:
+            feature_type = self.config['feature_type']
+            s = np.load(self._feature_file(image))
+            if feature_type == 'HAHOG' and self.config['hahog_normalize_to_uchar']:
+                descriptors = s['descriptors'].astype(np.float32)
+            else:
+                descriptors = s['descriptors']
+            return s['points'], descriptors, s['colors'].astype(float)
+        except FileNotFoundError:
+            return None, None, None
 
     def save_features(self, image, points, descriptors, colors):
         self._save_features(self._feature_file(image), image, points, descriptors, colors)

@@ -296,6 +296,10 @@ def match(args):
         p1, f1, c1 = ctx.data.load_features(im1)
         p2, f2, c2 = ctx.data.load_features(im2)
 
+        if p1 is None or p2 is None:
+            im1_matches[im2] = []
+            continue
+
         if config['matcher_type'] == 'FLANN':
             i1 = ctx.data.load_feature_index(im1, f1)
             i2 = ctx.data.load_feature_index(im2, f2)

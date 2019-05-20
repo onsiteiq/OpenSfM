@@ -111,10 +111,10 @@ def detect(args):
 
         if image_camera_model.projection_type in ['equirectangular', 'spherical'] and data.config['matching_unfolded_cube']:
             
-            logger.info('Matching unfolded cube.')
+            logger.info('Features unfolded cube.')
 
             # For spherical cameras create an undistorted image for the purposes of
-            # feature finding (and later matching). 
+            # feature finding (and later matching).
             
             max_size = data.config.get('feature_process_size', -1)
             if max_size == -1:
@@ -201,7 +201,8 @@ def detect(args):
 
             # --------------------------------------------------------------
             
-            p_unsorted[:, :2] = unfolded_cube_to_equi_normalized_image_coordinates( p_unsorted[:, :2], image_camera_model )
+            if len(p_unsorted) > 0:
+                p_unsorted[:, :2] = unfolded_cube_to_equi_normalized_image_coordinates( p_unsorted[:, :2], image_camera_model )
             
             # Visualize the same features converted back to equirectangular image coordinates
             # -----------------------------------------------------------------------------------------
