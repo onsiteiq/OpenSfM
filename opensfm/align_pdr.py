@@ -85,6 +85,8 @@ def align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict):
     if len(pdr_shots) < 2:
         return
 
+    reconstruction.alignment.aligned_to_pdr = True
+
     two_shots = pdr_shots
     if len(pdr_shots) > 2:
         two_shots = get_farthest_two_shots(pdr_shots)
@@ -309,11 +311,13 @@ def align_pdr_local(sfm_points_dict, pdr_shots_dict, scale_factor, num_history=3
 
     direction_stddev = np.std(np.array(sfm_directions))
 
-    if np.degrees(direction_stddev) > 15.0:
+    updates = None
+
+    if np.degrees(direction_stddev) > 90.0:
         # if directions differ by a lot, we use affine alignment
         updates = align_pdr_local_affine(sfm_points_dict, pdr_shots_dict, scale_factor,
                                          num_history, num_predictions)
-    else:
+    if not updates:
         # if we are walking on roughly a straight line, then just extrapolate
         ref_coord = sfm_coords[-1]
         ref_dir = np.mean(np.array(sfm_directions))
@@ -325,7 +329,7 @@ def align_pdr_local(sfm_points_dict, pdr_shots_dict, scale_factor, num_history=3
         for i in range(start_idx, end_idx):
             shot_id = _int_to_shot_id(i)
             pdr_info = pdr_shots_dict[shot_id]
-            delta_heading_distance_dict[shot_id] = (pdr_info[3], pdr_info[4])
+            delta_heading_distance_dict[shot_id] = (pdr_info[3], pdr_info[4] / (scale_factor * 0.3048))
 
         updates = align_pdr_local_extrapolate(ref_coord, ref_dir, delta_heading_distance_dict)
 
@@ -348,7 +352,7 @@ def align_pdr_local_extrapolate(ref_coord, ref_dir, delta_heading_distance_dict)
     last_coord = ref_coord
 
     for shot_id in sorted(delta_heading_distance_dict.keys()):
-        curr_dir = last_dir + delta_heading_distance_dict[shot_id][0]
+        curr_dir = last_dir + np.radians(delta_heading_distance_dict[shot_id][0])
         x = last_coord[0] + delta_heading_distance_dict[shot_id][1]*np.cos(curr_dir)
         y = last_coord[1] + delta_heading_distance_dict[shot_id][1]*np.sin(curr_dir)
         z = last_coord[2]
