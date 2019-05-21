@@ -295,7 +295,7 @@ def align_pdr_local(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor, num_
         prev_2_coords = sfm_points_dict[prev_2_shot_id]
 
         ref_coord = prev_1_coords
-        ref_dir = np.arctan2(prev_2_coords[1] - prev_1_coords[1], prev_2_coords[0] - prev_1_coords[0])
+        ref_dir = np.arctan2(prev_1_coords[1] - prev_2_coords[1], prev_1_coords[0] - prev_2_coords[0])
 
         start_idx = _shot_id_to_int(shot_id)
         end_idx = min(len(pdr_shots_dict)-1, start_idx + num_predictions)
@@ -333,7 +333,7 @@ def align_pdr_local_extrapolate(ref_coord, ref_dir, delta_heading_distance_dict)
         y = last_coord[1] + delta_heading_distance_dict[shot_id][1]*np.sin(curr_dir)
         z = last_coord[2]
         curr_coord = [x, y, z]
-        updates[shot_id] = [x, y, z, 100]
+        updates[shot_id] = [x, y, z, 50]
 
         last_dir = curr_dir
         last_coord = curr_coord
