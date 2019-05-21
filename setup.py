@@ -18,21 +18,22 @@ def mkdir_p(path):
             raise
 
 
-print("Configuring...")
+python_version = '{}.{}'.format(sys.version_info.major, sys.version_info.minor)
+
+print("Configuring for python {}...".format(python_version))
+
 mkdir_p('cmake_build')
-cmake_command = ['cmake', '../opensfm/src']
-if sys.version_info >= (3, 0):
-    cmake_command.extend([
-        '-DBUILD_FOR_PYTHON3=ON',
-        '-DBOOST_PYTHON3_COMPONENT=python-py{}{}'.format(
-            sys.version_info.major,
-            sys.version_info.minor)])
+cmake_command = [
+    'cmake',
+    '../opensfm/src',
+    '-DPYBIND11_PYTHON_VERSION=' + python_version,
+]
 subprocess.Popen(cmake_command, cwd='cmake_build').wait()
 
 print("Compiling extension...")
 subprocess.Popen(['make', '-j4'], cwd='cmake_build').wait()
 
-print("Building package")
+print("Building package...")
 setup(
     name='OpenSfM',
     version='0.1',
@@ -43,6 +44,6 @@ setup(
     packages=['opensfm', 'opensfm.commands', 'opensfm.large'],
     scripts=['bin/opensfm_run_all', 'bin/opensfm'],
     package_data={
-        'opensfm': ['csfm.so', 'data/sensor_data.json']
+        'opensfm': ['csfm.*', 'data/sensor_data.json']
     },
 )

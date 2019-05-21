@@ -36,6 +36,10 @@ class DataSet:
     def __init__(self, data_path):
         """Init dataset associated to a folder."""
         self.data_path = data_path
+        self.gps_points_dict = {}
+        self.pdr_shots_dict = {}
+        self.topocentric_gps_points_dict = {}
+        self.pdr_predictions_dict = {}
         self._load_config()
         self._load_image_list()
         self._load_mask_list()
@@ -694,10 +698,50 @@ class DataSet:
     
     def load_gps_points(self):
         """Load explicit points as opposed to GPS derived from EXIF metadata"""
-        
-        with open(self._gps_points_file()) as fin:
-            return io.read_gps_points_list( fin )    
-    
+
+        if not self.gps_points_dict:
+            with open(self._gps_points_file()) as fin:
+                self.gps_points_dict = io.read_gps_points_list(fin)
+
+        return self.gps_points_dict
+
+    def load_topocentric_gps_points(self):
+        return self.topocentric_gps_points_dict
+
+    def save_topocentric_gps_points(self, topocentric_gps_points_dict):
+        """save a local copy of topocentric gps points"""
+        self.topocentric_gps_points_dict = topocentric_gps_points_dict
+
+    def _pdr_shots_file(self):
+        return os.path.join(self.data_path, 'pdr_shots.txt')
+
+    def pdr_shots_exist(self):
+        return os.path.isfile(self._pdr_shots_file())
+
+    def load_pdr_shots(self):
+        """
+        Load PDR shots
+
+        Note we flipped y and delta heading below because the coordinate system of imu output and
+        of gps/sfm are different. When we do alignment with gps points or sfm output, if we do it
+        3 points at a time, this isn't a problem, but if we do 2 points at a time it is.
+        """
+
+        if not self.pdr_shots_dict:
+            with open(self._pdr_shots_file()) as fin:
+                for line in fin:
+                    (shot_id, x, y, z, delta_heading, delta_distance) = line.split()
+                    self.pdr_shots_dict[shot_id] = (float(x), -float(y), float(z), -float(delta_heading), float(delta_distance))
+
+        return self.pdr_shots_dict
+
+    def load_pdr_predictions(self):
+        return self.pdr_predictions_dict
+
+    def save_pdr_predictions(self, pdr_predictions_dict):
+        """save a copy of aligned pdr shots"""
+        self.pdr_predictions_dict = pdr_predictions_dict
+
     def _ground_control_points_file(self):
         return os.path.join(self.data_path, 'gcp_list.txt')
 

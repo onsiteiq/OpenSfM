@@ -11,6 +11,7 @@ from opensfm import io
 from opensfm import log
 from opensfm import matching
 from opensfm.context import parallel_map
+from opensfm.align_pdr import init_pdr_predictions
 
 
 logger = logging.getLogger(__name__)
@@ -210,12 +211,50 @@ def match_candidates_by_order(images, max_neighbors, data):
     return pairs
 
 
+def match_candidates_by_pdr(images, pdr_max_distance, data):
+    """Find candidate matching pairs by glocally aligned pdr input."""
+    if pdr_max_distance <= 0:
+        return set()
+
+    if data.gps_points_exist():
+        gps_points_dict = data.load_gps_points()
+    else:
+        return set()
+
+    reflla = data.load_reference_lla()
+
+    if data.pdr_shots_exist():
+        scale_factor = data.config['reconstruction_scale_factor']
+        max_distance_pixels = pdr_max_distance / scale_factor
+
+        pdr_shots_dict = data.load_pdr_shots()
+
+        # load pdr data and globally align with gps points
+        topocentric_gps_points_dict, pdr_predictions_dict = \
+            init_pdr_predictions(reflla, gps_points_dict, pdr_shots_dict, scale_factor)
+
+        pairs = set()
+        for (i, j) in combinations(images, 2):
+            if i in pdr_predictions_dict and j in pdr_predictions_dict:
+                pos_i = pdr_predictions_dict[i][:3]
+                pos_j = pdr_predictions_dict[j][:3]
+                distance = np.linalg.norm(np.array(pos_i) - np.array(pos_j))
+
+                if distance < max_distance_pixels:
+                    pairs.add(tuple(sorted((i, j))))
+
+        return pairs
+    else:
+        return set()
+
+
 def match_candidates_from_metadata(images, exifs, data):
     """Compute candidate matching pairs"""
     max_distance = data.config['matching_gps_distance']
     gps_neighbors = data.config['matching_gps_neighbors']
     time_neighbors = data.config['matching_time_neighbors']
     order_neighbors = data.config['matching_order_neighbors']
+    pdr_max_distance = data.config['matching_pdr_distance']
 
     if not data.reference_lla_exists():
         data.invent_reference_lla()
@@ -230,18 +269,22 @@ def match_candidates_from_metadata(images, exifs, data):
 
     images.sort()
 
-    if max_distance == gps_neighbors == time_neighbors == order_neighbors == 0:
+    logger.info('match_candidates_from_metadata: pdr_max_distance {}'.format(pdr_max_distance))
+    if max_distance == gps_neighbors == time_neighbors == order_neighbors == pdr_max_distance == 0:
         # All pair selection strategies deactivated so we match all pairs
         d = set()
         t = set()
         o = set()
+        p = set()
         pairs = combinations(images, 2)
     else:
         d = match_candidates_by_distance(images, exifs, reference,
                                          gps_neighbors, max_distance)
         t = match_candidates_by_time(images, exifs, time_neighbors)
         o = match_candidates_by_order(images, order_neighbors, data)
-        pairs = d | t | o
+        p = match_candidates_by_pdr(images, pdr_max_distance, data)
+        pairs = d | t | o | p
+        logger.info("num_pairs_pdr={}".format(len(p)))
 
     res = {im: [] for im in images}
     for im1, im2 in pairs:
@@ -250,7 +293,8 @@ def match_candidates_from_metadata(images, exifs, data):
     report = {
         "num_pairs_distance": len(d),
         "num_pairs_time": len(t),
-        "num_pairs_order": len(o)
+        "num_pairs_order": len(o),
+        "num_pairs_pdr": len(p)
     }
     return res, report
 

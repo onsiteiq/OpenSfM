@@ -86,7 +86,10 @@ class Command:
         if args.direct_align:
             report = reconstruction.direct_align_reconstruction( data )
         else:
-            report = reconstruction.incremental_reconstruction( data )
+            if data.pdr_shots_exist():
+                report = reconstruction.incremental_reconstruction_sequential( data )
+            else:
+                report = reconstruction.incremental_reconstruction( data )
         
         # If we are re-processing partial reconstructions only then merge the
         # new results with the original reconstruction. 
