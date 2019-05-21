@@ -334,11 +334,11 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, data):
             ba.add_position_prior(str(shot.id), g[0], g[1], g[2],
                                   shot.metadata.gps_dop)
 
-    if config['bundle_use_pdr']:
-        for shot_id in interior | boundary:
-            if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
-                p, stddev = get_pdr_position_prior(shot_id, reconstruction, data, False)
-                ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
+    #if config['bundle_use_pdr']:
+        #for shot_id in interior | boundary:
+            #if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
+                #p, stddev = get_pdr_position_prior(shot_id, reconstruction, data, False)
+                #ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
 
     if config['bundle_use_gcp'] and gcp:
         for observation in gcp:
