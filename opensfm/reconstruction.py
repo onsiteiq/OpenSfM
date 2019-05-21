@@ -20,10 +20,9 @@ from opensfm import matching
 from opensfm import multiview
 from opensfm import types
 from opensfm.align import align_reconstruction, align_reconstruction_segments, apply_similarity
-from opensfm.align_pdr import init_pdr_predictions, update_pdr_predictions, get_pdr_position_prior, \
-    align_reconstruction_to_pdr
+from opensfm.align_pdr import init_pdr_predictions, get_pdr_position_prior, align_reconstruction_to_pdr
 from opensfm.context import parallel_map, current_memory_usage
-from opensfm.debug_plot import debug_plot_pdr, debug_plot_reconstructions, debug_save_reconstruction, debug_print_origin
+from opensfm import transformations as tf
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +120,7 @@ def _next_shot_id(curr_shot_id):
     return _int_to_shot_id(_shot_id_to_int(curr_shot_id) + 1)
 
 
-def bundle(graph, reconstruction, gcp, pdr_predictions_dict, config):
+def bundle(graph, reconstruction, gcp, config):
     """Bundle adjust a reconstruction."""
     fix_cameras = not config['optimize_camera_parameters']
 
@@ -208,12 +207,12 @@ def bundle(graph, reconstruction, gcp, pdr_predictions_dict, config):
         'wall_times': dict(chrono.lap_times()),
         'brief_report': ba.brief_report(),
     }
-
     return report
 
 
-def bundle_single_view(graph, reconstruction, shot_id, pdr_predictions_dict, config):
+def bundle_single_view(graph, reconstruction, shot_id, data):
     """Bundle adjust a single camera."""
+    config = data.config
     ba = csfm.BundleAdjuster()
     shot = reconstruction.shots[shot_id]
     camera = shot.camera
@@ -243,7 +242,7 @@ def bundle_single_view(graph, reconstruction, shot_id, pdr_predictions_dict, con
                               shot.metadata.gps_dop)
 
     if config['bundle_use_pdr'] and shot.metadata.gps_dop == 999999.0:
-        p, stddev = get_pdr_position_prior(shot_id, pdr_predictions_dict)
+        p, stddev = get_pdr_position_prior(shot_id, reconstruction, data, True)
         ba.add_position_prior(str(shot.id), p[0], p[1], p[2], stddev)
 
         # debug
@@ -251,7 +250,7 @@ def bundle_single_view(graph, reconstruction, shot_id, pdr_predictions_dict, con
             prev_shot_id = _prev_shot_id(shot_id)
             if prev_shot_id in reconstruction.shots:
                 v = p - reconstruction.shots[prev_shot_id].pose.get_origin()
-                logger.debug("pdr prior for {} displacement {} {} {}".format(shot_id, v[0], v[1], v[2]))
+                logger.debug("pdr prior for {} displacement {} {} {}, dop={}".format(shot_id, v[0], v[1], v[2], stddev))
 
     ba.set_loss_function(config['loss_function'],
                          config['loss_function_threshold'])
@@ -277,9 +276,10 @@ def bundle_single_view(graph, reconstruction, shot_id, pdr_predictions_dict, con
     shot.pose.translation = [s.tx, s.ty, s.tz]
 
 
-def bundle_local(graph, reconstruction, gcp, pdr_predictions_dict, central_shot_id, config):
+def bundle_local(graph, reconstruction, gcp, central_shot_id, data):
     """Bundle adjust the local neighborhood of a shot."""
     chrono = Chronometer()
+    config = data.config
 
     interior, boundary = shot_neighborhood(
         graph, reconstruction, central_shot_id,
@@ -337,7 +337,7 @@ def bundle_local(graph, reconstruction, gcp, pdr_predictions_dict, central_shot_
     if config['bundle_use_pdr']:
         for shot_id in interior | boundary:
             if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
-                p, stddev = get_pdr_position_prior(shot_id, pdr_predictions_dict)
+                p, stddev = get_pdr_position_prior(shot_id, reconstruction, data, False)
                 ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
 
     if config['bundle_use_gcp'] and gcp:
@@ -507,7 +507,6 @@ def get_image_metadata(data, image):
         x, y, z = geo.topocentric_from_lla(
             lat, lon, alt,
             reflla['latitude'], reflla['longitude'], reflla['altitude'])
-
         metadata.gps_position = [x, y, z]
         metadata.gps_dop = exif['gps'].get('dop', 15.0)
     else:
@@ -765,10 +764,6 @@ def bootstrap_reconstruction(data, graph, im1, im2, p1, p2):
     shot2.metadata = get_image_metadata(data, im2)
     reconstruction.add_shot(shot2)
 
-    logger.info("bootstrap before bundle_single_view")
-    logger.info("shot 1 rot={}, trans={}, origin={}".format(shot1.pose.rotation, shot1.pose.translation, shot1.pose.get_origin()))
-    logger.info("shot 2 rot={}, trans={}, origin={}".format(shot2.pose.rotation, shot2.pose.translation, shot2.pose.get_origin()))
-
     triangulate_shot_features(graph, reconstruction, im1, data.config)
 
     logger.info("Triangulated: {}".format(len(reconstruction.points)))
@@ -779,17 +774,9 @@ def bootstrap_reconstruction(data, graph, im1, im2, p1, p2):
         logger.info(report['decision'])
         return None, report
 
-    pdr_predictions_dict = {}
-    if data.pdr_shots_exist():
-        pdr_predictions_dict = data.load_pdr_predictions()
-
-    bundle_single_view(graph, reconstruction, im2, pdr_predictions_dict, data.config)
+    bundle_single_view(graph, reconstruction, im2, data)
     retriangulate(graph, reconstruction, data.config)
-    bundle_single_view(graph, reconstruction, im2, pdr_predictions_dict, data.config)
-
-    logger.info("bootstrap after bundle_single_view")
-    logger.info("shot 1 rot={}, trans={}, origin={}".format(shot1.pose.rotation, shot1.pose.translation, shot1.pose.get_origin()))
-    logger.info("shot 2 rot={}, trans={}, origin={}".format(shot2.pose.rotation, shot2.pose.translation, shot2.pose.get_origin()))
+    bundle_single_view(graph, reconstruction, im2, data)
 
     report['decision'] = 'Success'
     report['memory_usage'] = current_memory_usage()
@@ -849,6 +836,8 @@ def resect(data, graph, reconstruction, shot_id):
     inliers = np.linalg.norm(reprojected_bs - bs, axis=1) < threshold
     ninliers = int(sum(inliers))
 
+    logger.info("{} resection inliers: {} / {}".format(
+        shot_id, ninliers, len(bs)))
     report = {
         'num_common_points': len(bs),
         'num_inliers': ninliers,
@@ -865,11 +854,7 @@ def resect(data, graph, reconstruction, shot_id):
         shot.metadata = get_image_metadata(data, shot_id)
         reconstruction.add_shot(shot)
 
-        pdr_predictions_dict = {}
-        if data.pdr_shots_exist():
-            pdr_predictions_dict = data.load_pdr_predictions()
-
-        bundle_single_view(graph, reconstruction, shot_id, pdr_predictions_dict, data.config)
+        bundle_single_view(graph, reconstruction, shot_id, data)
         return True, report
     else:
         return False, report
@@ -1197,16 +1182,12 @@ class ShouldRetriangulate:
         self.num_points_last = len(self.reconstruction.points)
 
 
-def grow_reconstruction(data, graph, reconstruction, images, gcp):
+def grow_reconstruction_sequential(data, graph, reconstruction, images, gcp):
     """Incrementally add shots to an initial reconstruction."""
     config = data.config
     report = {'steps': []}
 
-    pdr_predictions_dict = {}
-    if data.pdr_shots_exist():
-        pdr_predictions_dict = data.load_pdr_predictions()
-
-    bundle(graph, reconstruction, None, pdr_predictions_dict, config)
+    bundle(graph, reconstruction, None, config)
     remove_outliers(graph, reconstruction, config)
     align_reconstruction(reconstruction, gcp, config)
 
@@ -1238,13 +1219,13 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
             triangulate_shot_features(graph, reconstruction, image, config)
             np_after = len(reconstruction.points)
             step['triangulated_points'] = np_after - np_before
-            logger.info("grow_reconstruction: {} points in the reconstruction".format(np_after))
+            logger.info("grow_reconstruction_sequential: {} points in the reconstruction".format(np_after))
 
             if should_retriangulate.should():
                 logger.info("Re-triangulating")
-                b1rep = bundle(graph, reconstruction, None, pdr_predictions_dict, config)
+                b1rep = bundle(graph, reconstruction, None, config)
                 rrep = retriangulate(graph, reconstruction, config)
-                b2rep = bundle(graph, reconstruction, None, pdr_predictions_dict, config)
+                b2rep = bundle(graph, reconstruction, None, config)
                 remove_outliers(graph, reconstruction, config)
                 align_reconstruction(reconstruction, gcp, config)
                 step['bundle'] = b1rep
@@ -1254,24 +1235,20 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
                 should_bundle.done()
             elif should_bundle.should():
                 logger.info("Global bundle adjustment")
-                brep = bundle(graph, reconstruction, None, pdr_predictions_dict, config)
+                brep = bundle(graph, reconstruction, None, config)
                 remove_outliers(graph, reconstruction, config)
                 align_reconstruction(reconstruction, gcp, config)
                 step['bundle'] = brep
                 should_bundle.done()
             elif config['local_bundle_radius'] > 0:
-                brep = bundle_local(graph, reconstruction, None, pdr_predictions_dict, image, config)
+                brep = bundle_local(graph, reconstruction, None, image, data)
                 remove_outliers(graph, reconstruction, config)
                 step['local_bundle'] = brep
 
             if data.pdr_shots_exist():
                 if not reconstruction.alignment.aligned:
+                    pdr_predictions_dict = data.load_pdr_predictions()
                     align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict)
-                else:
-                    pdr_shots_dict = data.load_pdr_shots()
-                    updates = update_pdr_predictions(reconstruction, pdr_shots_dict, config['reconstruction_scale_factor'])
-                    pdr_predictions_dict.update(updates)
-                    data.save_pdr_predictions(pdr_predictions_dict)
 
             break
         else:
@@ -1286,13 +1263,159 @@ def grow_reconstruction(data, graph, reconstruction, images, gcp):
 
     logger.info("-------------------------------------------------------")
 
-    bundle(graph, reconstruction, gcp, pdr_predictions_dict, config)
+    bundle(graph, reconstruction, gcp, config)
     remove_outliers(graph, reconstruction, config)
-    #align_reconstruction(reconstruction, gcp, config)
     align_reconstruction_segments(reconstruction, gcp, config)
     paint_reconstruction(data, graph, reconstruction)
 
     return reconstruction, report
+
+
+def grow_reconstruction(data, graph, reconstruction, images, gcp):
+    """Incrementally add shots to an initial reconstruction."""
+    config = data.config
+    report = {'steps': []}
+
+    bundle(graph, reconstruction, None, config)
+    remove_outliers(graph, reconstruction, config)
+    align_reconstruction(reconstruction, gcp, config)
+
+    should_bundle = ShouldBundle(data, reconstruction)
+    should_retriangulate = ShouldRetriangulate(data, reconstruction)
+    while True:
+        if config['save_partial_reconstructions']:
+            paint_reconstruction(data, graph, reconstruction)
+            data.save_reconstruction(
+                [reconstruction], 'reconstruction.{}.json'.format(
+                    datetime.datetime.now().isoformat().replace(':', '_')))
+
+        candidates = reconstructed_points_for_images(graph, reconstruction, images)
+        if not candidates:
+            break
+
+        logger.info("-------------------------------------------------------")
+        for image, num_tracks in candidates:
+            ok, resrep = resect(data, graph, reconstruction, image)
+            if not ok:
+                continue
+
+            logger.info("Adding {0} to the reconstruction".format(image))
+            step = {
+                'image': image,
+                'resection': resrep,
+                'memory_usage': current_memory_usage()
+            }
+            report['steps'].append(step)
+            images.remove(image)
+
+            np_before = len(reconstruction.points)
+            triangulate_shot_features(graph, reconstruction, image, config)
+            np_after = len(reconstruction.points)
+            step['triangulated_points'] = np_after - np_before
+
+            if should_retriangulate.should():
+                logger.info("Re-triangulating")
+                b1rep = bundle(graph, reconstruction, None, config)
+                rrep = retriangulate(graph, reconstruction, config)
+                b2rep = bundle(graph, reconstruction, None, config)
+                remove_outliers(graph, reconstruction, config)
+                align_reconstruction(reconstruction, gcp, config)
+                step['bundle'] = b1rep
+                step['retriangulation'] = rrep
+                step['bundle_after_retriangulation'] = b2rep
+                should_retriangulate.done()
+                should_bundle.done()
+            elif should_bundle.should():
+                brep = bundle(graph, reconstruction, None, config)
+                remove_outliers(graph, reconstruction, config)
+                align_reconstruction(reconstruction, gcp, config)
+                step['bundle'] = brep
+                should_bundle.done()
+            elif config['local_bundle_radius'] > 0:
+                brep = bundle_local(graph, reconstruction, None, image, data)
+                remove_outliers(graph, reconstruction, config)
+                step['local_bundle'] = brep
+
+            break
+        else:
+            logger.info("Some images can not be added")
+            break
+
+        max_recon_size = config.get( 'reconstruction_max_images', -1 )
+        if max_recon_size != -1:
+            if len( reconstruction.shots ) >= max_recon_size:
+                break
+
+    logger.info("-------------------------------------------------------")
+
+    bundle(graph, reconstruction, gcp, config)
+    remove_outliers(graph, reconstruction, config)
+    align_reconstruction(reconstruction, gcp, config)
+    paint_reconstruction(data, graph, reconstruction)
+    return reconstruction, report
+
+
+def direct_align_reconstruction( data ):
+
+    target_images = data.config.get( 'target_images', [] )
+    
+    report = {}
+    report['reconstructions'] = []
+    rec_report = {}
+    report['reconstructions'].append(rec_report)
+    rec_report['subset'] = target_images
+    
+    gps_points_dict = {}
+    if data.gps_points_exist():
+        gps_points_dict = data.load_gps_points()
+    
+    cameras = data.load_camera_models()
+    
+    reconstruction = types.Reconstruction()
+    reconstruction.cameras = cameras
+    
+    for img in target_images:
+    
+        camera = cameras[data.load_exif(img)['camera']]
+        
+        shot = types.Shot()
+        shot.id = img
+        shot.camera = camera
+        shot.pose = types.Pose()
+        shot.metadata = get_image_metadata( data, img )
+        
+        if shot.metadata.compass is not None:
+
+            Rc = tf.rotation_matrix( np.deg2rad( -shot.metadata.compass ), [ 0, 1, 0 ] )[:3, :3]
+            
+            shot.pose.set_rotation_matrix( Rc )
+            
+            Rplane = multiview.plane_horizontalling_rotation( [ 0, 1, 0] )
+            
+            t_shot = np.array( shot.metadata.gps_position )
+            
+            R = shot.pose.get_rotation_matrix()
+            
+            Rp = R.dot( Rplane.T )
+            tp = -Rp.dot( t_shot )
+            
+            shot.pose.set_rotation_matrix(Rp)
+            shot.pose.translation = list(tp)
+            
+            reconstruction.add_shot( shot )
+
+        else:
+            logger.warning("Image doesn't have corresponding GPS with compass: {}".format( img ) )
+
+    reconstruction.alignment.aligned = True
+    reconstruction.alignment.num_correspondences = len( target_images )
+
+    reconstructions = []
+    reconstructions.append( reconstruction )
+                    
+    data.save_reconstruction( reconstructions )
+    
+    return report
 
 
 def incremental_reconstruction(data):
@@ -1306,13 +1429,13 @@ def incremental_reconstruction(data):
     graph = data.load_tracks_graph()
     tracks, images = matching.tracks_and_images(graph)
 
-    target_images = data.config.get('target_images', [])
-
+    target_images = data.config.get('target_images', [] )
+    
     if target_images:
         images = target_images
 
     chrono.lap('load_tracks_graph')
-
+    
     gcp = None
     if data.ground_control_points_exist():
         gcp = data.load_ground_control_points()
@@ -1336,16 +1459,16 @@ def incremental_reconstruction(data):
         gps_points_dict = data.load_gps_points()
         split_images = []
         for img in full_images:
-            split_images.append(img)
-            gps_info = gps_points_dict.get(img)
+            split_images.append( img )
+            gps_info = gps_points_dict.get( img )
             if gps_info is not None and gps_info[4]:
-                image_groups.append(split_images)
-                split_images = [img]
+                image_groups.append( split_images )
+                split_images = [ img ]
 
-        image_groups.append(split_images)
+        image_groups.append( split_images )
 
     else:
-        image_groups.append(full_images)
+        image_groups.append( full_images )
 
     for remaining_images in image_groups:
 
@@ -1459,7 +1582,7 @@ def incremental_reconstruction_sequential(data):
             if reconstruction:
                 remaining_images.remove(im1)
                 remaining_images.remove(im2)
-                reconstruction, rec_report['grow'] = grow_reconstruction(
+                reconstruction, rec_report['grow'] = grow_reconstruction_sequential(
                     data, graph, reconstruction, remaining_images, gcp)
                 reconstructions.append(reconstruction)
                 logger.info("{} images remaining".format(len(remaining_images)))
@@ -1470,13 +1593,6 @@ def incremental_reconstruction_sequential(data):
     if reconstructions:
         reconstructions = sorted(reconstructions, key=lambda x: -len(x.shots))
         data.save_reconstruction(reconstructions)
-
-        # debugging - plot reconstructions
-        debug_plot_reconstructions(reconstructions)
-
-        # debugging - plot updated pdr predictions
-        if data.pdr_shots_exist():
-            debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict)
 
         for k, r in enumerate(reconstructions):
             logger.info("Reconstruction {}: {} images, {} points".format(

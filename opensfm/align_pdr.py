@@ -41,36 +41,28 @@ def init_pdr_predictions(reflla, gps_points_dict, pdr_shots_dict, scale_factor):
     return topocentric_gps_points_dict, pdr_predictions_dict
 
 
-def update_pdr_predictions(reconstruction, pdr_shots_dict, scale_factor):
-    """
-    locally update pdr predictions based on sfm
+def get_pdr_position_prior(shot_id, reconstruction, data, do_update):
+    if data.pdr_shots_exist():
+        pdr_predictions_dict = data.load_pdr_predictions()
 
-    :param reconstruction:
-    :param pdr_predictions_dict:
-    :return:
-    """
-    if not reconstruction.alignment.aligned:
-        return {}
+        if do_update and reconstruction.alignment.aligned:
+            # get updated predictions
+            sfm_points_dict = {}
 
-    if len(reconstruction.shots) < 3:
-        return {}
+            for shot in reconstruction.shots.values():
+                sfm_points_dict[shot.id] = shot.pose.get_origin()
 
-    sfm_points_dict = {}
+            pdr_shots_dict = data.load_pdr_shots()
+            scale_factor = data.config['reconstruction_scale_factor']
 
-    for shot in reconstruction.shots.values():
-        sfm_points_dict[shot.id] = shot.pose.get_origin()
+            updates = align_pdr_local(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor)
 
-    # get updated predictions
-    updates = align_pdr_local(sfm_points_dict, pdr_shots_dict, scale_factor)
+            pdr_predictions_dict.update(updates)
+            data.save_pdr_predictions(pdr_predictions_dict)
 
-    return updates
-
-
-def get_pdr_position_prior(shot_id, pdr_predictions_dict):
-    if shot_id in pdr_predictions_dict:
         return pdr_predictions_dict[shot_id][:3], pdr_predictions_dict[shot_id][3]
-    else:
-        return [0, 0, 0], 999999.0
+
+    return [0, 0, 0], 999999.0
 
 
 def align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict):
@@ -79,7 +71,7 @@ def align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict):
     """
     pdr_shots = {}
     for shot in reconstruction.shots.values():
-        if shot.id in pdr_predictions_dict:
+        if pdr_predictions_dict and shot.id in pdr_predictions_dict:
             pdr_shots[shot.id] = pdr_predictions_dict[shot.id][:3]
 
     if len(pdr_shots) < 2:
@@ -283,46 +275,29 @@ def align_pdr_global(gps_points_dict, pdr_shots_dict, scale_factor, stride_len=3
     return pdr_predictions_dict
 
 
-def align_pdr_local(sfm_points_dict, pdr_shots_dict, scale_factor, num_history=3, num_predictions=3):
+def align_pdr_local(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor, num_predictions=3):
     """
     *locally* align pdr predictions to SfM output. the SfM points have been aligned with
     GPS points
 
+    :param shot_id: update pdr prediction for this shot
     :param sfm_points_dict: sfm point coordinates
     :param pdr_shots_dict: original predictions
     :param scale_factor: reconstruction_scale_factor - scale factor feet per pixel
-    :param num_history: number of sfm shots to use for the calculation
     :param num_predictions: number of shots beyond current last shot to align
     :return: updated pdr predictions for num_predictions shots
     """
-    if len(sfm_points_dict) < num_history:
-        return {}
+    prev_1_shot_id = _prev_shot_id(shot_id)
+    prev_2_shot_id = _prev_shot_id(prev_1_shot_id)
 
-    sfm_shot_ids = sorted(sfm_points_dict.keys())
+    if prev_1_shot_id in sfm_points_dict and prev_2_shot_id in sfm_points_dict:
+        prev_1_coords = sfm_points_dict[prev_1_shot_id]
+        prev_2_coords = sfm_points_dict[prev_2_shot_id]
 
-    sfm_coords = []
-    for shot_id in sfm_shot_ids[-num_history:]:
-        sfm_coords.append(sfm_points_dict[shot_id])
+        ref_coord = prev_1_coords
+        ref_dir = np.arctan2(prev_2_coords[1] - prev_1_coords[1], prev_2_coords[0] - prev_1_coords[0])
 
-    sfm_directions = []
-    for i in range(1, len(sfm_coords)):
-        direction = np.arctan2(sfm_coords[i][1] - sfm_coords[i-1][1], sfm_coords[i][0] - sfm_coords[i-1][0])
-        sfm_directions.append(direction)
-
-    direction_stddev = np.std(np.array(sfm_directions))
-
-    updates = None
-
-    if np.degrees(direction_stddev) > 90.0:
-        # if directions differ by a lot, we use affine alignment
-        updates = align_pdr_local_affine(sfm_points_dict, pdr_shots_dict, scale_factor,
-                                         num_history, num_predictions)
-    if not updates:
-        # if we are walking on roughly a straight line, then just extrapolate
-        ref_coord = sfm_coords[-1]
-        ref_dir = np.mean(np.array(sfm_directions))
-
-        start_idx = min(len(pdr_shots_dict)-1, _shot_id_to_int(sfm_shot_ids[-1]) + 1)
+        start_idx = _shot_id_to_int(shot_id)
         end_idx = min(len(pdr_shots_dict)-1, start_idx + num_predictions)
 
         delta_heading_distance_dict = {}
@@ -331,9 +306,10 @@ def align_pdr_local(sfm_points_dict, pdr_shots_dict, scale_factor, num_history=3
             pdr_info = pdr_shots_dict[shot_id]
             delta_heading_distance_dict[shot_id] = (pdr_info[3], pdr_info[4] / (scale_factor * 0.3048))
 
-        updates = align_pdr_local_extrapolate(ref_coord, ref_dir, delta_heading_distance_dict)
+        return align_pdr_local_extrapolate(ref_coord, ref_dir, delta_heading_distance_dict)
 
-    return updates
+    else:
+        return {}
 
 
 def align_pdr_local_extrapolate(ref_coord, ref_dir, delta_heading_distance_dict):
@@ -365,7 +341,7 @@ def align_pdr_local_extrapolate(ref_coord, ref_dir, delta_heading_distance_dict)
     return updates
 
 
-def align_pdr_local_affine(sfm_points_dict, pdr_shots_dict, scale_factor, num_history, num_predictions):
+def align_pdr_local_affine(sfm_points_dict, pdr_shots_dict, scale_factor, num_predictions):
     """
     estimating the affine transform between a set of SfM point coordinates and a set of
     original pdr predictions. Then affine transform the pdr predictions
@@ -386,7 +362,7 @@ def align_pdr_local_affine(sfm_points_dict, pdr_shots_dict, scale_factor, num_hi
     pdr_coords = []
 
     sfm_shot_ids = sorted(sfm_points_dict.keys())
-    for shot_id in sfm_shot_ids[-num_history:]:
+    for shot_id in sfm_shot_ids[-3:]:
         sfm_coords.append(sfm_points_dict[shot_id])
         pdr_coords.append(pdr_shots_dict[shot_id][0:3])
 
@@ -537,6 +513,20 @@ def _int_to_shot_id(shot_int):
     Returns: integer to shot id
     """
     return str(shot_int).zfill(10) + ".jpg"
+
+
+def _prev_shot_id(curr_shot_id):
+    """
+    Returns: previous shot id
+    """
+    return _int_to_shot_id(_shot_id_to_int(curr_shot_id) - 1)
+
+
+def _next_shot_id(curr_shot_id):
+    """
+    Returns: next shot id
+    """
+    return _int_to_shot_id(_shot_id_to_int(curr_shot_id) + 1)
 
 
 def _rotation_matrix_to_euler_angles(R):
