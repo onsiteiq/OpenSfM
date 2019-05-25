@@ -39,7 +39,7 @@ def init_pdr_predictions(data):
         x, y, z = geo.topocentric_from_lla(
             value[0], value[1], value[2],
             reflla['latitude'], reflla['longitude'], reflla['altitude'])
-        topocentric_gps_points_dict[key] = (x, y, z)
+        topocentric_gps_points_dict[key] = [x, y, z]
 
     pdr_predictions_dict = update_pdr_global(topocentric_gps_points_dict, pdr_shots_dict, scale_factor)
 
@@ -133,14 +133,14 @@ def align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict):
     for shot_id in reconstruction.shots:
         recon_predictions_dict[shot_id] = pdr_predictions_dict[shot_id]
 
-    # sort shots in the reconstruction by dop value
-    sorted_dop_keys = sorted(recon_predictions_dict, key=lambda k: recon_predictions_dict[k])
+    # sort shots in the reconstruction by distance value
+    sorted_by_distance_shot_ids = sorted(recon_predictions_dict, key=lambda k: recon_predictions_dict[k][1])
 
     ref_shots_dict = {}
-    for i in range(len(sorted_dop_keys)):
-        shot_id = sorted_dop_keys[i]
+    for i in range(len(sorted_by_distance_shot_ids)):
+        shot_id = sorted_by_distance_shot_ids[i]
 
-        if recon_predictions_dict[shot_id][1] < 5:
+        if recon_predictions_dict[shot_id][1] < 2:
             ref_shots_dict[shot_id] = recon_predictions_dict[shot_id][0]
         else:
             break
@@ -149,12 +149,12 @@ def align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict):
         transform_reconstruction(reconstruction, ref_shots_dict)
 
         # debug
-        #logger.debug("align_reconstructon_to_pdr: aligned to shots")
+        #logger.debug("align_reconstructon_to_pdr: align to shots")
         #for shot_id in ref_shots_dict:
-        #    logger.debug("{}".format(shot_id))
+            #logger.debug("{}, position={}".format(shot_id, ref_shots_dict[shot_id]))
+
         return True
     else:
-        #logger.debug("align_reconstructon_to_pdr: unable to align")
         return False
 
 
@@ -223,24 +223,24 @@ def pdr_walk_forward(aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, s
             pred_id = _int_to_shot_id(i+2)
             if pred_id not in aligned_sfm_points_dict:
                 if pred_id not in gps_points_dict:
-                    dop1 = dop2 = 0
+                    dist1 = dist2 = 0
                     if dist_1_id in aligned_sfm_points_dict:
                         dist_1_coords = aligned_sfm_points_dict[dist_1_id]
                     else:
-                        dist_1_coords, dop1 = walkthrough_dict[dist_1_id]
+                        dist_1_coords, dist1 = walkthrough_dict[dist_1_id]
 
                     if dist_2_id in aligned_sfm_points_dict:
                         dist_2_coords = aligned_sfm_points_dict[dist_2_id]
                     else:
-                        dist_2_coords, dop2 = walkthrough_dict[dist_2_id]
+                        dist_2_coords, dist2 = walkthrough_dict[dist_2_id]
 
                     pdr_info = pdr_shots_dict[pred_id]
                     delta_heading_distance = (pdr_info[3], pdr_info[4] / (scale_factor * 0.3048))
 
-                    dop = max(dop1, dop2) + 1
-                    walkthrough_dict[pred_id] = pdr_extrapolate(dist_1_coords, dist_2_coords, delta_heading_distance), dop
+                    dist = max(dist1, dist2) + 1
+                    walkthrough_dict[pred_id] = pdr_extrapolate(dist_1_coords, dist_2_coords, delta_heading_distance), dist
                 else:
-                    walkthrough_dict[pred_id] = list(gps_points_dict[pred_id]), 0
+                    walkthrough_dict[pred_id] = gps_points_dict[pred_id], 0
             else:
                 walkthrough_dict[pred_id] = aligned_sfm_points_dict[pred_id], 0
 
@@ -278,24 +278,24 @@ def pdr_walk_backward(aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, 
             pred_id = _int_to_shot_id(i-2)
             if pred_id not in aligned_sfm_points_dict:
                 if pred_id not in gps_points_dict:
-                    dop1 = dop2 = 0
+                    dist1 = dist2 = 0
                     if dist_1_id in aligned_sfm_points_dict:
                         dist_1_coords = aligned_sfm_points_dict[dist_1_id]
                     else:
-                        dist_1_coords, dop1 = walkthrough_dict[dist_1_id]
+                        dist_1_coords, dist1 = walkthrough_dict[dist_1_id]
 
                     if dist_2_id in aligned_sfm_points_dict:
                         dist_2_coords = aligned_sfm_points_dict[dist_2_id]
                     else:
-                        dist_2_coords, dop2 = walkthrough_dict[dist_2_id]
+                        dist_2_coords, dist2 = walkthrough_dict[dist_2_id]
 
                     pdr_info = pdr_shots_dict[pred_id]
                     delta_heading_distance = (-pdr_info[3], pdr_info[4] / (scale_factor * 0.3048))
 
-                    dop = max(dop1, dop2) + 1
-                    walkthrough_dict[pred_id] = pdr_extrapolate(dist_1_coords, dist_2_coords, delta_heading_distance), dop
+                    dist = max(dist1, dist2) + 1
+                    walkthrough_dict[pred_id] = pdr_extrapolate(dist_1_coords, dist_2_coords, delta_heading_distance), dist
                 else:
-                    walkthrough_dict[pred_id] = list(gps_points_dict[pred_id]), 0
+                    walkthrough_dict[pred_id] = gps_points_dict[pred_id], 0
             else:
                 walkthrough_dict[pred_id] = aligned_sfm_points_dict[pred_id], 0
 
@@ -308,10 +308,10 @@ def pdr_walkthrough(aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, sc
 
     final_dict = {}
     for shot_id in pdr_shots_dict:
-        f_dop = f_dict[shot_id][1]
-        b_dop = b_dict[shot_id][1]
+        f_dist = f_dict[shot_id][1]
+        b_dist = b_dict[shot_id][1]
 
-        if f_dop < b_dop:
+        if f_dist < b_dist:
             final_dict[shot_id] = f_dict[shot_id]
         else:
             final_dict[shot_id] = b_dict[shot_id]

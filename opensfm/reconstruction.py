@@ -1618,8 +1618,8 @@ def incremental_reconstruction_sequential(data):
         data.save_reconstruction(reconstructions)
 
         for k, r in enumerate(reconstructions):
-            logger.info("Reconstruction {}: {} images, {} points".format(
-                k, len(r.shots), len(r.points)))
+            logger.info("Reconstruction {}: {} images, {} points, aligned = {}, num_corrs = {},".format(
+                k, len(r.shots), len(r.points), r.alignment.aligned, r.alignment.num_correspondences))
 
         logger.info("{} partial reconstructions in total.".format(len(reconstructions)))
 
