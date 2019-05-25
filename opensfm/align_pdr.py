@@ -155,6 +155,7 @@ def align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict):
 
         return True
     else:
+        reposition_reconstruction(reconstruction, recon_predictions_dict)
         return False
 
 
@@ -392,6 +393,17 @@ def transform_reconstruction(reconstruction, ref_shots_dict):
            shot.pose.translation = list(tp)
         except:
             logger.debug("unable to transform reconstruction!")
+
+
+def reposition_reconstruction(reconstruction, recon_predictions_dict):
+    """
+    reposition reconstruction to pdr positions
+    :param reconstruction:
+    :param recon_predictions_dict:
+    :return:
+    """
+    for shot_id in reconstruction.shots:
+        reconstruction.shots[shot_id].pose.set_origin(recon_predictions_dict[shot_id][0])
 
 
 def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor):
