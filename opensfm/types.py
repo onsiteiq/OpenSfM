@@ -818,7 +818,7 @@ class AlignmentInfo(object):
     def __init__(self):
         """Defaut constructor"""
         self.aligned = False
-        self.aligned_to_pdr = False
+        self.scaled = False
         self.num_correspondences = 0
 
 class Reconstruction(object):
