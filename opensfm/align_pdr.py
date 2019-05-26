@@ -809,8 +809,8 @@ def _next_shot_id(curr_shot_id):
 
 def _rotation_matrix_to_euler_angles(R):
     """
-    # The result is the same as MATLAB except the order
-    # of the euler angles ( x and z are swapped ).
+    The result is the same as MATLAB except the order of the euler angles ( x and z are swapped ).
+    https://www.learnopencv.com/rotation-matrix-to-euler-angles/
     """
     sy = math.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0])
 
