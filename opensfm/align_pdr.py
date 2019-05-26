@@ -224,22 +224,25 @@ def pdr_walk_forward(aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, s
             pred_id = _int_to_shot_id(i+2)
             if pred_id not in aligned_sfm_points_dict:
                 if pred_id not in gps_points_dict:
-                    dist1 = dist2 = 0
+                    trust1 = trust2 = 0
                     if dist_1_id in aligned_sfm_points_dict:
                         dist_1_coords = aligned_sfm_points_dict[dist_1_id]
                     else:
-                        dist_1_coords, dist1 = walkthrough_dict[dist_1_id]
+                        dist_1_coords, trust1 = walkthrough_dict[dist_1_id]
 
                     if dist_2_id in aligned_sfm_points_dict:
                         dist_2_coords = aligned_sfm_points_dict[dist_2_id]
                     else:
-                        dist_2_coords, dist2 = walkthrough_dict[dist_2_id]
+                        dist_2_coords, trust2 = walkthrough_dict[dist_2_id]
 
+                    pdr_info_dist1 = pdr_shots_dict[dist_1_id]
                     pdr_info = pdr_shots_dict[pred_id]
-                    delta_heading_distance = (pdr_info[3], pdr_info[4] / (scale_factor * 0.3048))
 
-                    dist = max(dist1, dist2) + 1
-                    walkthrough_dict[pred_id] = pdr_extrapolate(dist_1_coords, dist_2_coords, delta_heading_distance), dist
+                    delta_heading = tf.delta_heading(np.radians(pdr_info_dist1[3:6]), np.radians(pdr_info[3:6]))
+                    delta_distance = pdr_info[6] / (scale_factor * 0.3048)
+
+                    trust = max(trust1, trust2) + 1
+                    walkthrough_dict[pred_id] = pdr_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), trust
                 else:
                     walkthrough_dict[pred_id] = gps_points_dict[pred_id], 0
             else:
@@ -279,22 +282,26 @@ def pdr_walk_backward(aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, 
             pred_id = _int_to_shot_id(i-2)
             if pred_id not in aligned_sfm_points_dict:
                 if pred_id not in gps_points_dict:
-                    dist1 = dist2 = 0
+                    trust1 = trust2 = 0
                     if dist_1_id in aligned_sfm_points_dict:
                         dist_1_coords = aligned_sfm_points_dict[dist_1_id]
                     else:
-                        dist_1_coords, dist1 = walkthrough_dict[dist_1_id]
+                        dist_1_coords, trust1 = walkthrough_dict[dist_1_id]
 
                     if dist_2_id in aligned_sfm_points_dict:
                         dist_2_coords = aligned_sfm_points_dict[dist_2_id]
                     else:
-                        dist_2_coords, dist2 = walkthrough_dict[dist_2_id]
+                        dist_2_coords, trust2 = walkthrough_dict[dist_2_id]
 
+                    pdr_info_dist1 = pdr_shots_dict[dist_1_id]
                     pdr_info = pdr_shots_dict[pred_id]
-                    delta_heading_distance = (-pdr_info[3], pdr_info[4] / (scale_factor * 0.3048))
 
-                    dist = max(dist1, dist2) + 1
-                    walkthrough_dict[pred_id] = pdr_extrapolate(dist_1_coords, dist_2_coords, delta_heading_distance), dist
+                    delta_heading = tf.delta_heading(np.radians(pdr_info_dist1[3:6]), np.radians(pdr_info[3:6]))
+                    delta_distance = pdr_info[6] / (scale_factor * 0.3048)
+
+
+                    trust = max(trust1, trust2) + 1
+                    walkthrough_dict[pred_id] = pdr_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), trust
                 else:
                     walkthrough_dict[pred_id] = gps_points_dict[pred_id], 0
             else:
@@ -320,21 +327,22 @@ def pdr_walkthrough(aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, sc
     return final_dict
 
 
-def pdr_extrapolate(dist_1_coords, dist_2_coords, delta_heading_distance):
+def pdr_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance):
     """
     update pdr predictions based on extrapolating last SfM position and direction
 
     :param dist_1_coords: sfm point immediately preceding or following (distance = 1)
     :param dist_2_coords: sfm point next to dist_1_coords (distance = 2)
-    :param delta_heading_distance: delta heading and distance
+    :param delta_heading: delta heading
+    :param delta_distance: delta distance
     :return: updated pdr prediction
     """
     ref_coord = dist_1_coords
     ref_dir = np.arctan2(dist_1_coords[1] - dist_2_coords[1], dist_1_coords[0] - dist_2_coords[0])
 
-    curr_dir = ref_dir + np.radians(delta_heading_distance[0])
-    x = ref_coord[0] + delta_heading_distance[1]*np.cos(curr_dir)
-    y = ref_coord[1] + delta_heading_distance[1]*np.sin(curr_dir)
+    curr_dir = ref_dir + delta_heading
+    x = ref_coord[0] + delta_distance*np.cos(curr_dir)
+    y = ref_coord[1] + delta_distance*np.sin(curr_dir)
     z = ref_coord[2]
 
     return [x, y, z]
@@ -576,15 +584,23 @@ def update_pdr_local(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor):
     if prev1 == sorted_sfm_shot_ids[0] and prev2 == sorted_sfm_shot_ids[1]:
         dist_1_coords = sfm_points_dict[prev1]
         dist_2_coords = sfm_points_dict[prev2]
+
+        pdr_info_dist1 = pdr_shots_dict[prev1]
         pdr_info = pdr_shots_dict[shot_id]
-        delta_heading_distance = (pdr_info[3], pdr_info[4] / (scale_factor * 0.3048))
-        return pdr_extrapolate(dist_1_coords, dist_2_coords, delta_heading_distance), 50
+
+        delta_heading = tf.delta_heading(np.radians(pdr_info_dist1[3:6]), np.radians(pdr_info[3:6]))
+        delta_distance = pdr_info[6] / (scale_factor * 0.3048)
+        return pdr_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), 50
     elif next1 == sorted_sfm_shot_ids[0] and next2 == sorted_sfm_shot_ids[1]:
         dist_1_coords = sfm_points_dict[next1]
         dist_2_coords = sfm_points_dict[next2]
+
+        pdr_info_dist1 = pdr_shots_dict[next1]
         pdr_info = pdr_shots_dict[shot_id]
-        delta_heading_distance = (-pdr_info[3], pdr_info[4] / (scale_factor * 0.3048))
-        return pdr_extrapolate(dist_1_coords, dist_2_coords, delta_heading_distance), 50
+
+        delta_heading = tf.delta_heading(np.radians(pdr_info_dist1[3:6]), np.radians(pdr_info[3:6]))
+        delta_distance = pdr_info[6] / (scale_factor * 0.3048)
+        return pdr_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), 50
     else:
         # we cannot find 2 consecutive shots to extrapolate, so use 3 shots to estimate affine
         return update_pdr_local_affine(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor, sorted_sfm_shot_ids)
@@ -647,7 +663,7 @@ def update_pdr_local_affine(shot_id, sfm_points_dict, pdr_shots_dict, scale_fact
 def apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id, s, A, b, deviation, gps_shot_ids=[]):
     """Apply a similarity (y = s A x + b) to a reconstruction.
 
-    :param pdr_shots_dict: all pdr predictions
+    :param pdr_shots_dict: all original pdr predictions
     :param start_shot_id: start shot id to perform transform
     :param end_shot_id: end shot id to perform transform
     :param s: The scale (a scalar)
@@ -655,7 +671,7 @@ def apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id, s, A, b, 
     :param b: The translation vector (3)
     :param gps_shot_ids: gps shot ids the affine transform is based on
     :param deviation: a measure of how closely pdr predictions match gps points
-    :return: pdr shots between start and end shot id transformed
+    :return: pdr shots between start and end shot id transformed by s, A, b
     """
     new_dict = {}
 

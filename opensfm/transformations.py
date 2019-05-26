@@ -1498,6 +1498,20 @@ def random_rotation_matrix(rand=None):
     return quaternion_matrix(random_quaternion(rand))
 
 
+def delta_heading(e1, e2, axes='sxyz'):
+    """
+    return delta heading 2 minus 1
+
+    the euler angles are in heading pitch roll order
+    """
+    q1 = quaternion_from_euler(e1[2], e1[1], e1[0], axes)
+    q2 = quaternion_from_euler(e2[2], e2[1], e2[0], axes)
+
+    qdiff = quaternion_multiply(q2, quaternion_conjugate(q1))
+    diffx, diffy, diffz = euler_from_quaternion(qdiff, axes)
+    return diffz
+
+
 class Arcball(object):
     """Virtual Trackball Control.
 
