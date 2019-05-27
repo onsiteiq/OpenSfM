@@ -20,8 +20,8 @@ from opensfm import matching
 from opensfm import multiview
 from opensfm import types
 from opensfm.align import align_reconstruction, align_reconstruction_segments, apply_similarity
-from opensfm.align_pdr import init_pdr_predictions, update_pdr_prediction, \
-    scale_reconstruction_to_pdr, align_reconstructions_to_pdr
+from opensfm.align_pdr import init_pdr_predictions, update_pdr_prediction_position, update_pdr_prediction_rotation, \
+    scale_reconstruction_to_pdr, align_reconstructions_to_pdr, debug_rotation_prior
 from opensfm.context import parallel_map, current_memory_usage
 from opensfm import transformations as tf
 
@@ -243,7 +243,7 @@ def bundle_single_view(graph, reconstruction, shot_id, data):
                               shot.metadata.gps_dop)
 
     if config['bundle_use_pdr'] and shot.metadata.gps_dop == 999999.0:
-        p, stddev = update_pdr_prediction(shot_id, reconstruction, data)
+        p, stddev = update_pdr_prediction_position(shot_id, reconstruction, data)
         ba.add_position_prior(str(shot.id), p[0], p[1], p[2], stddev)
 
         # debug
@@ -338,7 +338,7 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, data):
     #if config['bundle_use_pdr']:
         #for shot_id in interior | boundary:
             #if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
-                #p, stddev = update_pdr_prediction(shot_id, reconstruction, data)
+                #p, stddev = update_pdr_prediction_position(shot_id, reconstruction, data)
                 #ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
 
     if config['bundle_use_gcp'] and gcp:
@@ -1631,6 +1631,8 @@ def incremental_reconstruction_sequential(data):
                 for shot_id in r.shots:
                     if abs(r.shots[shot_id].pose.get_origin()[2]) > uneven_images_thresh:
                         uneven_images.append(shot_id)
+
+                debug_rotation_prior(r, data)
 
         coverage = int(100 * num_aligned / len(full_images))
         logger.info("{} partial reconstructions in total. {}% images aligned".format(len(reconstructions), coverage))

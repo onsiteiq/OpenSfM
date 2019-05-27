@@ -52,7 +52,7 @@ def init_pdr_predictions(data):
     return pdr_predictions_dict
 
 
-def update_pdr_prediction(shot_id, reconstruction, data):
+def update_pdr_prediction_position(shot_id, reconstruction, data):
     if data.pdr_shots_exist():
         if reconstruction.alignment.aligned:
             # get updated predictions
@@ -72,6 +72,51 @@ def update_pdr_prediction(shot_id, reconstruction, data):
     return [0, 0, 0], 999999.0
 
 
+def update_pdr_prediction_rotation(shot_id, reconstruction, data):
+    """
+    get rotation prior of shot_id based on the closest shot in recon.
+    :param shot_id:
+    :param reconstruction:
+    :param data:
+    :return:
+    """
+    if data.pdr_shots_exist():
+        pdr_shots_dict = data.load_pdr_shots()
+
+        distances_dict = {}
+        for a_id in reconstruction.shots:
+            if a_id != shot_id:
+                distances_dict[a_id] = abs(_shot_id_to_int(shot_id) - _shot_id_to_int(a_id))
+
+        base_shot_id = min(distances_dict, key=distances_dict.get)
+        distance_to_base = distances_dict[base_shot_id]
+
+        base_pdr_info = pdr_shots_dict[base_shot_id]
+        pdr_info = pdr_shots_dict[shot_id]
+
+        qdiff = tf.quaternion_diff(np.radians(base_pdr_info[3:6]), np.radians(pdr_info[3:6]))
+        qr = tf.quaternion_from_matrix(reconstruction.shots[base_shot_id].pose.get_rotation_matrix())
+
+        #qnew = tf.quaternion_multiply(qdiff, qr)
+        qnew = tf.quaternion_multiply(qr, tf.quaternion_inverse(qdiff))
+        return tf.euler_from_quaternion(qnew), 0.01*distance_to_base
+
+    return [0, 0, 0], 999999.0
+
+
+def debug_rotation_prior(reconstruction, data):
+    for shot_id in reconstruction.shots:
+        rotation_prior, dop = update_pdr_prediction_rotation(shot_id, reconstruction, data)
+
+        rotation_sfm = tf.euler_from_quaternion(tf.quaternion_from_matrix(reconstruction.shots[shot_id].pose.get_rotation_matrix()))
+
+        deviation_x = (np.degrees(rotation_sfm[0] - rotation_prior[0]) + 360) % 360
+        deviation_y = (np.degrees(rotation_sfm[1] - rotation_prior[1]) + 360) % 360
+        deviation_z = (np.degrees(rotation_sfm[2] - rotation_prior[2]) + 360) % 360
+
+        logger.debug("{}, rotation prior deviation {}, {}, {}".format(shot_id, deviation_x, deviation_y, deviation_z))
+
+
 def scale_reconstruction_to_pdr(reconstruction, data):
     """
     scale the reconstruction to pdr predictions
@@ -82,14 +127,14 @@ def scale_reconstruction_to_pdr(reconstruction, data):
     reconstruction.alignment.scaled = True
     pdr_predictions_dict = data.load_pdr_predictions()
 
-    pdr_shots_dict = {}
+    ref_shots_dict = {}
     for shot in reconstruction.shots.values():
         if pdr_predictions_dict and shot.id in pdr_predictions_dict:
-            pdr_shots_dict[shot.id] = pdr_predictions_dict[shot.id][:3]
+            ref_shots_dict[shot.id] = pdr_predictions_dict[shot.id][:3]
 
-    two_ref_shots_dict = pdr_shots_dict
-    if len(pdr_shots_dict) > 2:
-        two_ref_shots_dict = get_farthest_shots(pdr_shots_dict)
+    two_ref_shots_dict = ref_shots_dict
+    if len(ref_shots_dict) > 2:
+        two_ref_shots_dict = get_farthest_shots(ref_shots_dict)
 
     transform_reconstruction(reconstruction, two_ref_shots_dict)
 
@@ -453,7 +498,7 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor):
 
         # debugging
         [x, y, z] = _rotation_matrix_to_euler_angles(A)
-        logger.info("rotation=%f, %f, %f", x, y, z)
+        logger.info("rotation=%f, %f, %f", np.degrees(x), np.degrees(y), np.degrees(z))
 
         if not ((0.50 * expected_scale) < s < (2.0 * expected_scale)):
             logger.info("s/expected_scale={}, discard".format(s/expected_scale))
@@ -649,7 +694,7 @@ def update_pdr_local_affine(shot_id, sfm_points_dict, pdr_shots_dict, scale_fact
 
     # if x/y rotation is not close to 0, then likely it's 'flipped' and no good
     [x, y, z] = _rotation_matrix_to_euler_angles(A)
-    if math.fabs(x) > 30.0 or math.fabs(y) > 30.0:
+    if math.fabs(x) > 1.0 or math.fabs(y) > 1.0:
         return [0, 0, 0], 999999
 
     update = apply_affine_transform(pdr_shots_dict, shot_id, shot_id,
@@ -841,5 +886,34 @@ def _rotation_matrix_to_euler_angles(R):
         y = math.atan2(-R[2, 0], sy)
         z = 0
 
-    return np.array(np.degrees([x, y, z]))
+    return np.array([x, y, z])
+
+
+def _euler_angles_to_rotation_matrix(theta):
+    """
+    Calculates 3x3 Rotation Matrix given euler angles.
+
+    theta[0] - x, theta[1] - y, theta[2] - z
+
+    theta must be tait bryan sxyz order
+    """
+    R_x = np.array([[1, 0, 0],
+                    [0, math.cos(theta[0]), -math.sin(theta[0])],
+                    [0, math.sin(theta[0]), math.cos(theta[0])]
+                    ])
+
+    R_y = np.array([[math.cos(theta[1]), 0, math.sin(theta[1])],
+                    [0, 1, 0],
+                    [-math.sin(theta[1]), 0, math.cos(theta[1])]
+                    ])
+
+    R_z = np.array([[math.cos(theta[2]), -math.sin(theta[2]), 0],
+                    [math.sin(theta[2]), math.cos(theta[2]), 0],
+                    [0, 0, 1]
+                    ])
+
+    R = np.dot(R_z, np.dot(R_y, R_x))
+
+    return R
+
 

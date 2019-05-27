@@ -726,9 +726,9 @@ class DataSet:
         if not self.pdr_shots_dict:
             with open(self._pdr_shots_file()) as fin:
                 for line in fin:
-                    (shot_id, x, y, z, heading, pitch, roll, delta_distance) = line.split()
+                    (shot_id, x, y, z, roll, pitch, heading, delta_distance) = line.split()
                     self.pdr_shots_dict[shot_id] = (float(x), float(y), float(z),
-                                                    float(heading), float(pitch), float(roll),
+                                                    float(roll), float(pitch), float(heading),
                                                     float(delta_distance))
 
         return self.pdr_shots_dict
