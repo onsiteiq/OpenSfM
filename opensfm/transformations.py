@@ -1499,16 +1499,14 @@ def random_rotation_matrix(rand=None):
 
 
 def quaternion_distance(quaternion1, quaternion0):
-    """Return a measure of distance between quaternions.
-    1 if 180 apart, 0 if same
-
+    """Return angle between two quaternions.
     """
     w0, x0, y0, z0 = quaternion0
     w1, x1, y1, z1 = quaternion1
 
     inner_product = w0*w1 + x0*x1 + y0*y1 + z0*z1
 
-    return 1 - inner_product**2
+    return math.acos(2*inner_product**2 - 1)
 
 
 def quaternion_diff(e1, e2):

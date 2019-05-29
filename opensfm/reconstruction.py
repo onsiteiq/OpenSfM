@@ -1624,8 +1624,7 @@ def incremental_reconstruction_sequential(data):
                     data, graph, reconstruction, remaining_images, gcp)
                 reconstructions.append(reconstruction)
 
-                #if reconstruction.alignment.aligned:
-                    #debug_rotation_prior(reconstruction, data)
+                debug_rotation_prior(reconstruction, data)
 
                 curr_idx = 0
                 logger.info("{} images remaining".format(len(remaining_images)))
