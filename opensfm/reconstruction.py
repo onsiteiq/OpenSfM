@@ -20,7 +20,8 @@ from opensfm import matching
 from opensfm import multiview
 from opensfm import types
 from opensfm.align import align_reconstruction, align_reconstruction_segments, apply_similarity
-from opensfm.align_pdr import init_pdr_predictions, get_pdr_position_prior, align_reconstruction_to_pdr
+from opensfm.align_pdr import init_pdr_predictions, update_pdr_prediction, \
+    scale_reconstruction_to_pdr, align_reconstructions_to_pdr
 from opensfm.context import parallel_map, current_memory_usage
 from opensfm import transformations as tf
 
@@ -242,7 +243,7 @@ def bundle_single_view(graph, reconstruction, shot_id, data):
                               shot.metadata.gps_dop)
 
     if config['bundle_use_pdr'] and shot.metadata.gps_dop == 999999.0:
-        p, stddev = get_pdr_position_prior(shot_id, reconstruction, data, True)
+        p, stddev = update_pdr_prediction(shot_id, reconstruction, data)
         ba.add_position_prior(str(shot.id), p[0], p[1], p[2], stddev)
 
         # debug
@@ -337,7 +338,7 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, data):
     #if config['bundle_use_pdr']:
         #for shot_id in interior | boundary:
             #if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
-                #p, stddev = get_pdr_position_prior(shot_id, reconstruction, data, False)
+                #p, stddev = update_pdr_prediction(shot_id, reconstruction, data)
                 #ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
 
     if config['bundle_use_gcp'] and gcp:
@@ -812,12 +813,14 @@ def resect(data, graph, reconstruction, shot_id):
 
     bs = []
     Xs = []
+    track_ids = []
     for track in graph[shot_id]:
         if track in reconstruction.points:
             x = graph[track][shot_id]['feature']
             b = camera.pixel_bearing(x)
             bs.append(b)
             Xs.append(reconstruction.points[track].coordinates)
+            track_ids.append(track)
     bs = np.array(bs)
     Xs = np.array(Xs)
     if len(bs) < 5:
@@ -836,13 +839,16 @@ def resect(data, graph, reconstruction, shot_id):
     inliers = np.linalg.norm(reprojected_bs - bs, axis=1) < threshold
     ninliers = int(sum(inliers))
 
-    logger.info("{} resection inliers: {} / {}".format(
-        shot_id, ninliers, len(bs)))
+    min_inliers = get_resection_min_inliers(data, graph, reconstruction, shot_id, track_ids, inliers, ninliers)
+
+    logger.info("{} resection inliers: {} / {}, threshod {}".format(
+        shot_id, ninliers, len(bs), min_inliers))
     report = {
         'num_common_points': len(bs),
         'num_inliers': ninliers,
     }
-    if ninliers >= data.config['resection_min_inliers']:
+
+    if ninliers >= min_inliers:
         R = T[:, :3].T
         t = -R.dot(T[:, 3])
         shot = types.Shot()
@@ -858,6 +864,26 @@ def resect(data, graph, reconstruction, shot_id):
         return True, report
     else:
         return False, report
+
+
+def get_resection_min_inliers(data, graph, reconstruction, shot_id, track_ids, inliers, ninliers):
+    """
+    if inliers are mostly not from direct neighbors (shot number +/- 5), use a higher min_inlier
+    threshold, to prevent spurious recon
+    """
+    ninliers_neighbors = 0
+    for i in range(len(track_ids)):
+        if inliers[i]:
+            for a_id in graph[track_ids[i]]:
+                if a_id in reconstruction.shots:
+                    if abs(_shot_id_to_int(shot_id) - _shot_id_to_int(a_id)) < 5:
+                        ninliers_neighbors += 1
+                        break
+
+    if ninliers_neighbors > ninliers/2:
+        return data.config['resection_min_inliers']
+    else:
+        return data.config['resection_min_inliers_conservative']
 
 
 class TrackTriangulator:
@@ -1245,10 +1271,8 @@ def grow_reconstruction_sequential(data, graph, reconstruction, images, gcp):
                 remove_outliers(graph, reconstruction, config)
                 step['local_bundle'] = brep
 
-            if data.pdr_shots_exist():
-                if not reconstruction.alignment.aligned:
-                    pdr_predictions_dict = data.load_pdr_predictions()
-                    align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict)
+            if not reconstruction.alignment.scaled:
+                scale_reconstruction_to_pdr(reconstruction, data)
 
             break
         else:
@@ -1537,9 +1561,8 @@ def incremental_reconstruction_sequential(data):
     full_images = list(set(images))
     full_images.sort()
 
-    # Breakup image sets along specified GPS locations
+    # Breakup image sets along specified GPS locations (no longer used, but kept code)
 
-    gps_points_dict = {}
     if data.gps_points_exist():
         gps_points_dict = data.load_gps_points()
         split_images = []
@@ -1555,22 +1578,17 @@ def incremental_reconstruction_sequential(data):
     else:
         image_groups.append( full_images )
 
-    reflla = data.load_reference_lla()
-    pdr_shots_dict = data.load_pdr_shots()
-
     # load pdr data and globally align with gps points
-    topocentric_gps_points_dict, pdr_predictions_dict = \
-        init_pdr_predictions(reflla, gps_points_dict, pdr_shots_dict, data.config['reconstruction_scale_factor'])
-    data.save_topocentric_gps_points(topocentric_gps_points_dict)
-    data.save_pdr_predictions(pdr_predictions_dict)
+    init_pdr_predictions(data)
 
     for remaining_images in image_groups:
-        while len(remaining_images) > 2:
-            im1 = remaining_images[0]
-            im2 = remaining_images[1]
+        curr_idx = 0
+        while curr_idx < len(remaining_images) - 1:
+            im1 = remaining_images[curr_idx]
+            im2 = remaining_images[curr_idx+1]
 
             if (im1, im2) not in common_tracks:
-                remaining_images.remove(im1)
+                curr_idx += 1
                 continue
 
             rec_report = {}
@@ -1585,20 +1603,43 @@ def incremental_reconstruction_sequential(data):
                 reconstruction, rec_report['grow'] = grow_reconstruction_sequential(
                     data, graph, reconstruction, remaining_images, gcp)
                 reconstructions.append(reconstruction)
+
+                curr_idx = 0
                 logger.info("{} images remaining".format(len(remaining_images)))
+                if len(remaining_images) < 2:
+                    break
             else:
                 # bootstrap didn't work, try the next pair
-                remaining_images.remove(im1)
+                curr_idx += 1
 
     if reconstructions:
+        if len(target_images) == 0:
+            # only tries pdr alignment when we are not subsetting
+            align_reconstructions_to_pdr(reconstructions, data)
+
         reconstructions = sorted(reconstructions, key=lambda x: -len(x.shots))
         data.save_reconstruction(reconstructions)
 
-        for k, r in enumerate(reconstructions):
-            logger.info("Reconstruction {}: {} images, {} points".format(
-                k, len(r.shots), len(r.points)))
+        uneven_images = []
+        uneven_images_thresh = 3 / data.config['reconstruction_scale_factor']
 
-        logger.info("{} partial reconstructions in total.".format(len(reconstructions)))
+        num_aligned = 0
+        for k, r in enumerate(reconstructions):
+            logger.info("Reconstruction {}: {} images, {} points, aligned = {}, num_corrs = {},".format(
+                k, len(r.shots), len(r.points), r.alignment.aligned, r.alignment.num_correspondences))
+
+            if r.alignment.aligned:
+                num_aligned += len(r.shots)
+
+                for shot_id in r.shots:
+                    if abs(r.shots[shot_id].pose.get_origin()[2]) > uneven_images_thresh:
+                        uneven_images.append(shot_id)
+
+        coverage = int(100 * num_aligned / len(full_images))
+        logger.info("{} partial reconstructions in total. {}% images aligned".format(len(reconstructions), coverage))
+
+        if len(uneven_images) > 0:
+            logger.info("{} images may not be level: {}".format(len(uneven_images), uneven_images))
 
     chrono.lap('compute_reconstructions')
     report['wall_times'] = dict(chrono.lap_times())

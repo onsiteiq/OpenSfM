@@ -216,22 +216,12 @@ def match_candidates_by_pdr(images, pdr_max_distance, data):
     if pdr_max_distance <= 0:
         return set()
 
-    if data.gps_points_exist():
-        gps_points_dict = data.load_gps_points()
-    else:
-        return set()
-
-    reflla = data.load_reference_lla()
-
     if data.pdr_shots_exist():
         scale_factor = data.config['reconstruction_scale_factor']
         max_distance_pixels = pdr_max_distance / scale_factor
 
-        pdr_shots_dict = data.load_pdr_shots()
-
         # load pdr data and globally align with gps points
-        topocentric_gps_points_dict, pdr_predictions_dict = \
-            init_pdr_predictions(reflla, gps_points_dict, pdr_shots_dict, scale_factor)
+        pdr_predictions_dict = init_pdr_predictions(data)
 
         pairs = set()
         for (i, j) in combinations(images, 2):
