@@ -1613,7 +1613,10 @@ def incremental_reconstruction_sequential(data):
                 curr_idx += 1
 
     if reconstructions:
-        align_reconstructions_to_pdr(reconstructions, data)
+        if len(target_images) == 0:
+            # only tries pdr alignment when we are not subsetting
+            align_reconstructions_to_pdr(reconstructions, data)
+
         reconstructions = sorted(reconstructions, key=lambda x: -len(x.shots))
         data.save_reconstruction(reconstructions)
 
