@@ -102,16 +102,13 @@ def update_pdr_prediction_rotation(shot_id, reconstruction, data):
         # TODO: put 0.1 in config
         tolerance = 0.1
 
-        #if not np.allclose(prediction_0, prediction_1, rtol=1, atol=tolerance):
-            #logger.debug("predict rotation for {} based on {}={}, {}={}, differ too much".format(shot_id, base_shot_id_0, prediction_0, base_shot_id_1, prediction_1))
-            #return [0, 0, 0], 999999.0
-
         q_0 = tf.quaternion_from_euler(prediction_0[0], prediction_0[1], prediction_0[2])
         q_1 = tf.quaternion_from_euler(prediction_1[0], prediction_1[1], prediction_1[2])
 
         if tf.quaternion_distance(q_0, q_1) > tolerance:
-            logger.debug("{}, rotation prior 0/1 distance is {} degrees".format(shot_id, np.degrees(tf.quaternion_distance(q_0, q_1))))
-            return [0, 0, 0], 999999.0
+            logger.debug("{}, rotation prior based on {} {} differ by {} degrees".
+                         format(shot_id, base_shot_id_0, base_shot_id_1, np.degrees(tf.quaternion_distance(q_0, q_1))))
+            return prediction_0, 999999.0
 
         distance_to_base = distances_dict[base_shot_id_0]
         return prediction_0, tolerance*distance_to_base
@@ -133,21 +130,7 @@ def get_rotation_prediction(shot_id, base_shot_id, reconstruction, data):
 def debug_rotation_prior(reconstruction, data):
     for shot_id in reconstruction.shots:
         rotation_prior, dop = update_pdr_prediction_rotation(shot_id, reconstruction, data)
-
         rotation_sfm = tf.euler_from_quaternion(tf.quaternion_from_matrix(reconstruction.shots[shot_id].pose.get_rotation_matrix()))
-
-        #deviation_x = (np.degrees(rotation_sfm[0] - rotation_prior[0]) + 360) % 360
-        #deviation_y = (np.degrees(rotation_sfm[1] - rotation_prior[1]) + 360) % 360
-        #deviation_z = (np.degrees(rotation_sfm[2] - rotation_prior[2]) + 360) % 360
-
-        #if deviation_x > 180:
-            #deviation_x -= 360
-        #if deviation_y > 180:
-            #deviation_y -= 360
-        #if deviation_z > 180:
-            #deviation_z -= 360
-
-        #logger.debug("{}, rotation prior deviation {}, {}, {}".format(shot_id, deviation_x, deviation_y, deviation_z))
 
         q_p = tf.quaternion_from_euler(rotation_prior[0], rotation_prior[1], rotation_prior[2])
         q_s = tf.quaternion_from_euler(rotation_sfm[0], rotation_sfm[1], rotation_sfm[2])

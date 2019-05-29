@@ -355,11 +355,14 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, data):
             ba.add_position_prior(str(shot.id), g[0], g[1], g[2],
                                   shot.metadata.gps_dop)
 
-    #if config['bundle_use_pdr']:
-        #for shot_id in interior | boundary:
-            #if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
-                #p, stddev = update_pdr_prediction_position(shot_id, reconstruction, data)
-                #ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
+    if config['bundle_use_pdr']:
+        for shot_id in interior | boundary:
+            if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
+                #p, stddev1 = update_pdr_prediction_position(shot_id, reconstruction, data)
+                #ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev1)
+
+                r, stddev2 = update_pdr_prediction_rotation(shot_id, reconstruction, data)
+                ba.add_rotation_prior(shot_id, r[0], r[1], r[2], stddev2)
 
     if config['bundle_use_gcp'] and gcp:
         for observation in gcp:
@@ -1635,7 +1638,10 @@ def incremental_reconstruction_sequential(data):
                 curr_idx += 1
 
     if reconstructions:
-        align_reconstructions_to_pdr(reconstructions, data)
+        if len(target_images) == 0:
+            # only tries pdr alignment when we are not subsetting
+            align_reconstructions_to_pdr(reconstructions, data)
+
         reconstructions = sorted(reconstructions, key=lambda x: -len(x.shots))
         data.save_reconstruction(reconstructions)
 
