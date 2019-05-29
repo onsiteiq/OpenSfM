@@ -54,20 +54,19 @@ def init_pdr_predictions(data):
 
 def update_pdr_prediction_position(shot_id, reconstruction, data):
     if data.pdr_shots_exist():
-        if reconstruction.alignment.aligned:
-            # get updated predictions
-            sfm_points_dict = {}
+        if len(reconstruction.shots) < 3:
+            return [0, 0, 0], 999999.0
 
-            for shot in reconstruction.shots.values():
-                sfm_points_dict[shot.id] = shot.pose.get_origin()
+        # get updated predictions
+        sfm_points_dict = {}
 
-            pdr_shots_dict = data.load_pdr_shots()
-            scale_factor = data.config['reconstruction_scale_factor']
+        for shot in reconstruction.shots.values():
+            sfm_points_dict[shot.id] = shot.pose.get_origin()
 
-            return update_pdr_local(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor)
-        else:
-            pdr_predictions_dict = data.load_pdr_predictions()
-            return pdr_predictions_dict[shot_id][:3], pdr_predictions_dict[shot_id][3]
+        pdr_shots_dict = data.load_pdr_shots()
+        scale_factor = data.config['reconstruction_scale_factor']
+
+        return update_pdr_local(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor)
 
     return [0, 0, 0], 999999.0
 
@@ -84,13 +83,8 @@ def update_pdr_prediction_rotation(shot_id, reconstruction, data):
         if len(reconstruction.shots) < 3:
             return [0, 0, 0], 999999.0
 
-        distances_dict = {}
-        for a_id in reconstruction.shots:
-            if a_id != shot_id:
-                distances_dict[a_id] = _shot_id_to_int(shot_id) - _shot_id_to_int(a_id)
-
-        # sort shot ids by absolute difference in sequence number
-        sorted_shot_ids = sorted(distances_dict, key=lambda k: abs(distances_dict[k]))
+        # get sorted shot ids that are closest to shot_id (in sequence number)
+        sorted_shot_ids = get_closest_shots(shot_id, reconstruction.shots.keys())
 
         base_shot_id_0 = sorted_shot_ids[0]
         base_shot_id_1 = sorted_shot_ids[1]
@@ -110,7 +104,7 @@ def update_pdr_prediction_rotation(shot_id, reconstruction, data):
                          format(shot_id, base_shot_id_0, base_shot_id_1, np.degrees(tf.quaternion_distance(q_0, q_1))))
             return prediction_0, 999999.0
 
-        distance_to_base = distances_dict[base_shot_id_0]
+        distance_to_base = abs(_shot_id_to_int(base_shot_id_0) - _shot_id_to_int(shot_id))
         return prediction_0, tolerance*distance_to_base
 
     return [0, 0, 0], 999999.0
@@ -222,37 +216,6 @@ def align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict):
     else:
         reposition_reconstruction(reconstruction, recon_predictions_dict)
         return False
-
-
-def align_reconstruction_to_pdr_unused(reconstruction,
-                                    aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, scale_factor):
-    """
-    align one partial reconstruction to 'best' pdr predictions (unused, kept code)
-    """
-    aligned_shot_ids = aligned_sfm_points_dict.keys()
-
-    distances_dict = {}
-    for shot in reconstruction.shots.values():
-        distances_dict[shot.id] = min_distance_to_aligned_shots(shot.id, aligned_shot_ids, gps_points_dict)
-
-    # sort by absolute value
-    sorted_distances_keys = sorted(distances_dict, key=lambda k: abs(distances_dict[k]))
-
-    ref_shots_dict = {}
-    for i in range(len(sorted_distances_keys)):
-        shot_id = sorted_distances_keys[i]
-        if shot_id in gps_points_dict:
-            ref_shots_dict[shot_id] = gps_points_dict[shot_id]
-        else:
-            p, stddev = update_pdr_local(shot_id, aligned_sfm_points_dict, pdr_shots_dict, scale_factor)
-            if stddev != 999999:
-                ref_shots_dict[shot_id] = p
-
-        if len(ref_shots_dict) == 2:
-            transform_reconstruction(reconstruction, ref_shots_dict)
-            return True
-
-    return False
 
 
 def pdr_walk_forward(aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, scale_factor):
@@ -657,42 +620,43 @@ def update_pdr_local(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor):
     :return: updated pdr prediction for shot_id
     """
     # get sorted shot ids that are closest to shot_id (in sequence number)
-    sorted_sfm_shot_ids = get_closest_shots(shot_id, sfm_points_dict.keys())
-    #logger.info("shot {} closest two shots in sfm = {} {}".format(shot_id, sorted_sfm_shot_ids[0], sorted_sfm_shot_ids[1]))
+    sorted_shot_ids = get_closest_shots(shot_id, sfm_points_dict.keys())
 
     prev1 = _prev_shot_id(shot_id)
     prev2 = _prev_shot_id(prev1)
     next1 = _next_shot_id(shot_id)
     next2 = _next_shot_id(next1)
 
-    if prev1 == sorted_sfm_shot_ids[0] and prev2 == sorted_sfm_shot_ids[1]:
-        dist_1_coords = sfm_points_dict[prev1]
-        dist_2_coords = sfm_points_dict[prev2]
+    if (prev1 == sorted_shot_ids[0] and prev2 == sorted_shot_ids[1]) or \
+       (next1 == sorted_shot_ids[0] and next2 == sorted_shot_ids[1]):
+        dist_1_id = sorted_shot_ids[0]
+        dist_2_id = sorted_shot_ids[1]
 
-        pdr_info_dist1 = pdr_shots_dict[prev1]
+        dist_1_coords = sfm_points_dict[dist_1_id]
+        dist_2_coords = sfm_points_dict[dist_2_id]
+
+        pdr_info_dist_1 = pdr_shots_dict[dist_1_id]
         pdr_info = pdr_shots_dict[shot_id]
 
-        delta_heading = tf.delta_heading(np.radians(pdr_info_dist1[3:6]), np.radians(pdr_info[3:6]))
-        delta_distance = pdr_info[6] / (scale_factor * 0.3048)
+        delta_heading = tf.delta_heading(np.radians(pdr_info_dist_1[3:6]), np.radians(pdr_info[3:6]))
+
+        # scale pdr delta distance according to sfm estimate for last step. we don't use
+        # pdr delta distance directly because stride length is not very accurate in tight
+        # spaces, which is often the case for us. also make sure we don't get wild values
+        # when pdr delta distance for last step is very small
+        if pdr_info_dist_1[6] > 1e-1:
+            delta_distance = pdr_info[6] / pdr_info_dist_1[6] * np.linalg.norm(dist_1_coords-dist_2_coords)
+        else:
+            delta_distance = pdr_info_dist_1[6]
+
         # TODO: put 100 in config
-        return position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), 100
-    elif next1 == sorted_sfm_shot_ids[0] and next2 == sorted_sfm_shot_ids[1]:
-        dist_1_coords = sfm_points_dict[next1]
-        dist_2_coords = sfm_points_dict[next2]
-
-        pdr_info_dist1 = pdr_shots_dict[next1]
-        pdr_info = pdr_shots_dict[shot_id]
-
-        delta_heading = tf.delta_heading(np.radians(pdr_info_dist1[3:6]), np.radians(pdr_info[3:6]))
-        delta_distance = pdr_info[6] / (scale_factor * 0.3048)
-        # TODO: put 50 in config
         return position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), 100
     else:
         # we cannot find 2 consecutive shots to extrapolate, so use 3 shots to estimate affine
-        return update_pdr_local_affine(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor, sorted_sfm_shot_ids)
+        return update_pdr_local_affine(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor, sorted_shot_ids)
 
 
-def update_pdr_local_affine(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor, sorted_sfm_shot_ids):
+def update_pdr_local_affine(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor, sorted_shot_ids):
     """
     estimating the affine transform between a set of SfM point coordinates and a set of
     original pdr predictions. Then affine transform the pdr predictions
@@ -701,10 +665,10 @@ def update_pdr_local_affine(shot_id, sfm_points_dict, pdr_shots_dict, scale_fact
     :param sfm_points_dict: sfm point coordinates
     :param pdr_shots_dict: original predictions
     :param scale_factor: reconstruction_scale_factor - scale factor feet per pixel
-    :param sorted_sfm_shot_ids: sfm_shot_ids sorted by their closeness to shot_id
+    :param sorted_shot_ids: sfm_shot_ids sorted by their closeness to shot_id
     :return: updated pdr predictions for shot_id
     """
-    if len(sorted_sfm_shot_ids) < 3:
+    if len(sorted_shot_ids) < 3:
         return [0, 0, 0], 999999
 
     # reconstruction_scale_factor is from oiq_config.yaml, and it's feet per pixel.
@@ -717,7 +681,7 @@ def update_pdr_local_affine(shot_id, sfm_points_dict, pdr_shots_dict, scale_fact
     pdr_coords = []
 
     for i in range(3):
-        a_id = sorted_sfm_shot_ids[i]
+        a_id = sorted_shot_ids[i]
         sfm_coords.append(sfm_points_dict[a_id])
         pdr_coords.append(pdr_shots_dict[a_id][0:3])
 
@@ -738,9 +702,7 @@ def update_pdr_local_affine(shot_id, sfm_points_dict, pdr_shots_dict, scale_fact
     if math.fabs(x) > 1.0 or math.fabs(y) > 1.0:
         return [0, 0, 0], 999999
 
-    update = apply_affine_transform(pdr_shots_dict, shot_id, shot_id,
-                                     s, A, b,
-                                     deviation)
+    update = apply_affine_transform(pdr_shots_dict, shot_id, shot_id, s, A, b, deviation)
 
     #logger.info("update_pdr_local_affine: shot_id {}, new prediction {}".format(shot_id, update[shot_id]))
     return update[shot_id][:3], update[shot_id][3]
