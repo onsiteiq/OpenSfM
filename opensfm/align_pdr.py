@@ -142,6 +142,10 @@ def debug_rotation_prior(reconstruction, data):
 
         logger.debug("{}, rotation prior deviation {}, {}, {}".format(shot_id, deviation_x, deviation_y, deviation_z))
 
+        q_p = tf.quaternion_from_euler(rotation_prior)
+        q_s = tf.quaternion_from_euler(rotation_sfm)
+        logger.debug("{}, rotation prior quaternion distance {}".format(shot_id, tf.quaternion_distance(q_p, q_s)))
+
 
 def scale_reconstruction_to_pdr(reconstruction, data):
     """

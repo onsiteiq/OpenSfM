@@ -1498,11 +1498,24 @@ def random_rotation_matrix(rand=None):
     return quaternion_matrix(random_quaternion(rand))
 
 
+def quaternion_distance(quaternion1, quaternion0):
+    """Return a measure of distance between quaternions.
+    1 if 180 apart, 0 if same
+
+    """
+    w0, x0, y0, z0 = quaternion0
+    w1, x1, y1, z1 = quaternion1
+
+    inner_product = w0*w1 + x0*x1 + y0*y1 + z0*z1
+
+    return 1 - inner_product**2
+
+
 def quaternion_diff(e1, e2):
     """
-    return diff of e1 and e2 that makes diff*1 = 2
+    return diff of e1 and e2 such that diff*1 = 2
 
-    the input euler angles are in heading pitch roll order
+    the input euler angles are in roll/pitch/heading order
     """
     q1 = quaternion_from_euler(e1[0], e1[1], e1[2], axes='sxyz')
     q2 = quaternion_from_euler(e2[0], e2[1], e2[2], axes='sxyz')
