@@ -74,34 +74,53 @@ def update_pdr_prediction_position(shot_id, reconstruction, data):
 
 def update_pdr_prediction_rotation(shot_id, reconstruction, data):
     """
-    get rotation prior of shot_id based on the closest shot in recon.
+    get rotation prior of shot_id based on the closest shots in recon.
     :param shot_id:
     :param reconstruction:
     :param data:
     :return:
     """
     if data.pdr_shots_exist():
-        pdr_shots_dict = data.load_pdr_shots()
+        if len(reconstruction.shots) < 3:
+            return [0, 0, 0], 999999.0
 
         distances_dict = {}
         for a_id in reconstruction.shots:
             if a_id != shot_id:
-                distances_dict[a_id] = abs(_shot_id_to_int(shot_id) - _shot_id_to_int(a_id))
+                distances_dict[a_id] = _shot_id_to_int(shot_id) - _shot_id_to_int(a_id)
 
-        base_shot_id = min(distances_dict, key=distances_dict.get)
-        distance_to_base = distances_dict[base_shot_id]
+        # sort shot ids by absolute difference in sequence number
+        sorted_shot_ids = sorted(distances_dict, key=lambda k: abs(distances_dict[k]))
 
-        base_pdr_info = pdr_shots_dict[base_shot_id]
-        pdr_info = pdr_shots_dict[shot_id]
+        base_shot_id_0 = sorted_shot_ids[0]
+        base_shot_id_1 = sorted_shot_ids[1]
 
-        qdiff = tf.quaternion_diff(np.radians(base_pdr_info[3:6]), np.radians(pdr_info[3:6]))
-        qr = tf.quaternion_from_matrix(reconstruction.shots[base_shot_id].pose.get_rotation_matrix())
+        prediction_0 = get_rotation_prediction(shot_id, base_shot_id_0, reconstruction, data)
+        prediction_1 = get_rotation_prediction(shot_id, base_shot_id_1, reconstruction, data)
 
-        #qnew = tf.quaternion_multiply(qdiff, qr)
-        qnew = tf.quaternion_multiply(qr, tf.quaternion_inverse(qdiff))
-        return tf.euler_from_quaternion(qnew), 0.01*distance_to_base
+        # 0.01 radians is roughly 0.6 degrees
+        # TODO: put 0.01 in config
+        tolerance = 0.01
+
+        if not np.allclose(prediction_0, prediction_1, rtol=1, atol=tolerance):
+            logger.debug("predict rotation for {} based on {}={}, {}={}, differ too much".format(shot_id, base_shot_id_0, prediction_0, base_shot_id_1, prediction_1))
+            return [0, 0, 0], 999999.0
+
+        distance_to_base = distances_dict[base_shot_id_0]
+        return prediction_0, 5*tolerance*distance_to_base
 
     return [0, 0, 0], 999999.0
+
+
+def get_rotation_prediction(shot_id, base_shot_id, reconstruction, data):
+    pdr_shots_dict = data.load_pdr_shots()
+
+    base_pdr_rotation = pdr_shots_dict[base_shot_id][3:6]
+    pdr_rotation = pdr_shots_dict[shot_id][3:6]
+    base_sfm_rotation = reconstruction.shots[base_shot_id].pose.get_rotation_matrix()
+
+    pred_sfm_rotation = rotation_extrapolate(base_pdr_rotation, pdr_rotation, base_sfm_rotation)
+    return pred_sfm_rotation
 
 
 def debug_rotation_prior(reconstruction, data):
@@ -113,6 +132,13 @@ def debug_rotation_prior(reconstruction, data):
         deviation_x = (np.degrees(rotation_sfm[0] - rotation_prior[0]) + 360) % 360
         deviation_y = (np.degrees(rotation_sfm[1] - rotation_prior[1]) + 360) % 360
         deviation_z = (np.degrees(rotation_sfm[2] - rotation_prior[2]) + 360) % 360
+
+        if deviation_x > 180:
+            deviation_x -= 360
+        if deviation_y > 180:
+            deviation_y -= 360
+        if deviation_z > 180:
+            deviation_z -= 360
 
         logger.debug("{}, rotation prior deviation {}, {}, {}".format(shot_id, deviation_x, deviation_y, deviation_z))
 
@@ -287,7 +313,7 @@ def pdr_walk_forward(aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, s
                     delta_distance = pdr_info[6] / (scale_factor * 0.3048)
 
                     trust = max(trust1, trust2) + 1
-                    walkthrough_dict[pred_id] = pdr_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), trust
+                    walkthrough_dict[pred_id] = position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), trust
                 else:
                     walkthrough_dict[pred_id] = gps_points_dict[pred_id], 0
             else:
@@ -346,7 +372,7 @@ def pdr_walk_backward(aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, 
 
 
                     trust = max(trust1, trust2) + 1
-                    walkthrough_dict[pred_id] = pdr_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), trust
+                    walkthrough_dict[pred_id] = position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), trust
                 else:
                     walkthrough_dict[pred_id] = gps_points_dict[pred_id], 0
             else:
@@ -372,7 +398,7 @@ def pdr_walkthrough(aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, sc
     return final_dict
 
 
-def pdr_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance):
+def position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance):
     """
     update pdr predictions based on extrapolating last SfM position and direction
 
@@ -391,6 +417,25 @@ def pdr_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance)
     z = ref_coord[2]
 
     return [x, y, z]
+
+
+def rotation_extrapolate(base_pdr_rotation, pdr_rotation, base_sfm_rotation):
+    """
+    based on pdr rotations of base shot and current shot, calculate a delta rotation,
+    then apply this delta rotation to sfm rotation of base to obtain a prediction/prior
+    for sfm rotation of current shot
+    :param base_pdr_rotation:
+    :param base_sfm_rotation:
+    :param pdr_rotation:
+    :return: prediction for sfm rotation of current shot
+    """
+
+    qdiff = tf.quaternion_diff(np.radians(base_pdr_rotation), np.radians(pdr_rotation))
+    qr = tf.quaternion_from_matrix(base_sfm_rotation.T)
+
+    qnew = tf.quaternion_inverse(tf.quaternion_multiply(qdiff, qr))
+
+    return tf.euler_from_quaternion(qnew)
 
 
 def transform_reconstruction(reconstruction, ref_shots_dict):
@@ -635,7 +680,8 @@ def update_pdr_local(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor):
 
         delta_heading = tf.delta_heading(np.radians(pdr_info_dist1[3:6]), np.radians(pdr_info[3:6]))
         delta_distance = pdr_info[6] / (scale_factor * 0.3048)
-        return pdr_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), 50
+        # TODO: put 100 in config
+        return position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), 100
     elif next1 == sorted_sfm_shot_ids[0] and next2 == sorted_sfm_shot_ids[1]:
         dist_1_coords = sfm_points_dict[next1]
         dist_2_coords = sfm_points_dict[next2]
@@ -645,7 +691,8 @@ def update_pdr_local(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor):
 
         delta_heading = tf.delta_heading(np.radians(pdr_info_dist1[3:6]), np.radians(pdr_info[3:6]))
         delta_distance = pdr_info[6] / (scale_factor * 0.3048)
-        return pdr_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), 50
+        # TODO: put 50 in config
+        return position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), 100
     else:
         # we cannot find 2 consecutive shots to extrapolate, so use 3 shots to estimate affine
         return update_pdr_local_affine(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor, sorted_sfm_shot_ids)

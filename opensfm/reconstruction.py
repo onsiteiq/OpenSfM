@@ -243,15 +243,35 @@ def bundle_single_view(graph, reconstruction, shot_id, data):
                               shot.metadata.gps_dop)
 
     if config['bundle_use_pdr'] and shot.metadata.gps_dop == 999999.0:
-        p, stddev = update_pdr_prediction_position(shot_id, reconstruction, data)
-        ba.add_position_prior(str(shot.id), p[0], p[1], p[2], stddev)
+        p, stddev1 = update_pdr_prediction_position(shot_id, reconstruction, data)
+        ba.add_position_prior(str(shot.id), p[0], p[1], p[2], stddev1)
+
+        r, stddev2 = update_pdr_prediction_rotation(shot_id, reconstruction, data)
+        ba.add_rotation_prior(str(shot.id), r[0], r[1], r[2], stddev2)
 
         # debug
-        if stddev != 999999.0:
+        if stddev1 != 999999.0:
             prev_shot_id = _prev_shot_id(shot_id)
             if prev_shot_id in reconstruction.shots:
                 v = p - reconstruction.shots[prev_shot_id].pose.get_origin()
-                logger.debug("pdr prior for {} displacement {} {} {}, dop={}".format(shot_id, v[0], v[1], v[2], stddev))
+                logger.debug("pdr prior for {} positional displacement {} {} {}, dop={}".format(shot_id, v[0], v[1], v[2], stddev1))
+
+        if stddev2 != 999999.0:
+            prev_shot_id = _prev_shot_id(shot_id)
+            if prev_shot_id in reconstruction.shots:
+                rotation_sfm = tf.euler_from_quaternion(tf.quaternion_from_matrix(reconstruction.shots[prev_shot_id].pose.get_rotation_matrix()))
+
+                v_x = (np.degrees(rotation_sfm[0] - r[0]) + 360) % 360
+                v_y = (np.degrees(rotation_sfm[1] - r[1]) + 360) % 360
+                v_z = (np.degrees(rotation_sfm[2] - r[2]) + 360) % 360
+                if v_x > 180:
+                    v_x -= 360
+                if v_y > 180:
+                    v_y -= 360
+                if v_z > 180:
+                    v_z -= 360
+
+                logger.debug("pdr prior for {} angular displacement {} {} {}, dop={}".format(shot_id, v_x, v_y, v_z, stddev2))
 
     ba.set_loss_function(config['loss_function'],
                          config['loss_function_threshold'])
@@ -1604,6 +1624,9 @@ def incremental_reconstruction_sequential(data):
                     data, graph, reconstruction, remaining_images, gcp)
                 reconstructions.append(reconstruction)
 
+                #if reconstruction.alignment.aligned:
+                    #debug_rotation_prior(reconstruction, data)
+
                 curr_idx = 0
                 logger.info("{} images remaining".format(len(remaining_images)))
                 if len(remaining_images) < 2:
@@ -1631,8 +1654,6 @@ def incremental_reconstruction_sequential(data):
                 for shot_id in r.shots:
                     if abs(r.shots[shot_id].pose.get_origin()[2]) > uneven_images_thresh:
                         uneven_images.append(shot_id)
-
-                debug_rotation_prior(r, data)
 
         coverage = int(100 * num_aligned / len(full_images))
         logger.info("{} partial reconstructions in total. {}% images aligned".format(len(reconstructions), coverage))
