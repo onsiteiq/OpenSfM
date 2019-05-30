@@ -263,11 +263,14 @@ def pdr_walk_forward(aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, s
                     else:
                         dist_2_coords, trust2 = walkthrough_dict[dist_2_id]
 
-                    pdr_info_dist1 = pdr_shots_dict[dist_1_id]
+                    pdr_info_dist_1 = pdr_shots_dict[dist_1_id]
                     pdr_info = pdr_shots_dict[pred_id]
 
-                    delta_heading = tf.delta_heading(np.radians(pdr_info_dist1[3:6]), np.radians(pdr_info[3:6]))
-                    delta_distance = pdr_info[6] / (scale_factor * 0.3048)
+                    delta_heading = tf.delta_heading(np.radians(pdr_info_dist_1[3:6]), np.radians(pdr_info[3:6]))
+                    if pdr_info_dist_1[6] > 1e-1:
+                        delta_distance = pdr_info[6] / pdr_info_dist_1[6] * np.linalg.norm(np.array(dist_1_coords)-np.array(dist_2_coords))
+                    else:
+                        delta_distance = pdr_info_dist_1[6]
 
                     trust = max(trust1, trust2) + 1
                     walkthrough_dict[pred_id] = position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), trust
@@ -321,12 +324,14 @@ def pdr_walk_backward(aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, 
                     else:
                         dist_2_coords, trust2 = walkthrough_dict[dist_2_id]
 
-                    pdr_info_dist1 = pdr_shots_dict[dist_1_id]
+                    pdr_info_dist_1 = pdr_shots_dict[dist_1_id]
                     pdr_info = pdr_shots_dict[pred_id]
 
-                    delta_heading = tf.delta_heading(np.radians(pdr_info_dist1[3:6]), np.radians(pdr_info[3:6]))
-                    delta_distance = pdr_info[6] / (scale_factor * 0.3048)
-
+                    delta_heading = tf.delta_heading(np.radians(pdr_info_dist_1[3:6]), np.radians(pdr_info[3:6]))
+                    if pdr_info_dist_1[6] > 1e-1:
+                        delta_distance = pdr_info[6] / pdr_info_dist_1[6] * np.linalg.norm(np.array(dist_1_coords)-np.array(dist_2_coords))
+                    else:
+                        delta_distance = pdr_info_dist_1[6]
 
                     trust = max(trust1, trust2) + 1
                     walkthrough_dict[pred_id] = position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), trust
