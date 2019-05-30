@@ -21,7 +21,7 @@ from opensfm import multiview
 from opensfm import types
 from opensfm.align import align_reconstruction, align_reconstruction_segments, apply_similarity
 from opensfm.align_pdr import init_pdr_predictions, update_pdr_prediction_position, update_pdr_prediction_rotation, \
-    scale_reconstruction_to_pdr, align_reconstructions_to_pdr, debug_rotation_prior
+    resection_culling_pdr, scale_reconstruction_to_pdr, align_reconstructions_to_pdr, debug_rotation_prior
 from opensfm.context import parallel_map, current_memory_usage
 from opensfm import transformations as tf
 
@@ -846,10 +846,15 @@ def resect(data, graph, reconstruction, shot_id):
             track_ids.append(track)
     bs = np.array(bs)
     Xs = np.array(Xs)
-    if len(bs) < 5:
+
+    if len(bs) < data.config['resection_min_inliers']:
         return False, {'num_common_points': len(bs)}
 
+    # remove features that are obviously wrong, according to pdr
+    bs, Xs, track_ids = resection_culling_pdr(shot_id, reconstruction, data, bs, Xs, track_ids)
+
     threshold = data.config['resection_threshold']
+
     T = run_absolute_pose_ransac(
         bs, Xs, "KNEIP", 1 - np.cos(threshold), 1000, 0.999)
 
@@ -892,7 +897,7 @@ def resect(data, graph, reconstruction, shot_id):
 def get_resection_min_inliers(data, graph, reconstruction, shot_id, track_ids, inliers, ninliers):
     """
     if inliers are mostly not from direct neighbors (shot number +/- 5), use a higher min_inlier
-    threshold, to prevent spurious recon
+    threshold, to prevent spurious features getting into resection
     """
     ninliers_neighbors = 0
     for i in range(len(track_ids)):
@@ -1312,7 +1317,7 @@ def grow_reconstruction_sequential(data, graph, reconstruction, images, gcp):
 
     bundle(graph, reconstruction, gcp, config)
     remove_outliers(graph, reconstruction, config)
-    align_reconstruction_segments(reconstruction, gcp, config)
+    #align_reconstruction_segments(reconstruction, gcp, config)
     paint_reconstruction(data, graph, reconstruction)
 
     return reconstruction, report

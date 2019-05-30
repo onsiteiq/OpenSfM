@@ -49,8 +49,6 @@ def init_pdr_predictions(data):
     # debug
     debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict)
 
-    return pdr_predictions_dict
-
 
 def update_pdr_prediction_position(shot_id, reconstruction, data):
     if data.pdr_shots_exist():
@@ -89,8 +87,8 @@ def update_pdr_prediction_rotation(shot_id, reconstruction, data):
         base_shot_id_0 = sorted_shot_ids[0]
         base_shot_id_1 = sorted_shot_ids[1]
 
-        prediction_0 = get_rotation_prediction(shot_id, base_shot_id_0, reconstruction, data)
-        prediction_1 = get_rotation_prediction(shot_id, base_shot_id_1, reconstruction, data)
+        prediction_0 = rotation_extrapolate(shot_id, base_shot_id_0, reconstruction, data)
+        prediction_1 = rotation_extrapolate(shot_id, base_shot_id_1, reconstruction, data)
 
         # 0.1 radians is roughly 6 degrees
         # TODO: put 0.1 in config
@@ -110,18 +108,54 @@ def update_pdr_prediction_rotation(shot_id, reconstruction, data):
     return [0, 0, 0], 999999.0
 
 
-def get_rotation_prediction(shot_id, base_shot_id, reconstruction, data):
-    pdr_shots_dict = data.load_pdr_shots()
+def resection_culling_pdr(shot_id, reconstruction, data, bs, Xs, track_ids):
+    """
+    use pdr rotation and position predictions to mask out questionable features before resection
+    :param shot_id:
+    :param reconstruction:
+    :param data:
+    :param bs:
+    :param Xs:
+    :param track_ids:
+    :return: masked bs and Xs
+    """
+    if data.pdr_shots_exist():
+        p, stddev1 = update_pdr_prediction_position(shot_id, reconstruction, data)
+        r, stddev2 = update_pdr_prediction_rotation(shot_id, reconstruction, data)
 
-    base_pdr_rotation = pdr_shots_dict[base_shot_id][3:6]
-    pdr_rotation = pdr_shots_dict[shot_id][3:6]
-    base_sfm_rotation = reconstruction.shots[base_shot_id].pose.get_rotation_matrix()
+        if stddev1 <= 100.0 and stddev2 <= 0.1:
+            min_inliers = data.config['resection_min_inliers']
+            threshold = 2*data.config['resection_threshold']
 
-    pred_sfm_rotation = rotation_extrapolate(base_pdr_rotation, pdr_rotation, base_sfm_rotation)
-    return pred_sfm_rotation
+            R = _euler_angles_to_rotation_matrix(r)
+            reprojected_bs = R.dot((Xs - p).T).T
+            reprojected_bs /= np.linalg.norm(reprojected_bs, axis=1)[:, np.newaxis]
+
+            distances = np.linalg.norm(reprojected_bs - bs, axis=1)
+
+            for i in range(1, 100):
+                mask = distances < i*threshold
+                if int(sum(mask)) > max(len(mask)/2, min_inliers):
+                    break
+
+            if int(sum(mask)) < min_inliers:
+                return bs, Xs, track_ids
+
+            logger.debug("culling {}/{} features before resection".format(len(mask)-int(sum(mask)), len(mask)))
+
+            masked_bs = [x for i, x in enumerate(bs) if mask[i]]
+            masked_Xs = [x for i, x in enumerate(Xs) if mask[i]]
+            masked_track_ids = [x for i, x in enumerate(track_ids) if mask[i]]
+
+            return np.array(masked_bs), np.array(masked_Xs), masked_track_ids
+
+    return bs, Xs, track_ids
 
 
 def debug_rotation_prior(reconstruction, data):
+    if len(reconstruction.shots) < 3:
+        return
+
     for shot_id in reconstruction.shots:
         rotation_prior, dop = update_pdr_prediction_rotation(shot_id, reconstruction, data)
         rotation_sfm = tf.euler_from_quaternion(tf.quaternion_from_matrix(reconstruction.shots[shot_id].pose.get_rotation_matrix()))
@@ -135,6 +169,9 @@ def scale_reconstruction_to_pdr(reconstruction, data):
     """
     scale the reconstruction to pdr predictions
     """
+    if not data.gps_points_exist():
+        return
+
     if not data.pdr_shots_exist():
         return
 
@@ -157,6 +194,9 @@ def align_reconstructions_to_pdr(reconstructions, data):
     """
     align all un-anchored reconstructions
     """
+    if not data.gps_points_exist():
+        return
+
     if not data.pdr_shots_exist():
         return
 
@@ -381,16 +421,22 @@ def position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_dist
     return [x, y, z]
 
 
-def rotation_extrapolate(base_pdr_rotation, pdr_rotation, base_sfm_rotation):
+def rotation_extrapolate(shot_id, base_shot_id, reconstruction, data):
     """
     based on pdr rotations of base shot and current shot, calculate a delta rotation,
     then apply this delta rotation to sfm rotation of base to obtain a prediction/prior
     for sfm rotation of current shot
-    :param base_pdr_rotation:
-    :param base_sfm_rotation:
-    :param pdr_rotation:
+    :param shot_id:
+    :param base_shot_id:
+    :param reconstruction:
+    :param data:
     :return: prediction for sfm rotation of current shot
     """
+    pdr_shots_dict = data.load_pdr_shots()
+
+    base_pdr_rotation = pdr_shots_dict[base_shot_id][3:6]
+    pdr_rotation = pdr_shots_dict[shot_id][3:6]
+    base_sfm_rotation = reconstruction.shots[base_shot_id].pose.get_rotation_matrix()
 
     qdiff = tf.quaternion_diff(np.radians(base_pdr_rotation), np.radians(pdr_rotation))
     qr = tf.quaternion_from_matrix(base_sfm_rotation.T)
