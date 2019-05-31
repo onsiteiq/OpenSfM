@@ -302,7 +302,6 @@ def match(args):
     logger.info('Matching {}  -  {} / {}'.format(im1, i + 1, n))
 
     config = ctx.data.config
-    robust_matching_min_match = config['robust_matching_min_match']
     preemptive_threshold = config['preemptive_threshold']
     lowes_ratio = config['lowes_ratio']
     preemptive_lowes_ratio = config['preemptive_lowes_ratio']
@@ -310,6 +309,8 @@ def match(args):
     im1_matches = {}
 
     for im2 in candidates:
+        min_match_threshold = _get_min_match_threshold(im1, im2, config)
+
         # preemptive matching
         if preemptive_threshold > 0:
             t = timer()
@@ -344,7 +345,7 @@ def match(args):
         matches = matching.match_symmetric(f1, i1, f2, i2, config)
         logger.debug('{} - {} has {} candidate matches'.format(
             im1, im2, len(matches)))
-        if len(matches) < robust_matching_min_match:
+        if len(matches) < min_match_threshold:
             im1_matches[im2] = []
             continue
 
@@ -356,7 +357,7 @@ def match(args):
         rmatches = matching.robust_match(p1, p2, camera1, camera2, matches,
                                          config)
 
-        if len(rmatches) < robust_matching_min_match:
+        if len(rmatches) < min_match_threshold:
             im1_matches[im2] = []
             continue
         im1_matches[im2] = rmatches
@@ -366,3 +367,19 @@ def match(args):
         logger.debug("Full matching {0} / {1}, time: {2}s".format(
             len(rmatches), len(matches), timer() - t))
     ctx.data.save_matches(im1, im1_matches)
+
+
+def _get_min_match_threshold(im1, im2, config):
+    if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) < 5:
+        return config['robust_matching_min_match']
+    else:
+        return config['robust_matching_min_match_large']
+
+
+def _shot_id_to_int(shot_id):
+    """
+    Returns: shot id to integer
+    """
+    tokens = shot_id.split(".")
+    return int(tokens[0])
+

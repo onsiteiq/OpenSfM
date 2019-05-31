@@ -49,6 +49,7 @@ def init_pdr_predictions(data):
     # debug
     debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict)
 
+    return pdr_predictions_dict
 
 def update_pdr_prediction_position(shot_id, reconstruction, data):
     if data.pdr_shots_exist():
