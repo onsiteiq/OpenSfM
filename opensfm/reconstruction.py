@@ -355,14 +355,14 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, data):
             ba.add_position_prior(str(shot.id), g[0], g[1], g[2],
                                   shot.metadata.gps_dop)
 
-    if config['bundle_use_pdr']:
-        for shot_id in interior | boundary:
-            if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
+    #if config['bundle_use_pdr']:
+        #for shot_id in interior | boundary:
+            #if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
                 #p, stddev1 = update_pdr_prediction_position(shot_id, reconstruction, data)
                 #ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev1)
 
-                r, stddev2 = update_pdr_prediction_rotation(shot_id, reconstruction, data)
-                ba.add_rotation_prior(shot_id, r[0], r[1], r[2], stddev2)
+                #r, stddev2 = update_pdr_prediction_rotation(shot_id, reconstruction, data)
+                #ba.add_rotation_prior(shot_id, r[0], r[1], r[2], stddev2)
 
     if config['bundle_use_gcp'] and gcp:
         for observation in gcp:
@@ -851,7 +851,7 @@ def resect(data, graph, reconstruction, shot_id):
         return False, {'num_common_points': len(bs)}
 
     # remove features that are obviously wrong, according to pdr
-    bs, Xs, track_ids = resection_culling_pdr(shot_id, reconstruction, data, bs, Xs, track_ids)
+    #bs, Xs, track_ids = resection_culling_pdr(shot_id, reconstruction, data, bs, Xs, track_ids)
 
     threshold = data.config['resection_threshold']
 
@@ -869,8 +869,8 @@ def resect(data, graph, reconstruction, shot_id):
 
     min_inliers = get_resection_min_inliers(data, graph, reconstruction, shot_id, track_ids, inliers, ninliers)
 
-    logger.info("{} resection inliers: {} / {}, threshod {}".format(
-        shot_id, ninliers, len(bs), min_inliers))
+    #logger.info("{} resection inliers: {} / {}, threshod {}".format(
+        #shot_id, ninliers, len(bs), min_inliers))
     report = {
         'num_common_points': len(bs),
         'num_inliers': ninliers,
@@ -1317,7 +1317,7 @@ def grow_reconstruction_sequential(data, graph, reconstruction, images, gcp):
 
     bundle(graph, reconstruction, gcp, config)
     remove_outliers(graph, reconstruction, config)
-    #align_reconstruction_segments(reconstruction, gcp, config)
+    align_reconstruction_segments(reconstruction, gcp, config)
     paint_reconstruction(data, graph, reconstruction)
 
     return reconstruction, report
@@ -1632,7 +1632,7 @@ def incremental_reconstruction_sequential(data):
                     data, graph, reconstruction, remaining_images, gcp)
                 reconstructions.append(reconstruction)
 
-                debug_rotation_prior(reconstruction, data)
+                #debug_rotation_prior(reconstruction, data)
 
                 curr_idx = 0
                 logger.info("{} images remaining".format(len(remaining_images)))

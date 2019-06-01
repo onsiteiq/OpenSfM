@@ -51,6 +51,7 @@ def init_pdr_predictions(data):
 
     return pdr_predictions_dict
 
+
 def update_pdr_prediction_position(shot_id, reconstruction, data):
     if data.pdr_shots_exist():
         if len(reconstruction.shots) < 3:
@@ -211,21 +212,16 @@ def align_reconstructions_to_pdr(reconstructions, data):
 
     gps_points_dict = data.load_topocentric_gps_points()
     pdr_shots_dict = data.load_pdr_shots()
-    scale_factor = data.config['reconstruction_scale_factor']
 
-    pdr_predictions_dict = pdr_walkthrough(aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, scale_factor)
+    pdr_predictions_dict = pdr_walkthrough(aligned_sfm_points_dict, pdr_shots_dict)
 
     for reconstruction in reconstructions:
         if not reconstruction.alignment.aligned:
             reconstruction.alignment.aligned = \
-                align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict)
-
-            #reconstruction.alignment.aligned = \
-                #align_reconstruction_to_pdr_old(reconstruction,
-                                            #aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, scale_factor)
+                align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict, gps_points_dict)
 
 
-def align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict):
+def align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict, gps_points_dict):
     """
     align one partial reconstruction to 'best' pdr predictions
     """
@@ -242,16 +238,17 @@ def align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict):
 
         if recon_predictions_dict[shot_id][1] < 2:
             ref_shots_dict[shot_id] = recon_predictions_dict[shot_id][0]
-        else:
+        elif shot_id in gps_points_dict:
+            ref_shots_dict[shot_id] = gps_points_dict[shot_id]
             break
 
     if len(ref_shots_dict) >= 2:
         transform_reconstruction(reconstruction, ref_shots_dict)
 
         # debug
-        #logger.debug("align_reconstructon_to_pdr: align to shots")
-        #for shot_id in ref_shots_dict:
-            #logger.debug("{}, position={}".format(shot_id, ref_shots_dict[shot_id]))
+        logger.debug("align_reconstructon_to_pdr: align to shots")
+        for shot_id in ref_shots_dict:
+            logger.debug("{}, position={}".format(shot_id, ref_shots_dict[shot_id]))
 
         return True
     else:
@@ -259,13 +256,11 @@ def align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict):
         return False
 
 
-def pdr_walk_forward(aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, scale_factor):
+def pdr_walk_forward(aligned_sfm_points_dict, pdr_shots_dict):
     """
     based on all aligned points, walk forward to predict all unaligned points
     :param aligned_sfm_points_dict:
-    :param gps_points_dict:
     :param pdr_shots_dict:
-    :param scale_factor:
     :return:
     """
     walkthrough_dict = {}
@@ -292,44 +287,39 @@ def pdr_walk_forward(aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, s
             dist_2_id = _int_to_shot_id(i)
             pred_id = _int_to_shot_id(i+2)
             if pred_id not in aligned_sfm_points_dict:
-                if pred_id not in gps_points_dict:
-                    trust1 = trust2 = 0
-                    if dist_1_id in aligned_sfm_points_dict:
-                        dist_1_coords = aligned_sfm_points_dict[dist_1_id]
-                    else:
-                        dist_1_coords, trust1 = walkthrough_dict[dist_1_id]
-
-                    if dist_2_id in aligned_sfm_points_dict:
-                        dist_2_coords = aligned_sfm_points_dict[dist_2_id]
-                    else:
-                        dist_2_coords, trust2 = walkthrough_dict[dist_2_id]
-
-                    pdr_info_dist_1 = pdr_shots_dict[dist_1_id]
-                    pdr_info = pdr_shots_dict[pred_id]
-
-                    delta_heading = tf.delta_heading(np.radians(pdr_info_dist_1[3:6]), np.radians(pdr_info[3:6]))
-                    if pdr_info_dist_1[6] > 1e-1:
-                        delta_distance = pdr_info[6] / pdr_info_dist_1[6] * np.linalg.norm(np.array(dist_1_coords)-np.array(dist_2_coords))
-                    else:
-                        delta_distance = pdr_info_dist_1[6]
-
-                    trust = max(trust1, trust2) + 1
-                    walkthrough_dict[pred_id] = position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), trust
+                trust1 = trust2 = 0
+                if dist_1_id in aligned_sfm_points_dict:
+                    dist_1_coords = aligned_sfm_points_dict[dist_1_id]
                 else:
-                    walkthrough_dict[pred_id] = gps_points_dict[pred_id], 0
+                    dist_1_coords, trust1 = walkthrough_dict[dist_1_id]
+
+                if dist_2_id in aligned_sfm_points_dict:
+                    dist_2_coords = aligned_sfm_points_dict[dist_2_id]
+                else:
+                    dist_2_coords, trust2 = walkthrough_dict[dist_2_id]
+
+                pdr_info_dist_1 = pdr_shots_dict[dist_1_id]
+                pdr_info = pdr_shots_dict[pred_id]
+
+                delta_heading = tf.delta_heading(np.radians(pdr_info_dist_1[3:6]), np.radians(pdr_info[3:6]))
+                if pdr_info_dist_1[6] > 1e-1:
+                    delta_distance = pdr_info[6] / pdr_info_dist_1[6] * np.linalg.norm(np.array(dist_1_coords)-np.array(dist_2_coords))
+                else:
+                    delta_distance = pdr_info_dist_1[6]
+
+                trust = max(trust1, trust2) + 1
+                walkthrough_dict[pred_id] = position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), trust
             else:
                 walkthrough_dict[pred_id] = aligned_sfm_points_dict[pred_id], 0
 
     return walkthrough_dict
 
 
-def pdr_walk_backward(aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, scale_factor):
+def pdr_walk_backward(aligned_sfm_points_dict, pdr_shots_dict):
     """
     based on all aligned points, walk forward to predict all unaligned points
     :param aligned_sfm_points_dict:
-    :param gps_points_dict:
     :param pdr_shots_dict:
-    :param scale_factor:
     :return:
     """
     walkthrough_dict = {}
@@ -353,40 +343,37 @@ def pdr_walk_backward(aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, 
             dist_2_id = _int_to_shot_id(i)
             pred_id = _int_to_shot_id(i-2)
             if pred_id not in aligned_sfm_points_dict:
-                if pred_id not in gps_points_dict:
-                    trust1 = trust2 = 0
-                    if dist_1_id in aligned_sfm_points_dict:
-                        dist_1_coords = aligned_sfm_points_dict[dist_1_id]
-                    else:
-                        dist_1_coords, trust1 = walkthrough_dict[dist_1_id]
-
-                    if dist_2_id in aligned_sfm_points_dict:
-                        dist_2_coords = aligned_sfm_points_dict[dist_2_id]
-                    else:
-                        dist_2_coords, trust2 = walkthrough_dict[dist_2_id]
-
-                    pdr_info_dist_1 = pdr_shots_dict[dist_1_id]
-                    pdr_info = pdr_shots_dict[pred_id]
-
-                    delta_heading = tf.delta_heading(np.radians(pdr_info_dist_1[3:6]), np.radians(pdr_info[3:6]))
-                    if pdr_info_dist_1[6] > 1e-1:
-                        delta_distance = pdr_info[6] / pdr_info_dist_1[6] * np.linalg.norm(np.array(dist_1_coords)-np.array(dist_2_coords))
-                    else:
-                        delta_distance = pdr_info_dist_1[6]
-
-                    trust = max(trust1, trust2) + 1
-                    walkthrough_dict[pred_id] = position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), trust
+                trust1 = trust2 = 0
+                if dist_1_id in aligned_sfm_points_dict:
+                    dist_1_coords = aligned_sfm_points_dict[dist_1_id]
                 else:
-                    walkthrough_dict[pred_id] = gps_points_dict[pred_id], 0
+                    dist_1_coords, trust1 = walkthrough_dict[dist_1_id]
+
+                if dist_2_id in aligned_sfm_points_dict:
+                    dist_2_coords = aligned_sfm_points_dict[dist_2_id]
+                else:
+                    dist_2_coords, trust2 = walkthrough_dict[dist_2_id]
+
+                pdr_info_dist_1 = pdr_shots_dict[dist_1_id]
+                pdr_info = pdr_shots_dict[pred_id]
+
+                delta_heading = tf.delta_heading(np.radians(pdr_info_dist_1[3:6]), np.radians(pdr_info[3:6]))
+                if pdr_info_dist_1[6] > 1e-1:
+                    delta_distance = pdr_info[6] / pdr_info_dist_1[6] * np.linalg.norm(np.array(dist_1_coords)-np.array(dist_2_coords))
+                else:
+                    delta_distance = pdr_info_dist_1[6]
+
+                trust = max(trust1, trust2) + 1
+                walkthrough_dict[pred_id] = position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), trust
             else:
                 walkthrough_dict[pred_id] = aligned_sfm_points_dict[pred_id], 0
 
     return walkthrough_dict
 
 
-def pdr_walkthrough(aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, scale_factor):
-    f_dict = pdr_walk_forward(aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, scale_factor)
-    b_dict = pdr_walk_backward(aligned_sfm_points_dict, gps_points_dict, pdr_shots_dict, scale_factor)
+def pdr_walkthrough(aligned_sfm_points_dict, pdr_shots_dict):
+    f_dict = pdr_walk_forward(aligned_sfm_points_dict, pdr_shots_dict)
+    b_dict = pdr_walk_backward(aligned_sfm_points_dict, pdr_shots_dict)
 
     final_dict = {}
     for shot_id in pdr_shots_dict:
