@@ -100,8 +100,8 @@ def update_pdr_prediction_rotation(shot_id, reconstruction, data):
         q_1 = tf.quaternion_from_euler(prediction_1[0], prediction_1[1], prediction_1[2])
 
         if tf.quaternion_distance(q_0, q_1) > tolerance:
-            logger.debug("{}, rotation prior based on {} {} differ by {} degrees".
-                         format(shot_id, base_shot_id_0, base_shot_id_1, np.degrees(tf.quaternion_distance(q_0, q_1))))
+            #logger.debug("{}, rotation prior based on {} {} differ by {} degrees".
+                         #format(shot_id, base_shot_id_0, base_shot_id_1, np.degrees(tf.quaternion_distance(q_0, q_1))))
             return prediction_0, 999999.0
 
         distance_to_base = abs(_shot_id_to_int(base_shot_id_0) - _shot_id_to_int(shot_id))
@@ -135,6 +135,7 @@ def resection_culling_pdr(shot_id, reconstruction, data, bs, Xs, track_ids):
 
             distances = np.linalg.norm(reprojected_bs - bs, axis=1)
 
+            # relax threshold if necessary to allow at least half of features through
             for i in range(1, 100):
                 mask = distances < i*threshold
                 if int(sum(mask)) > max(len(mask)/2, min_inliers):
@@ -177,7 +178,6 @@ def scale_reconstruction_to_pdr(reconstruction, data):
     if not data.pdr_shots_exist():
         return
 
-    reconstruction.alignment.scaled = True
     pdr_predictions_dict = data.load_pdr_predictions()
 
     ref_shots_dict = {}
@@ -187,14 +187,19 @@ def scale_reconstruction_to_pdr(reconstruction, data):
 
     two_ref_shots_dict = ref_shots_dict
     if len(ref_shots_dict) > 2:
-        two_ref_shots_dict = get_farthest_shots(ref_shots_dict)
+        two_ref_shots_dict, distance = get_farthest_shots(ref_shots_dict)
 
     transform_reconstruction(reconstruction, two_ref_shots_dict)
+
+    # setting scaled=true will prevent this routine from being called again. we will perform
+    # this scaling operation a couple times at beginning of a reconstruction
+    if len(reconstruction.shots) > 3:
+        reconstruction.alignment.scaled = True
 
 
 def align_reconstructions_to_pdr(reconstructions, data):
     """
-    align all un-anchored reconstructions
+    attempt to align un-anchored reconstructions
     """
     if not data.gps_points_exist():
         return
@@ -212,16 +217,17 @@ def align_reconstructions_to_pdr(reconstructions, data):
 
     gps_points_dict = data.load_topocentric_gps_points()
     pdr_shots_dict = data.load_pdr_shots()
+    scale_factor = data.config['reconstruction_scale_factor']
 
     pdr_predictions_dict = pdr_walkthrough(aligned_sfm_points_dict, pdr_shots_dict)
 
     for reconstruction in reconstructions:
         if not reconstruction.alignment.aligned:
             reconstruction.alignment.aligned = \
-                align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict, gps_points_dict)
+                align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict, gps_points_dict, scale_factor)
 
 
-def align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict, gps_points_dict):
+def align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict, gps_points_dict, scale_factor):
     """
     align one partial reconstruction to 'best' pdr predictions
     """
@@ -243,17 +249,25 @@ def align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict, gps_points
             break
 
     if len(ref_shots_dict) >= 2:
-        transform_reconstruction(reconstruction, ref_shots_dict)
+        two_ref_shots_dict, distance = get_farthest_shots(ref_shots_dict)
 
-        # debug
-        logger.debug("align_reconstructon_to_pdr: align to shots")
-        for shot_id in ref_shots_dict:
-            logger.debug("{}, position={}".format(shot_id, ref_shots_dict[shot_id]))
+        # only do this alignment if the reference shots are far enough away from each other,
+        # or if we have only a few shots in this reconstruction. attempting to do this on
+        # two nearby shots could lead to a lot of distortion
+        if distance > 5/scale_factor or len(reconstruction.shots) < 10:
+            transform_reconstruction(reconstruction, two_ref_shots_dict)
 
-        return True
-    else:
-        reposition_reconstruction(reconstruction, recon_predictions_dict)
-        return False
+            # debug
+            logger.debug("align_reconstructon_to_pdr: align to shots")
+            for shot_id in two_ref_shots_dict:
+                logger.debug("{}, position={}".format(shot_id, two_ref_shots_dict[shot_id]))
+
+            return True
+
+    # if do alignment based on pdr not doable, we will settle with updating the shots with
+    # latest pdr predictions
+    reposition_reconstruction(reconstruction, recon_predictions_dict)
+    return False
 
 
 def pdr_walk_forward(aligned_sfm_points_dict, pdr_shots_dict):
@@ -840,16 +854,16 @@ def get_dop(shot_id, deviation, gps_shot_ids):
     return dop
 
 
-def get_farthest_shots(pdr_shots):
+def get_farthest_shots(shots_dict):
     """get two shots that are most far apart in physical distance"""
     distances_dict = {}
-    pdr_shot_ids = pdr_shots.keys()
-    for (i, j) in combinations(pdr_shot_ids, 2):
-        distances_dict[(i, j)] = np.linalg.norm(np.array(pdr_shots[i]) - np.array(pdr_shots[j]))
+    shot_ids = shots_dict.keys()
+    for (i, j) in combinations(shot_ids, 2):
+        distances_dict[(i, j)] = np.linalg.norm(np.array(shots_dict[i]) - np.array(shots_dict[j]))
 
     (shot1, shot2) = max(distances_dict.items(), key=operator.itemgetter(1))[0]
 
-    return {shot1: pdr_shots[shot1], shot2: pdr_shots[shot2]}
+    return {shot1: shots_dict[shot1], shot2: shots_dict[shot2]}, distances_dict[(shot1, shot2)]
 
 
 def get_closest_shots(shot_id, aligned_shot_ids):

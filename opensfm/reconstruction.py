@@ -246,8 +246,8 @@ def bundle_single_view(graph, reconstruction, shot_id, data):
         p, stddev1 = update_pdr_prediction_position(shot_id, reconstruction, data)
         ba.add_position_prior(str(shot.id), p[0], p[1], p[2], stddev1)
 
-        r, stddev2 = update_pdr_prediction_rotation(shot_id, reconstruction, data)
-        ba.add_rotation_prior(str(shot.id), r[0], r[1], r[2], stddev2)
+        #r, stddev2 = update_pdr_prediction_rotation(shot_id, reconstruction, data)
+        #ba.add_rotation_prior(str(shot.id), r[0], r[1], r[2], stddev2)
 
         # debug
         if stddev1 != 999999.0:
@@ -256,22 +256,14 @@ def bundle_single_view(graph, reconstruction, shot_id, data):
                 v = p - reconstruction.shots[prev_shot_id].pose.get_origin()
                 logger.debug("pdr prior for {} positional displacement {} {} {}, dop={}".format(shot_id, v[0], v[1], v[2], stddev1))
 
-        if stddev2 != 999999.0:
-            prev_shot_id = _prev_shot_id(shot_id)
-            if prev_shot_id in reconstruction.shots:
-                rotation_sfm = tf.euler_from_quaternion(tf.quaternion_from_matrix(reconstruction.shots[prev_shot_id].pose.get_rotation_matrix()))
-
-                v_x = (np.degrees(rotation_sfm[0] - r[0]) + 360) % 360
-                v_y = (np.degrees(rotation_sfm[1] - r[1]) + 360) % 360
-                v_z = (np.degrees(rotation_sfm[2] - r[2]) + 360) % 360
-                if v_x > 180:
-                    v_x -= 360
-                if v_y > 180:
-                    v_y -= 360
-                if v_z > 180:
-                    v_z -= 360
-
-                logger.debug("pdr prior for {} angular displacement {} {} {}, dop={}".format(shot_id, v_x, v_y, v_z, stddev2))
+        #if stddev2 != 999999.0:
+            #prev_shot_id = _prev_shot_id(shot_id)
+            #if prev_shot_id in reconstruction.shots:
+                #q_0 = tf.quaternion_from_euler(r[0], r[1], r[2])
+                #q_1 = tf.quaternion_from_matrix(reconstruction.shots[prev_shot_id].pose.get_rotation_matrix())
+#
+                #logger.debug("pdr prior for {} angular displacement {} dop={}".
+                             #format(shot_id, tf.quaternion_distance(q_0, q_1), stddev2))
 
     ba.set_loss_function(config['loss_function'],
                          config['loss_function_threshold'])
@@ -678,10 +670,11 @@ def two_view_reconstruction(p1, p2, camera1, camera2, threshold):
     t = T[:, 3]
     inliers = _two_view_reconstruction_inliers(b1, b2, R, t, threshold)
 
-    T = run_relative_pose_optimize_nonlinear(b1[inliers], b2[inliers], t, R)
-    R = T[:, :3]
-    t = T[:, 3]
-    inliers = _two_view_reconstruction_inliers(b1, b2, R, t, threshold)
+    if inliers.sum() > 5:
+        T = run_relative_pose_optimize_nonlinear(b1[inliers], b2[inliers], t, R)
+        R = T[:, :3]
+        t = T[:, 3]
+        inliers = _two_view_reconstruction_inliers(b1, b2, R, t, threshold)
 
     return cv2.Rodrigues(R.T)[0].ravel(), -R.T.dot(t), inliers
 
