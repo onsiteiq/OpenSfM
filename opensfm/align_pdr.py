@@ -105,7 +105,7 @@ def update_pdr_prediction_rotation(shot_id, reconstruction, data):
             return prediction_0, 999999.0
 
         distance_to_base = abs(_shot_id_to_int(base_shot_id_0) - _shot_id_to_int(shot_id))
-        return prediction_0, tolerance*distance_to_base
+        return prediction_0, 0.5*distance_to_base
 
     return [0, 0, 0], 999999.0
 
@@ -125,7 +125,7 @@ def resection_culling_pdr(shot_id, reconstruction, data, bs, Xs, track_ids):
         p, stddev1 = update_pdr_prediction_position(shot_id, reconstruction, data)
         r, stddev2 = update_pdr_prediction_rotation(shot_id, reconstruction, data)
 
-        if stddev1 <= 100.0 and stddev2 <= 0.1:
+        if stddev1 <= 100.0 and stddev2 <= 1.0:
             min_inliers = data.config['resection_min_inliers']
             threshold = 2*data.config['resection_threshold']
 
@@ -138,7 +138,7 @@ def resection_culling_pdr(shot_id, reconstruction, data, bs, Xs, track_ids):
             # relax threshold if necessary to allow at least half of features through
             for i in range(1, 100):
                 mask = distances < i*threshold
-                if int(sum(mask)) > max(len(mask)/2, min_inliers):
+                if int(sum(mask)) > max(len(mask)*0.8, min_inliers):
                     break
 
             if int(sum(mask)) < min_inliers:
