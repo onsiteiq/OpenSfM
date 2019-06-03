@@ -261,7 +261,7 @@ def bundle_single_view(graph, reconstruction, shot_id, data):
             #if prev_shot_id in reconstruction.shots:
                 #q_0 = tf.quaternion_from_euler(r[0], r[1], r[2])
                 #q_1 = tf.quaternion_from_matrix(reconstruction.shots[prev_shot_id].pose.get_rotation_matrix())
-#
+
                 #logger.debug("pdr prior for {} angular displacement {} dop={}".
                              #format(shot_id, tf.quaternion_distance(q_0, q_1), stddev2))
 
@@ -1623,6 +1623,10 @@ def incremental_reconstruction_sequential(data):
                 remaining_images.remove(im2)
                 reconstruction, rec_report['grow'] = grow_reconstruction_sequential(
                     data, graph, reconstruction, remaining_images, gcp)
+
+                # break up reconstruction if it's formed by independent cliques
+                breakup_reconstruction(graph, reconstruction)
+
                 reconstructions.append(reconstruction)
 
                 #debug_rotation_prior(reconstruction, data)
@@ -1668,6 +1672,54 @@ def incremental_reconstruction_sequential(data):
     report['wall_times'] = dict(chrono.lap_times())
     report['not_reconstructed_images'] = list(remaining_images)
     return report
+
+
+def breakup_reconstruction(graph, reconstruction):
+
+    recon_points = set(reconstruction.points)
+
+    shot_points = {}
+    for shot_id in reconstruction.shots:
+        shot_points[shot_id] = recon_points & set(graph[shot_id])
+
+    cliques = []
+
+    curr_idx = 0
+    remaining_images = reconstruction.shots.keys()
+    while curr_idx < len(remaining_images) - 1:
+        im1 = remaining_images[curr_idx]
+        im2 = remaining_images[curr_idx+1]
+
+        ok = len(shot_points[im1] & shot_points[im2]) > 5
+        if ok:
+            clique = [im1, im2]
+            clique_points = shot_points[im1] | shot_points[im2]
+
+            remaining_images.remove(im1)
+            remaining_images.remove(im2)
+
+            while True:
+                for im in remaining_images:
+                    ok = len(set(clique_points) & shot_points[im]) > 5
+
+                    if not ok:
+                        continue
+
+                    clique.append(im)
+                    clique_points = list(set(clique_points) | shot_points[im])
+
+                    remaining_images.remove(im)
+                    break
+                else:
+                    break
+
+            cliques.append(clique)
+
+            curr_idx = 0
+        else:
+            curr_idx += 1
+
+    logger.info("cliques={}".format(len(cliques)))
 
 
 class Chronometer:
