@@ -1623,10 +1623,7 @@ def incremental_reconstruction_sequential(data):
                 remaining_images.remove(im2)
                 reconstruction, rec_report['grow'] = grow_reconstruction_sequential(
                     data, graph, reconstruction, remaining_images, gcp)
-                #breakup_reconstruction(graph, reconstruction)
                 reconstructions.append(reconstruction)
-
-                #debug_rotation_prior(reconstruction, data)
 
                 curr_idx = 0
                 logger.info("{} images remaining".format(len(remaining_images)))
