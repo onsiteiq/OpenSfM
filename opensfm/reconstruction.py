@@ -20,8 +20,8 @@ from opensfm import matching
 from opensfm import multiview
 from opensfm import types
 from opensfm.align import align_reconstruction, align_reconstruction_segments, apply_similarity
-from opensfm.align_pdr import init_pdr_predictions, update_pdr_prediction, \
-    scale_reconstruction_to_pdr, align_reconstructions_to_pdr
+from opensfm.align_pdr import init_pdr_predictions, update_pdr_prediction_position, update_pdr_prediction_rotation, \
+    resection_culling_pdr, scale_reconstruction_to_pdr, align_reconstructions_to_pdr, debug_rotation_prior
 from opensfm.context import parallel_map, current_memory_usage
 from opensfm import transformations as tf
 
@@ -243,15 +243,27 @@ def bundle_single_view(graph, reconstruction, shot_id, data):
                               shot.metadata.gps_dop)
 
     if config['bundle_use_pdr'] and shot.metadata.gps_dop == 999999.0:
-        p, stddev = update_pdr_prediction(shot_id, reconstruction, data)
-        ba.add_position_prior(str(shot.id), p[0], p[1], p[2], stddev)
+        p, stddev1 = update_pdr_prediction_position(shot_id, reconstruction, data)
+        ba.add_position_prior(str(shot.id), p[0], p[1], p[2], stddev1)
+
+        #r, stddev2 = update_pdr_prediction_rotation(shot_id, reconstruction, data)
+        #ba.add_rotation_prior(str(shot.id), r[0], r[1], r[2], stddev2)
 
         # debug
-        if stddev != 999999.0:
+        if stddev1 != 999999.0:
             prev_shot_id = _prev_shot_id(shot_id)
             if prev_shot_id in reconstruction.shots:
                 v = p - reconstruction.shots[prev_shot_id].pose.get_origin()
-                logger.debug("pdr prior for {} displacement {} {} {}, dop={}".format(shot_id, v[0], v[1], v[2], stddev))
+                logger.debug("pdr prior for {} positional displacement {} {} {}, dop={}".format(shot_id, v[0], v[1], v[2], stddev1))
+
+        #if stddev2 != 999999.0:
+            #prev_shot_id = _prev_shot_id(shot_id)
+            #if prev_shot_id in reconstruction.shots:
+                #q_0 = tf.quaternion_from_euler(r[0], r[1], r[2])
+                #q_1 = tf.quaternion_from_matrix(reconstruction.shots[prev_shot_id].pose.get_rotation_matrix())
+
+                #logger.debug("pdr prior for {} angular displacement {} dop={}".
+                             #format(shot_id, tf.quaternion_distance(q_0, q_1), stddev2))
 
     ba.set_loss_function(config['loss_function'],
                          config['loss_function_threshold'])
@@ -338,8 +350,11 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, data):
     #if config['bundle_use_pdr']:
         #for shot_id in interior | boundary:
             #if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
-                #p, stddev = update_pdr_prediction(shot_id, reconstruction, data)
-                #ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev)
+                #p, stddev1 = update_pdr_prediction_position(shot_id, reconstruction, data)
+                #ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev1)
+
+                #r, stddev2 = update_pdr_prediction_rotation(shot_id, reconstruction, data)
+                #ba.add_rotation_prior(shot_id, r[0], r[1], r[2], stddev2)
 
     if config['bundle_use_gcp'] and gcp:
         for observation in gcp:
@@ -655,10 +670,11 @@ def two_view_reconstruction(p1, p2, camera1, camera2, threshold):
     t = T[:, 3]
     inliers = _two_view_reconstruction_inliers(b1, b2, R, t, threshold)
 
-    T = run_relative_pose_optimize_nonlinear(b1[inliers], b2[inliers], t, R)
-    R = T[:, :3]
-    t = T[:, 3]
-    inliers = _two_view_reconstruction_inliers(b1, b2, R, t, threshold)
+    if inliers.sum() > 5:
+        T = run_relative_pose_optimize_nonlinear(b1[inliers], b2[inliers], t, R)
+        R = T[:, :3]
+        t = T[:, 3]
+        inliers = _two_view_reconstruction_inliers(b1, b2, R, t, threshold)
 
     return cv2.Rodrigues(R.T)[0].ravel(), -R.T.dot(t), inliers
 
@@ -823,10 +839,15 @@ def resect(data, graph, reconstruction, shot_id):
             track_ids.append(track)
     bs = np.array(bs)
     Xs = np.array(Xs)
-    if len(bs) < 5:
+
+    if len(bs) < data.config['resection_min_inliers']:
         return False, {'num_common_points': len(bs)}
 
+    # remove features that are obviously wrong, according to pdr
+    #bs, Xs, track_ids = resection_culling_pdr(shot_id, reconstruction, data, bs, Xs, track_ids)
+
     threshold = data.config['resection_threshold']
+
     T = run_absolute_pose_ransac(
         bs, Xs, "KNEIP", 1 - np.cos(threshold), 1000, 0.999)
 
@@ -841,8 +862,8 @@ def resect(data, graph, reconstruction, shot_id):
 
     min_inliers = get_resection_min_inliers(data, graph, reconstruction, shot_id, track_ids, inliers, ninliers)
 
-    logger.info("{} resection inliers: {} / {}, threshod {}".format(
-        shot_id, ninliers, len(bs), min_inliers))
+    #logger.info("{} resection inliers: {} / {}, threshod {}".format(
+        #shot_id, ninliers, len(bs), min_inliers))
     report = {
         'num_common_points': len(bs),
         'num_inliers': ninliers,
@@ -869,7 +890,7 @@ def resect(data, graph, reconstruction, shot_id):
 def get_resection_min_inliers(data, graph, reconstruction, shot_id, track_ids, inliers, ninliers):
     """
     if inliers are mostly not from direct neighbors (shot number +/- 5), use a higher min_inlier
-    threshold, to prevent spurious recon
+    threshold, to prevent spurious features getting into resection
     """
     ninliers_neighbors = 0
     for i in range(len(track_ids)):
@@ -1645,6 +1666,54 @@ def incremental_reconstruction_sequential(data):
     report['wall_times'] = dict(chrono.lap_times())
     report['not_reconstructed_images'] = list(remaining_images)
     return report
+
+
+def breakup_reconstruction(graph, reconstruction):
+
+    recon_points = set(reconstruction.points)
+
+    shot_points = {}
+    for shot_id in reconstruction.shots:
+        shot_points[shot_id] = recon_points & set(graph[shot_id])
+
+    cliques = []
+
+    curr_idx = 0
+    remaining_images = list(reconstruction.shots.keys())
+    while curr_idx < len(remaining_images) - 1:
+        im1 = remaining_images[curr_idx]
+        im2 = remaining_images[curr_idx+1]
+
+        ok = len(shot_points[im1] & shot_points[im2]) > 5
+        if ok:
+            clique = [im1, im2]
+            clique_points = shot_points[im1] | shot_points[im2]
+
+            remaining_images.remove(im1)
+            remaining_images.remove(im2)
+
+            while True:
+                for im in remaining_images:
+                    ok = len(set(clique_points) & shot_points[im]) > 5
+
+                    if not ok:
+                        continue
+
+                    clique.append(im)
+                    clique_points = list(set(clique_points) | shot_points[im])
+
+                    remaining_images.remove(im)
+                    break
+                else:
+                    break
+
+            cliques.append(clique)
+
+            curr_idx = 0
+        else:
+            curr_idx += 1
+
+    logger.info("cliques={}".format(len(cliques)))
 
 
 class Chronometer:

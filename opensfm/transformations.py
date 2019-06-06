@@ -1498,6 +1498,41 @@ def random_rotation_matrix(rand=None):
     return quaternion_matrix(random_quaternion(rand))
 
 
+def quaternion_distance(quaternion1, quaternion0):
+    """Return angle between two quaternions.
+    """
+    w0, x0, y0, z0 = quaternion0
+    w1, x1, y1, z1 = quaternion1
+
+    inner_product = w0*w1 + x0*x1 + y0*y1 + z0*z1
+
+    return math.acos(2*inner_product**2 - 1)
+
+
+def quaternion_diff(e1, e2):
+    """
+    return diff of e1 and e2 such that diff*1 = 2
+
+    the input euler angles are in roll/pitch/heading order
+    """
+    q1 = quaternion_from_euler(e1[0], e1[1], e1[2], axes='sxyz')
+    q2 = quaternion_from_euler(e2[0], e2[1], e2[2], axes='sxyz')
+
+    return quaternion_multiply(q2, quaternion_conjugate(q1))
+
+
+def delta_heading(e1, e2):
+    """
+    return delta heading 2 minus 1
+
+    the euler angles are in heading pitch roll order
+    """
+    qdiff = quaternion_diff(e1, e2)
+    diffx, diffy, diffz = euler_from_quaternion(qdiff, axes='sxyz')
+
+    return diffz
+
+
 class Arcball(object):
     """Virtual Trackball Control.
 
