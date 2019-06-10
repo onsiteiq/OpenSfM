@@ -15,6 +15,7 @@ from . import create_submodels
 from . import align_submodels
 from . import extract_match_counts
 from . import update_gps_metadata
+from . import create_unfolded_cube
 
 opensfm_commands = [
     extract_metadata,
@@ -32,5 +33,6 @@ opensfm_commands = [
     create_submodels,
     align_submodels,
     extract_match_counts,
-    update_gps_metadata
+    update_gps_metadata,
+    create_unfolded_cube
 ]
