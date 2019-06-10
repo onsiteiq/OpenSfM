@@ -37,13 +37,16 @@ def debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict):
                     format(key, value[0], value[1], value[2], value[3]))
 
     # floor plan
-    floor_plan_paths = glob.glob('./*FLOOR*.png')
+    # floor plan
+    plan_paths = []
+    for plan_type in ('./*FLOOR*.png', './*ROOF*.png'):
+        plan_paths.extend(glob.glob(plan_type))
 
-    if not floor_plan_paths or not os.path.exists(floor_plan_paths[0]):
+    if not plan_paths or not os.path.exists(plan_paths[0]):
         return
 
-    #img = mpimg.imread(floor_plan_paths[0])
-    img = cv2.imread(floor_plan_paths[0], cv2.IMREAD_COLOR)
+    #img = mpimg.imread(plan_paths[0])
+    img = cv2.imread(plan_paths[0], cv2.IMREAD_COLOR)
 
     fig, ax = plt.subplots()
     ax.imshow(img)
@@ -77,14 +80,16 @@ def debug_plot_reconstructions(reconstructions):
         return
 
     # floor plan
-    floor_plan_paths = glob.glob('./*FLOOR*.png')
+    plan_paths = []
+    for plan_type in ('./*FLOOR*.png', './*ROOF*.png'):
+        plan_paths.extend(glob.glob(plan_type))
 
-    if not floor_plan_paths or not os.path.exists(floor_plan_paths[0]):
+    if not plan_paths or not os.path.exists(plan_paths[0]):
         print("No floor plan image found. Quitting")
         return
 
-    #img = mpimg.imread(floor_plan_paths[0])
-    img = cv2.imread(floor_plan_paths[0], cv2.IMREAD_COLOR)
+    #img = mpimg.imread(plan_paths[0])
+    img = cv2.imread(plan_paths[0], cv2.IMREAD_COLOR)
 
     fig, ax = plt.subplots()
     ax.imshow(img)

@@ -21,7 +21,8 @@ from opensfm import multiview
 from opensfm import types
 from opensfm.align import align_reconstruction, align_reconstruction_segments, apply_similarity
 from opensfm.align_pdr import init_pdr_predictions, update_pdr_prediction_position, update_pdr_prediction_rotation, \
-    resection_culling_pdr, scale_reconstruction_to_pdr, align_reconstructions_to_pdr, debug_rotation_prior
+    cull_resection_pdr, validate_resection_pdr, scale_reconstruction_to_pdr, align_reconstructions_to_pdr, \
+    debug_rotation_prior
 from opensfm.context import parallel_map, current_memory_usage
 from opensfm import transformations as tf
 
@@ -211,11 +212,10 @@ def bundle(graph, reconstruction, gcp, config):
     return report
 
 
-def bundle_single_view(graph, reconstruction, shot_id, data):
+def bundle_single_view(graph, reconstruction, shot, data):
     """Bundle adjust a single camera."""
     config = data.config
     ba = csfm.BundleAdjuster()
-    shot = reconstruction.shots[shot_id]
     camera = shot.camera
 
     _add_camera_to_bundle(ba, camera, constant=True)
@@ -229,13 +229,13 @@ def bundle_single_view(graph, reconstruction, shot_id, data):
         False
     )
 
-    for track_id in graph[shot_id]:
+    for track_id in graph[shot.id]:
         if track_id in reconstruction.points:
             track = reconstruction.points[track_id]
             x = track.coordinates
             ba.add_point(str(track_id), x[0], x[1], x[2], True)
-            ba.add_observation(str(shot_id), str(track_id),
-                               *graph[shot_id][track_id]['feature'])
+            ba.add_observation(str(shot.id), str(track_id),
+                               *graph[shot.id][track_id]['feature'])
 
     if config['bundle_use_gps']:
         g = shot.metadata.gps_position
@@ -243,27 +243,27 @@ def bundle_single_view(graph, reconstruction, shot_id, data):
                               shot.metadata.gps_dop)
 
     if config['bundle_use_pdr'] and shot.metadata.gps_dop == 999999.0:
-        p, stddev1 = update_pdr_prediction_position(shot_id, reconstruction, data)
+        p, stddev1 = update_pdr_prediction_position(shot.id, reconstruction, data)
         ba.add_position_prior(str(shot.id), p[0], p[1], p[2], stddev1)
 
-        #r, stddev2 = update_pdr_prediction_rotation(shot_id, reconstruction, data)
+        #r, stddev2 = update_pdr_prediction_rotation(shot.id, reconstruction, data)
         #ba.add_rotation_prior(str(shot.id), r[0], r[1], r[2], stddev2)
 
         # debug
         if stddev1 != 999999.0:
-            prev_shot_id = _prev_shot_id(shot_id)
+            prev_shot_id = _prev_shot_id(shot.id)
             if prev_shot_id in reconstruction.shots:
                 v = p - reconstruction.shots[prev_shot_id].pose.get_origin()
-                logger.debug("pdr prior for {} positional displacement {} {} {}, dop={}".format(shot_id, v[0], v[1], v[2], stddev1))
+                logger.debug("pdr prior for {} positional displacement {} {} {}, dop={}".format(shot.id, v[0], v[1], v[2], stddev1))
 
         #if stddev2 != 999999.0:
-            #prev_shot_id = _prev_shot_id(shot_id)
+            #prev_shot_id = _prev_shot_id(shot.id)
             #if prev_shot_id in reconstruction.shots:
                 #q_0 = tf.quaternion_from_euler(r[0], r[1], r[2])
                 #q_1 = tf.quaternion_from_matrix(reconstruction.shots[prev_shot_id].pose.get_rotation_matrix())
 
                 #logger.debug("pdr prior for {} angular displacement {} dop={}".
-                             #format(shot_id, tf.quaternion_distance(q_0, q_1), stddev2))
+                             #format(shot.id, tf.quaternion_distance(q_0, q_1), stddev2))
 
     ba.set_loss_function(config['loss_function'],
                          config['loss_function_threshold'])
@@ -284,7 +284,7 @@ def bundle_single_view(graph, reconstruction, shot_id, data):
 
     logger.debug(ba.brief_report())
 
-    s = ba.get_shot(str(shot_id))
+    s = ba.get_shot(str(shot.id))
     shot.pose.rotation = [s.rx, s.ry, s.rz]
     shot.pose.translation = [s.tx, s.ty, s.tz]
 
@@ -791,9 +791,9 @@ def bootstrap_reconstruction(data, graph, im1, im2, p1, p2):
         logger.info(report['decision'])
         return None, report
 
-    bundle_single_view(graph, reconstruction, im2, data)
+    bundle_single_view(graph, reconstruction, shot2, data)
     retriangulate(graph, reconstruction, data.config)
-    bundle_single_view(graph, reconstruction, im2, data)
+    bundle_single_view(graph, reconstruction, shot2, data)
 
     report['decision'] = 'Success'
     report['memory_usage'] = current_memory_usage()
@@ -844,7 +844,7 @@ def resect(data, graph, reconstruction, shot_id):
         return False, {'num_common_points': len(bs)}
 
     # remove features that are obviously wrong, according to pdr
-    #bs, Xs, track_ids = resection_culling_pdr(shot_id, reconstruction, data, bs, Xs, track_ids)
+    #bs, Xs, track_ids = cull_resection_pdr(shot_id, reconstruction, data, bs, Xs, track_ids)
 
     threshold = data.config['resection_threshold']
 
@@ -870,19 +870,31 @@ def resect(data, graph, reconstruction, shot_id):
     }
 
     if ninliers >= min_inliers:
-        R = T[:, :3].T
-        t = -R.dot(T[:, 3])
-        shot = types.Shot()
-        shot.id = shot_id
-        shot.camera = camera
-        shot.pose = types.Pose()
-        shot.pose.set_rotation_matrix(R)
-        shot.pose.translation = t
-        shot.metadata = get_image_metadata(data, shot_id)
-        reconstruction.add_shot(shot)
+        try:
+            R = T[:, :3].T
+            t = -R.dot(T[:, 3])
+            shot = types.Shot()
+            shot.id = shot_id
+            shot.camera = camera
+            shot.pose = types.Pose()
+            shot.pose.set_rotation_matrix(R)
+            shot.pose.translation = t
+            shot.metadata = get_image_metadata(data, shot_id)
+        except:
+            return False, report
 
-        bundle_single_view(graph, reconstruction, shot_id, data)
+        bundle_single_view(graph, reconstruction, shot, data)
+        reconstruction.add_shot(shot)
         return True, report
+
+        # check if rotation of this shot after bundle adjustment is close to what we are expecting
+        #is_pos_ok, is_rot_ok = validate_resection_pdr(reconstruction, data, shot)
+        #if is_pos_ok and is_rot_ok:
+            #reconstruction.add_shot(shot)
+            #return True, report
+        #else:
+            #logger.info("resection of {} failed. pos_ok {} rot_ok {}".format(shot_id, is_pos_ok, is_rot_ok))
+            #return False, report
     else:
         return False, report
 
@@ -971,7 +983,8 @@ class TrackTriangulator:
         
         return np.median( index_dists )*20.0
 
-    def triangulate(self, track, reproj_threshold, min_ray_angle_degrees, min_distance, max_distance, max_z_diff):
+    def triangulate(self, track, reproj_threshold, min_ray_angle_degrees,
+                    min_distance=0, max_distance=999999, max_z_diff=999999):
         """Triangulate track and add point to reconstruction."""
         os, bs = [], []
         for shot_id in self.graph[track]:
@@ -1297,8 +1310,6 @@ def grow_reconstruction_sequential(data, graph, reconstruction, images, gcp):
 
             break
         else:
-            if len(images) > 0:
-                logger.info("Some images can not be added {}".format(images))
             break
 
         max_recon_size = config.get( 'reconstruction_max_images', -1 )
@@ -1312,6 +1323,11 @@ def grow_reconstruction_sequential(data, graph, reconstruction, images, gcp):
     remove_outliers(graph, reconstruction, config)
     align_reconstruction_segments(reconstruction, gcp, config)
     paint_reconstruction(data, graph, reconstruction)
+
+    if len(images) > 0:
+        # remaining images may be ordered quite randomly, so sort them
+        images.sort()
+        logger.info("{} images can not be added {}".format(len(images), images))
 
     return reconstruction, report
 
@@ -1546,6 +1562,44 @@ def incremental_reconstruction(data):
     return report
 
 
+def remove_sky_features(data, graph):
+    """
+    remove features that has pitch angle above horizon. also remove
+    features that appear in more than 100 images (which are likely
+    features in the sky or from far away buildings)
+    :param data:
+    :param graph:
+    :return:
+    """
+    try:
+        cameras = data.load_camera_models()
+        camera = cameras[data.load_exif('0000000000.jpg')['camera']]
+    except:
+        return
+
+    tracks = []
+    for n in graph.nodes(data=True):
+        if n[1]['bipartite'] == 1:
+            tracks.append(n[0])
+
+    for track in tracks:
+        if len(graph[track]) > 100:
+            graph.remove_node(track)
+            continue
+
+        bad_count = 0
+        for shot_id in graph[track]:
+            x = graph[track][shot_id]['feature']
+            b = camera.pixel_bearing(x)
+
+            if b[1] < -0.00:
+                bad_count += 1
+
+            if bad_count > len(graph[track])/2:
+                graph.remove_node(track)
+                break
+
+
 def incremental_reconstruction_sequential(data):
     """Run the entire incremental reconstruction pipeline."""
     logger.info("Starting incremental reconstruction sequentially")
@@ -1555,6 +1609,10 @@ def incremental_reconstruction_sequential(data):
         data.invent_reference_lla()
 
     graph = data.load_tracks_graph()
+
+    if 'remove_sky_features' in data.config and data.config['remove_sky_features']:
+        remove_sky_features(data, graph)
+
     tracks, images = matching.tracks_and_images(graph)
 
     target_images = data.config.get('target_images', [] )
@@ -1604,7 +1662,7 @@ def incremental_reconstruction_sequential(data):
 
     for remaining_images in image_groups:
         curr_idx = 0
-        while curr_idx < len(remaining_images) - 1:
+        while curr_idx < len(remaining_images) - 1 > 0:
             im1 = remaining_images[curr_idx]
             im2 = remaining_images[curr_idx+1]
 
@@ -1615,6 +1673,7 @@ def incremental_reconstruction_sequential(data):
             rec_report = {}
             report['reconstructions'].append(rec_report)
             tracks, p1, p2 = common_tracks[im1, im2]
+
             reconstruction, rec_report['bootstrap'] = bootstrap_reconstruction(
                 data, graph, im1, im2, p1, p2)
 
@@ -1626,9 +1685,6 @@ def incremental_reconstruction_sequential(data):
                 reconstructions.append(reconstruction)
 
                 curr_idx = 0
-                logger.info("{} images remaining".format(len(remaining_images)))
-                if len(remaining_images) < 2:
-                    break
             else:
                 # bootstrap didn't work, try the next pair
                 curr_idx += 1

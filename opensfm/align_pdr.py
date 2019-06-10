@@ -100,17 +100,16 @@ def update_pdr_prediction_rotation(shot_id, reconstruction, data):
         q_1 = tf.quaternion_from_euler(prediction_1[0], prediction_1[1], prediction_1[2])
 
         if tf.quaternion_distance(q_0, q_1) > tolerance:
-            #logger.debug("{}, rotation prior based on {} {} differ by {} degrees".
-                         #format(shot_id, base_shot_id_0, base_shot_id_1, np.degrees(tf.quaternion_distance(q_0, q_1))))
             return prediction_0, 999999.0
 
+        # TODO: put 0.5 in config
         distance_to_base = abs(_shot_id_to_int(base_shot_id_0) - _shot_id_to_int(shot_id))
         return prediction_0, 0.5*distance_to_base
 
     return [0, 0, 0], 999999.0
 
 
-def resection_culling_pdr(shot_id, reconstruction, data, bs, Xs, track_ids):
+def cull_resection_pdr(shot_id, reconstruction, data, bs, Xs, track_ids):
     """
     use pdr rotation and position predictions to mask out questionable features before resection
     :param shot_id:
@@ -135,10 +134,11 @@ def resection_culling_pdr(shot_id, reconstruction, data, bs, Xs, track_ids):
 
             distances = np.linalg.norm(reprojected_bs - bs, axis=1)
 
-            # relax threshold if necessary to allow at least half of features through
+            # relax threshold until 90% of features are through
+            # TODO: put 90% in config
             for i in range(1, 100):
                 mask = distances < i*threshold
-                if int(sum(mask)) > max(len(mask)*0.8, min_inliers):
+                if int(sum(mask)) > max(len(mask)*0.9, min_inliers):
                     break
 
             if int(sum(mask)) < min_inliers:
@@ -153,6 +153,29 @@ def resection_culling_pdr(shot_id, reconstruction, data, bs, Xs, track_ids):
             return np.array(masked_bs), np.array(masked_Xs), masked_track_ids
 
     return bs, Xs, track_ids
+
+
+def validate_resection_pdr(reconstruction, data, shot):
+    if data.pdr_shots_exist():
+        p_sfm = shot.pose.get_origin()
+        p_pdr, stddev1 = update_pdr_prediction_position(shot.id, reconstruction, data)
+
+        p_dist = np.linalg.norm(p_pdr[:2] - p_sfm[:2])
+
+        r_sfm = _rotation_matrix_to_euler_angles(shot.pose.get_rotation_matrix())
+        r_pdr, stddev2 = update_pdr_prediction_rotation(shot.id, reconstruction, data)
+
+        q_0 = tf.quaternion_from_euler(r_pdr[0], r_pdr[1], r_pdr[2])
+        q_1 = tf.quaternion_from_euler(r_sfm[0], r_sfm[1], r_sfm[2])
+
+        r_dist = tf.quaternion_distance(q_0, q_1)
+
+        #if p_dist > stddev1*2 or r_dist > stddev2*2:
+            #logger.debug("validate_resection_pdr: p_dist {}, r_dist{}".format(p_dist, r_dist))
+
+        return p_dist < stddev1*2, r_dist < stddev2/2
+
+    return True, True
 
 
 def debug_rotation_prior(reconstruction, data):
@@ -672,19 +695,22 @@ def update_pdr_local(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor):
     :param scale_factor: reconstruction_scale_factor - scale factor feet per pixel
     :return: updated pdr prediction for shot_id
     """
-    # get sorted shot ids that are closest to shot_id (in sequence number)
-    sorted_shot_ids = get_closest_shots(shot_id, sfm_points_dict.keys())
-
     prev1 = _prev_shot_id(shot_id)
     prev2 = _prev_shot_id(prev1)
     next1 = _next_shot_id(shot_id)
     next2 = _next_shot_id(next1)
 
-    if (prev1 == sorted_shot_ids[0] and prev2 == sorted_shot_ids[1]) or \
-       (next1 == sorted_shot_ids[0] and next2 == sorted_shot_ids[1]):
-        dist_1_id = sorted_shot_ids[0]
-        dist_2_id = sorted_shot_ids[1]
+    dist_1_id = dist_2_id = None
+    if prev1 in sfm_points_dict and prev2 in sfm_points_dict:
+        dist_1_id = prev1
+        dist_2_id = prev2
+    elif next1 in sfm_points_dict and next2 in sfm_points_dict:
+        dist_1_id = next1
+        dist_2_id = next2
 
+    #logger.info("update_pdr_local: update {} based on {} {}".format(shot_id, dist_1_id, dist_2_id))
+
+    if dist_1_id and dist_2_id:
         dist_1_coords = sfm_points_dict[dist_1_id]
         dist_2_coords = sfm_points_dict[dist_2_id]
 
@@ -702,11 +728,13 @@ def update_pdr_local(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor):
         else:
             delta_distance = pdr_info_dist_1[6]
 
-        # TODO: put 100 in config
-        return position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), 100
+        # TODO: put 200 in config
+        return position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), 200
     else:
         # we cannot find 2 consecutive shots to extrapolate, so use 3 shots to estimate affine
-        return update_pdr_local_affine(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor, sorted_shot_ids)
+        #sorted_shot_ids = get_closest_shots(shot_id, sfm_points_dict.keys())
+        #return update_pdr_local_affine(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor, sorted_shot_ids)
+        return [0, 0, 0], 999999.0
 
 
 def update_pdr_local_affine(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor, sorted_shot_ids):
@@ -846,10 +874,10 @@ def get_dop(shot_id, deviation, gps_shot_ids):
         for gps_id in gps_shot_ids:
             distances.append(abs(_shot_id_to_int(gps_id)-shot_id_int))
 
-        # TODO: read default dop 100 from config
-        dop = 100 + min(distances)*10*(1+deviation)
+        # TODO: read default dop 200 from config
+        dop = 200 + min(distances)*100*(1+deviation)
     else:
-        dop = 100 * (1+deviation)
+        dop = 200 * (1+deviation)
 
     return dop
 
