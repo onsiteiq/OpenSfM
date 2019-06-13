@@ -9,6 +9,7 @@ from itertools import combinations
 
 from opensfm import geo
 from opensfm import multiview
+from opensfm import types
 from opensfm import transformations as tf
 
 from opensfm.debug_plot import debug_plot_pdr
@@ -50,6 +51,69 @@ def init_pdr_predictions(data):
     debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict)
 
     return pdr_predictions_dict
+
+
+def direct_align_pdr(data):
+    """
+    directly form a reconstruction based on pdr data
+    :param data:
+    :return: reconstruction
+    """
+    pdr_predictions_dict = init_pdr_predictions(data)
+
+    target_images = data.config.get('target_images', [])
+    cameras = data.load_camera_models()
+
+    reconstruction = types.Reconstruction()
+    reconstruction.cameras = cameras
+
+    for img in target_images:
+
+        camera = cameras[data.load_exif(img)['camera']]
+
+        shot = types.Shot()
+        shot.id = img
+        shot.camera = camera
+        shot.pose = types.Pose()
+
+        prev_img = _prev_shot_id(img)
+        next_img = _next_shot_id(img)
+
+        curr_coords = pdr_predictions_dict[img][:3]
+
+        prev_heading = next_heading = heading = None
+        if prev_img in pdr_predictions_dict:
+            prev_coords = pdr_predictions_dict[prev_img][:3]
+            prev_heading = np.arctan2(curr_coords[1] - prev_coords[1], curr_coords[0] - prev_coords[0])
+
+        if next_img in pdr_predictions_dict:
+            next_coords = pdr_predictions_dict[next_img][:3]
+            next_heading = np.arctan2(next_coords[1] - curr_coords[1], next_coords[0] - curr_coords[0])
+
+        if prev_heading and next_heading:
+            heading = 0.5 * (prev_heading + next_heading)
+        elif prev_heading:
+            heading = prev_heading
+        elif next_heading:
+            heading = next_heading
+
+        if not heading:
+            continue
+
+        Rp = _euler_angles_to_rotation_matrix([0, 0, heading])
+
+        t_shot = np.array(pdr_predictions_dict[img][:3])
+        tp = -Rp.dot(t_shot)
+
+        shot.pose.set_rotation_matrix(Rp)
+        shot.pose.translation = list(tp)
+
+        reconstruction.add_shot(shot)
+
+    reconstruction.alignment.aligned = True
+    reconstruction.alignment.num_correspondences = len(target_images)
+
+    return reconstruction
 
 
 def update_pdr_prediction_position(shot_id, reconstruction, data):
@@ -242,21 +306,21 @@ def align_reconstructions_to_pdr(reconstructions, data):
     pdr_shots_dict = data.load_pdr_shots()
     scale_factor = data.config['reconstruction_scale_factor']
 
-    pdr_predictions_dict = pdr_walkthrough(aligned_sfm_points_dict, pdr_shots_dict)
+    walkthrough_dict = pdr_walkthrough(aligned_sfm_points_dict, pdr_shots_dict)
 
     for reconstruction in reconstructions:
         if not reconstruction.alignment.aligned:
             reconstruction.alignment.aligned = \
-                align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict, gps_points_dict, scale_factor)
+                align_reconstruction_to_pdr(reconstruction, walkthrough_dict, gps_points_dict, scale_factor)
 
 
-def align_reconstruction_to_pdr(reconstruction, pdr_predictions_dict, gps_points_dict, scale_factor):
+def align_reconstruction_to_pdr(reconstruction, walkthrough_dict, gps_points_dict, scale_factor):
     """
     align one partial reconstruction to 'best' pdr predictions
     """
     recon_predictions_dict = {}
     for shot_id in reconstruction.shots:
-        recon_predictions_dict[shot_id] = pdr_predictions_dict[shot_id]
+        recon_predictions_dict[shot_id] = walkthrough_dict[shot_id]
 
     # sort shots in the reconstruction by distance value
     sorted_by_distance_shot_ids = sorted(recon_predictions_dict, key=lambda k: recon_predictions_dict[k][1])

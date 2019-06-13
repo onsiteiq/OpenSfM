@@ -105,14 +105,11 @@ def debug_plot_reconstructions(reconstructions):
     color_ind = 0
 
     for reconstruction in reconstructions:
-        if color_ind < len(colors):
-            color = colors[color_ind]
-            color_ind += 1
-        else:
-            color = colors[-1]
-
         if not reconstruction.alignment.aligned:
             color = 'red'
+        else:
+            color = colors[color_ind]
+            color_ind = (color_ind + 1) % len(colors)
 
         for shot in reconstruction.shots.values():
             if shot.metadata.gps_dop != 999999.0:

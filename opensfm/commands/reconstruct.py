@@ -84,7 +84,10 @@ class Command:
         # Run the incremental reconstruction
         
         if args.direct_align:
-            report = reconstruction.direct_align_reconstruction( data )
+            if data.pdr_shots_exist():
+                report = reconstruction.direct_align_reconstruction_pdr( data )
+            else:
+                report = reconstruction.direct_align_reconstruction( data )
         else:
             if data.pdr_shots_exist():
                 report = reconstruction.incremental_reconstruction_sequential( data )
