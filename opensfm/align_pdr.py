@@ -4,6 +4,7 @@ import operator
 import logging
 import math
 import numpy as np
+from cmath import rect, phase
 
 from itertools import combinations
 
@@ -91,7 +92,7 @@ def direct_align_pdr(data):
             next_heading = np.arctan2(next_coords[1] - curr_coords[1], next_coords[0] - curr_coords[0])
 
         if prev_heading and next_heading:
-            heading = 0.5 * (prev_heading + next_heading)
+            heading = phase((rect(1, prev_heading) + rect(1, next_heading)) * 0.5)
         elif prev_heading:
             heading = prev_heading
         elif next_heading:
@@ -100,12 +101,20 @@ def direct_align_pdr(data):
         if not heading:
             continue
 
-        Rp = _euler_angles_to_rotation_matrix([0, 0, heading])
+        # OpenSfM floorplan/gps coordinate system: x point right, y point back, z point down
+        # OpenSfM camera coordinate system:        x point right, y point down, z point forward
+        R = _euler_angles_to_rotation_matrix([np.pi*0.5, 0, np.pi*0.5+heading])
+
+        # below is equivalent to the above but gives more flexibility in specifying the order
+        # of euler angles if we need it
+        #q = tf.quaternion_from_euler(np.pi*0.5, 0, np.pi*0.5+heading)
+        #r = tf.quaternion_matrix(q)
+        #R = r[:3, :3]
 
         t_shot = np.array(pdr_predictions_dict[img][:3])
-        tp = -Rp.dot(t_shot)
+        tp = -R.T.dot(t_shot)
 
-        shot.pose.set_rotation_matrix(Rp)
+        shot.pose.set_rotation_matrix(R.T)
         shot.pose.translation = list(tp)
 
         reconstruction.add_shot(shot)
