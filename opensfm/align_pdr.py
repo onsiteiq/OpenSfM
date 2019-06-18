@@ -257,10 +257,9 @@ def debug_rotation_prior(reconstruction, data):
 
     for shot_id in reconstruction.shots:
         rotation_prior, dop = update_pdr_prediction_rotation(shot_id, reconstruction, data)
-        rotation_sfm = tf.euler_from_quaternion(tf.quaternion_from_matrix(reconstruction.shots[shot_id].pose.get_rotation_matrix()))
-
         q_p = tf.quaternion_from_euler(rotation_prior[0], rotation_prior[1], rotation_prior[2])
-        q_s = tf.quaternion_from_euler(rotation_sfm[0], rotation_sfm[1], rotation_sfm[2])
+
+        q_s = tf.quaternion_from_matrix(reconstruction.shots[shot_id].pose.get_rotation_matrix())
         logger.debug("{}, rotation prior/sfm distance is {} degrees".format(shot_id, np.degrees(tf.quaternion_distance(q_p, q_s))))
 
 
@@ -511,12 +510,27 @@ def position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_dist
     ref_coord = dist_1_coords
     ref_dir = np.arctan2(dist_1_coords[1] - dist_2_coords[1], dist_1_coords[0] - dist_2_coords[0])
 
-    curr_dir = ref_dir + delta_heading
+    curr_dir = ref_dir - delta_heading
     x = ref_coord[0] + delta_distance*np.cos(curr_dir)
     y = ref_coord[1] + delta_distance*np.sin(curr_dir)
     z = ref_coord[2]
 
     return [x, y, z]
+
+
+def get_rotation_ccs(pdr_rotation):
+    """
+    convert rotation in sensor coordinates to camera coordinates
+    :param pdr_rotation:
+    :return:
+    """
+    #r1 = _euler_angles_to_rotation_matrix([np.pi*0.5, 0, 0])
+    #r2 = _euler_angles_to_rotation_matrix(np.radians(pdr_rotation))
+
+    #return _rotation_matrix_to_euler_angles(r1.dot(r2))
+
+    q = tf.quaternion_from_euler(np.radians(pdr_rotation[0]), np.radians(pdr_rotation[1]), np.radians(-pdr_rotation[2]), axes='sxzy')
+    return tf.euler_from_quaternion(q, axes='sxyz')
 
 
 def rotation_extrapolate(shot_id, base_shot_id, reconstruction, data):
@@ -532,11 +546,11 @@ def rotation_extrapolate(shot_id, base_shot_id, reconstruction, data):
     """
     pdr_shots_dict = data.load_pdr_shots()
 
-    base_pdr_rotation = pdr_shots_dict[base_shot_id][3:6]
-    pdr_rotation = pdr_shots_dict[shot_id][3:6]
+    base_pdr_rotation = get_rotation_ccs(pdr_shots_dict[base_shot_id][3:6])
+    pdr_rotation = get_rotation_ccs(pdr_shots_dict[shot_id][3:6])
     base_sfm_rotation = reconstruction.shots[base_shot_id].pose.get_rotation_matrix()
 
-    qdiff = tf.quaternion_diff(np.radians(base_pdr_rotation), np.radians(pdr_rotation))
+    qdiff = tf.quaternion_diff(base_pdr_rotation, pdr_rotation)
     qr = tf.quaternion_from_matrix(base_sfm_rotation.T)
 
     qnew = tf.quaternion_inverse(tf.quaternion_multiply(qdiff, qr))
