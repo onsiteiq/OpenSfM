@@ -167,7 +167,7 @@ def update_pdr_prediction_rotation(shot_id, reconstruction, data):
 
         # 0.1 radians is roughly 6 degrees
         # TODO: put 0.1 in config
-        tolerance = 0.1
+        tolerance = 0.1 * abs(_shot_id_to_int(base_shot_id_0) - _shot_id_to_int(shot_id))
 
         q_0 = tf.quaternion_from_euler(prediction_0[0], prediction_0[1], prediction_0[2])
         q_1 = tf.quaternion_from_euler(prediction_1[0], prediction_1[1], prediction_1[2])
@@ -175,9 +175,7 @@ def update_pdr_prediction_rotation(shot_id, reconstruction, data):
         if tf.quaternion_distance(q_0, q_1) > tolerance:
             return prediction_0, 999999.0
 
-        # TODO: put 0.5 in config
-        distance_to_base = abs(_shot_id_to_int(base_shot_id_0) - _shot_id_to_int(shot_id))
-        return prediction_0, 0.5*distance_to_base
+        return prediction_0, tolerance
 
     return [0, 0, 0], 999999.0
 
@@ -228,39 +226,55 @@ def cull_resection_pdr(shot_id, reconstruction, data, bs, Xs, track_ids):
     return bs, Xs, track_ids
 
 
+def validate_position(reconstruction, data, shot):
+    p_sfm = shot.pose.get_origin()
+    p_pdr, stddev = update_pdr_prediction_position(shot.id, reconstruction, data)
+
+    p_dist = np.linalg.norm(p_pdr[:2] - p_sfm[:2])
+    if p_dist > stddev*2:
+        logger.debug("validate_position: p_dist {}".format(p_dist))
+
+    return p_dist < stddev*2
+
+
+def validate_rotation(reconstruction, data, shot):
+    r_sfm = _rotation_matrix_to_euler_angles(shot.pose.get_rotation_matrix())
+    r_pdr, stddev = update_pdr_prediction_rotation(shot.id, reconstruction, data)
+
+    q_0 = tf.quaternion_from_euler(r_pdr[0], r_pdr[1], r_pdr[2])
+    q_1 = tf.quaternion_from_euler(r_sfm[0], r_sfm[1], r_sfm[2])
+
+    r_dist = tf.quaternion_distance(q_0, q_1)
+
+    if r_dist > stddev:
+        logger.debug("validate_resection_pdr: r_dist{}".format(r_dist))
+
+    return r_dist < stddev
+
+
 def validate_resection_pdr(reconstruction, data, shot):
+    is_pos_ok = is_rot_ok = True
     if data.pdr_shots_exist():
-        p_sfm = shot.pose.get_origin()
-        p_pdr, stddev1 = update_pdr_prediction_position(shot.id, reconstruction, data)
+        is_pos_ok = validate_position(reconstruction, data, shot)
+        is_rot_ok = validate_rotation(reconstruction, data, shot)
 
-        p_dist = np.linalg.norm(p_pdr[:2] - p_sfm[:2])
-
-        r_sfm = _rotation_matrix_to_euler_angles(shot.pose.get_rotation_matrix())
-        r_pdr, stddev2 = update_pdr_prediction_rotation(shot.id, reconstruction, data)
-
-        q_0 = tf.quaternion_from_euler(r_pdr[0], r_pdr[1], r_pdr[2])
-        q_1 = tf.quaternion_from_euler(r_sfm[0], r_sfm[1], r_sfm[2])
-
-        r_dist = tf.quaternion_distance(q_0, q_1)
-
-        #if p_dist > stddev1*2 or r_dist > stddev2*2:
-            #logger.debug("validate_resection_pdr: p_dist {}, r_dist{}".format(p_dist, r_dist))
-
-        return p_dist < stddev1*2, r_dist < stddev2/2
-
-    return True, True
+    return is_pos_ok, is_rot_ok
 
 
 def debug_rotation_prior(reconstruction, data):
     if len(reconstruction.shots) < 3:
         return
 
+    dists = []
     for shot_id in reconstruction.shots:
         rotation_prior, dop = update_pdr_prediction_rotation(shot_id, reconstruction, data)
         q_p = tf.quaternion_from_euler(rotation_prior[0], rotation_prior[1], rotation_prior[2])
-
         q_s = tf.quaternion_from_matrix(reconstruction.shots[shot_id].pose.get_rotation_matrix())
-        logger.debug("{}, rotation prior/sfm distance is {} degrees".format(shot_id, np.degrees(tf.quaternion_distance(q_p, q_s))))
+
+        #logger.debug("{}, rotation prior/sfm distance is {} degrees".format(shot_id, np.degrees(tf.quaternion_distance(q_p, q_s))))
+        dists.append(np.degrees(tf.quaternion_distance(q_p, q_s)))
+
+    logger.debug("avg prior/sfm diff {} degrees".format(np.mean(np.array(dists))))
 
 
 def scale_reconstruction_to_pdr(reconstruction, data):
