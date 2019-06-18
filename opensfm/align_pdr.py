@@ -510,21 +510,12 @@ def position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_dist
     ref_coord = dist_1_coords
     ref_dir = np.arctan2(dist_1_coords[1] - dist_2_coords[1], dist_1_coords[0] - dist_2_coords[0])
 
-    curr_dir = ref_dir - delta_heading
+    curr_dir = ref_dir + delta_heading
     x = ref_coord[0] + delta_distance*np.cos(curr_dir)
     y = ref_coord[1] + delta_distance*np.sin(curr_dir)
     z = ref_coord[2]
 
     return [x, y, z]
-
-
-def get_rotation_floorplan(pdr_rotation):
-    """
-    convert rotation in sensor coordinates to floorplan/gps coordinates
-    :param pdr_rotation:
-    :return:
-    """
-    return _euler_angles_to_rotation_matrix([pdr_rotation[0], -pdr_rotation[1], -pdr_rotation[2]])
 
 
 def rotation_extrapolate(shot_id, base_shot_id, reconstruction, data):
@@ -540,8 +531,8 @@ def rotation_extrapolate(shot_id, base_shot_id, reconstruction, data):
     """
     pdr_shots_dict = data.load_pdr_shots()
 
-    base_pdr_rotation = get_rotation_floorplan(np.radians(pdr_shots_dict[base_shot_id][3:6]))
-    pdr_rotation = get_rotation_floorplan(np.radians(pdr_shots_dict[shot_id][3:6]))
+    base_pdr_rotation = _euler_angles_to_rotation_matrix(np.radians(pdr_shots_dict[base_shot_id][3:6]))
+    pdr_rotation = _euler_angles_to_rotation_matrix(np.radians(pdr_shots_dict[shot_id][3:6]))
     base_sfm_rotation = reconstruction.shots[base_shot_id].pose.get_rotation_matrix()
 
     return _rotation_matrix_to_euler_angles((pdr_rotation.dot(base_pdr_rotation.T).dot(base_sfm_rotation.T)).T)
