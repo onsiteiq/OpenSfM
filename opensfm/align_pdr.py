@@ -518,19 +518,14 @@ def position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_dist
     return [x, y, z]
 
 
-def get_rotation_ccs(pdr_rotation):
+def get_rotation_floorplan(pdr_rotation):
     """
     convert rotation in sensor coordinates to camera coordinates
     :param pdr_rotation:
     :return:
     """
-    #r1 = _euler_angles_to_rotation_matrix([np.pi*0.5, 0, 0])
-    #r2 = _euler_angles_to_rotation_matrix(np.radians(pdr_rotation))
-
-    #return _rotation_matrix_to_euler_angles(r1.dot(r2))
-
-    q = tf.quaternion_from_euler(np.radians(pdr_rotation[0]), np.radians(pdr_rotation[1]), np.radians(-pdr_rotation[2]), axes='sxzy')
-    return tf.euler_from_quaternion(q, axes='sxyz')
+    q = tf.quaternion_from_euler(pdr_rotation[0], -pdr_rotation[1], -pdr_rotation[2])
+    return tf.euler_from_quaternion(q)
 
 
 def rotation_extrapolate(shot_id, base_shot_id, reconstruction, data):
@@ -546,8 +541,8 @@ def rotation_extrapolate(shot_id, base_shot_id, reconstruction, data):
     """
     pdr_shots_dict = data.load_pdr_shots()
 
-    base_pdr_rotation = get_rotation_ccs(pdr_shots_dict[base_shot_id][3:6])
-    pdr_rotation = get_rotation_ccs(pdr_shots_dict[shot_id][3:6])
+    base_pdr_rotation = get_rotation_floorplan(np.radians(pdr_shots_dict[base_shot_id][3:6]))
+    pdr_rotation = get_rotation_floorplan(np.radians(pdr_shots_dict[shot_id][3:6]))
     base_sfm_rotation = reconstruction.shots[base_shot_id].pose.get_rotation_matrix()
 
     qdiff = tf.quaternion_diff(base_pdr_rotation, pdr_rotation)
