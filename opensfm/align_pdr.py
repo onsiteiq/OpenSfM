@@ -531,11 +531,16 @@ def rotation_extrapolate(shot_id, base_shot_id, reconstruction, data):
     """
     pdr_shots_dict = data.load_pdr_shots()
 
+    # calculate delta rotation
     base_pdr_rotation = _euler_angles_to_rotation_matrix(np.radians(pdr_shots_dict[base_shot_id][3:6]))
     pdr_rotation = _euler_angles_to_rotation_matrix(np.radians(pdr_shots_dict[shot_id][3:6]))
-    base_sfm_rotation = reconstruction.shots[base_shot_id].pose.get_rotation_matrix()
+    delta_rotation = pdr_rotation.dot(base_pdr_rotation.T)
 
-    return _rotation_matrix_to_euler_angles((pdr_rotation.dot(base_pdr_rotation.T).dot(base_sfm_rotation.T)).T)
+    # get sfm rotation of base shot
+    base_sfm_rotation = reconstruction.shots[base_shot_id].pose.get_rotation_matrix().T
+
+    # return prediction
+    return _rotation_matrix_to_euler_angles((delta_rotation.dot(base_sfm_rotation)).T)
 
 
 def transform_reconstruction(reconstruction, ref_shots_dict):
