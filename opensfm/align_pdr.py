@@ -520,12 +520,11 @@ def position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_dist
 
 def get_rotation_floorplan(pdr_rotation):
     """
-    convert rotation in sensor coordinates to camera coordinates
+    convert rotation in sensor coordinates to floorplan/gps coordinates
     :param pdr_rotation:
     :return:
     """
-    q = tf.quaternion_from_euler(pdr_rotation[0], -pdr_rotation[1], -pdr_rotation[2])
-    return tf.euler_from_quaternion(q)
+    return _euler_angles_to_rotation_matrix([pdr_rotation[0], -pdr_rotation[1], -pdr_rotation[2]])
 
 
 def rotation_extrapolate(shot_id, base_shot_id, reconstruction, data):
@@ -545,12 +544,7 @@ def rotation_extrapolate(shot_id, base_shot_id, reconstruction, data):
     pdr_rotation = get_rotation_floorplan(np.radians(pdr_shots_dict[shot_id][3:6]))
     base_sfm_rotation = reconstruction.shots[base_shot_id].pose.get_rotation_matrix()
 
-    qdiff = tf.quaternion_diff(base_pdr_rotation, pdr_rotation)
-    qr = tf.quaternion_from_matrix(base_sfm_rotation.T)
-
-    qnew = tf.quaternion_inverse(tf.quaternion_multiply(qdiff, qr))
-
-    return tf.euler_from_quaternion(qnew)
+    return _rotation_matrix_to_euler_angles((pdr_rotation.dot(base_pdr_rotation.T).dot(base_sfm_rotation.T)).T)
 
 
 def transform_reconstruction(reconstruction, ref_shots_dict):
