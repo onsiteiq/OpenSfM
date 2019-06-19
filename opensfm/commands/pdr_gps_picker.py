@@ -11,26 +11,28 @@ logger = logging.getLogger(__name__)
 
 
 class LabeledCircle(object):
-    def __init__(self, ax, shot_id, center, radius, color, alpha=1.0, fontsize=6):
+    def __init__(self, shot_id, center, radius=50, color='r', alpha=1.0, font_size=6):
         self.center = center
-        self.fontsize = fontsize
+        self.font_size = font_size
 
         self.circle = patches.Circle(center, radius, fc=color, alpha=alpha)
         self.text = str(_shot_id_to_int(shot_id))
 
+    def show(self, ax):
         ax.add_patch(self.circle)
         ax.text(self.center, self.text, fontsize=self.fontsize)
 
-    def move(self, center):
+    #def move(self, center):
+
 
 class DragMover(object):
 
-    def __init__(self, artists):
+    def __init__(self, fig, ax, shot_objs):
         self.artists = artists
         self.colors = [a.get_facecolor() for a in self.artists]
         # assume all artists are in the same figure, otherwise selection is meaningless
-        self.fig = self.artists[0].figure
-        self.ax = self.artists[0].axes
+        self.fig = fig
+        self.ax = ax
 
         self.fig.canvas.mpl_connect('button_press_event', self.on_press)
         self.fig.canvas.mpl_connect('button_release_event', self.on_release)
@@ -109,10 +111,10 @@ def draw_floor_plan(plan_path):
     img = cv2.imread(plan_path, cv2.IMREAD_COLOR)
     ax.imshow(img)
 
-    return ax
+    return fig, ax
 
 
-def load_pdr_shots(ax, pdr_shots_path):
+def load_pdr_shots(pdr_shots_path):
     """
     draw pdr shots
     """
@@ -125,12 +127,21 @@ def load_pdr_shots(ax, pdr_shots_path):
                                        float(roll), float(pitch), float(heading),
                                        float(delta_distance))
 
-    circles = [patches.Circle((400.0, 400.0), 100, fc='r', alpha=1.0),
-               patches.Circle((1000.0, 1000.0), 100, fc='b', alpha=1.0),
-               patches.Circle((2000.0, 2000.0), 100, fc='g', alpha=1.0)]
+    shot_objs = []
+    for shot_id in pdr_shots_dict:
+        shot_obj = LabeledCircle(shot_id, pdr_shots_dict[shot_id][0:2])
+        shot_objs.append(shot_obj)
 
-    for circle in circles:
-        ax.add_patch(circle)
+    return shot_objs
+
+    #circles = [patches.Circle((400.0, 400.0), 100, fc='r', alpha=1.0),
+               #patches.Circle((1000.0, 1000.0), 100, fc='b', alpha=1.0),
+               #patches.Circle((2000.0, 2000.0), 100, fc='g', alpha=1.0)]
+
+    #for circle in circles:
+        #ax.add_patch(circle)
+
+    #return circles
 
 
 def pdr_gps_picker(plan_path, pdr_shots_path):
@@ -138,13 +149,13 @@ def pdr_gps_picker(plan_path, pdr_shots_path):
     main routine to launch gps picker
     """
     # draw floor plan
-    ax = draw_floor_plan(plan_path)
+    fig, ax = draw_floor_plan(plan_path)
 
     # load pdr shots
-    shots = load_pdr_shots(pdr_shots_path)
+    shot_objs = load_pdr_shots(pdr_shots_path)
 
     # start drag mover
-    drag_mover = DragMover(ax, shots)
+    drag_mover = DragMover(fig, ax, shot_objs)
 
     plt.show()
 
