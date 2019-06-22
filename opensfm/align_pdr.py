@@ -116,6 +116,61 @@ def direct_align_pdr(data):
     return reconstruction
 
 
+def update_gps_picker(curr_gps_points_dict, pdr_shots_dict, scale_factor, num_extrapolation):
+    """
+    globally align pdr path to current set of gps shots. return pdr predictions for
+    the first x + num_extrapolation shots, where x is the largest sequence number in
+    current gps shots.
+
+    when there is no gps point, no alignment is done, instead, this function returns
+    a scaled version of the pdr path, so that gps pickers can see it and easily work
+    with it on the floor plan
+
+    when there is one gps point, no alignment is done, instead, this function simply
+    shifts the pdr path so it overlaps with that single gps point
+
+    :param curr_gps_points:
+    :param pdr_shots_dict:
+    :param scale_factor:
+    :param num_extrapolation:
+    :return:
+    """
+    pdr_predictions_dict = {}
+
+    scaled_pdr_shots_dict = {}
+    for shot_id in pdr_shots_dict:
+        scaled_pdr_shots_dict[shot_id] = (pdr_shots_dict[shot_id][0]/(scale_factor * 0.3048),
+                                          pdr_shots_dict[shot_id][1]/(scale_factor * 0.3048), 0)
+
+    if len(curr_gps_points_dict) < 2:
+        if len(curr_gps_points_dict) < 1:
+            offset = (2000, 2000, 0)
+            num = num_extrapolation
+        else:
+            for shot_id in curr_gps_points_dict:
+                offset = tuple(np.subtract(curr_gps_points_dict[shot_id],
+                                           scaled_pdr_shots_dict[shot_id]))
+                num = _shot_id_to_int(shot_id) + num_extrapolation
+
+        for i in range(num):
+            shot_id = _int_to_shot_id(i)
+            pdr_predictions_dict[shot_id] = tuple(map(sum, zip(offset, scaled_pdr_shots_dict[shot_id])))
+    else:
+        if len(curr_gps_points_dict) == 2:
+            all_predictions_dict = update_pdr_global_2d(curr_gps_points_dict, pdr_shots_dict, scale_factor, False)
+        else:
+            all_predictions_dict = update_pdr_global(curr_gps_points_dict, pdr_shots_dict, scale_factor)
+
+        sorted_gps_ids = sorted(curr_gps_points_dict.keys(), reverse=True)
+        num = _shot_id_to_int(sorted_gps_ids[0]) + num_extrapolation
+
+        for i in range(num):
+            shot_id = _int_to_shot_id(i)
+            pdr_predictions_dict[shot_id] = all_predictions_dict[shot_id]
+
+    return pdr_predictions_dict
+
+
 def update_pdr_prediction_position(shot_id, reconstruction, data):
     if data.pdr_shots_exist():
         if len(reconstruction.shots) < 3:
@@ -601,7 +656,7 @@ def reposition_reconstruction(reconstruction, recon_predictions_dict):
         reconstruction.shots[shot_id].pose.set_origin(recon_predictions_dict[shot_id][0])
 
 
-def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor):
+def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad=True):
     """
     *globally* align pdr predictions to GPS points (not used, kept code)
 
@@ -610,6 +665,7 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor):
     :param gps_points_dict: gps points in topocentric coordinates
     :param pdr_shots_dict: position of each shot as predicted by pdr
     :param scale_factor: reconstruction_scale_factor
+    :param skip_bad: avoid bad alignment sections
     :return: aligned pdr shot predictions
     """
     if len(gps_points_dict) < 2 or len(pdr_shots_dict) < 2:
@@ -642,7 +698,7 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor):
         [x, y, z] = _rotation_matrix_to_euler_angles(A)
         logger.info("rotation=%f, %f, %f", np.degrees(x), np.degrees(y), np.degrees(z))
 
-        if not ((0.50 * expected_scale) < s < (2.0 * expected_scale)):
+        if skip_bad and not ((0.50 * expected_scale) < s < (2.0 * expected_scale)):
             logger.info("s/expected_scale={}, discard".format(s/expected_scale))
             continue
 
@@ -653,7 +709,8 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor):
         # in last iteration, we transform pdr until last shot
         if i == 0:
             start_shot_id = _int_to_shot_id(0)
-        elif i == len(gps_points_dict)-2:
+
+        if i == len(gps_points_dict)-2:
             end_shot_id = _int_to_shot_id(len(pdr_shots_dict)-1)
 
         new_dict = apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id,
@@ -664,16 +721,18 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor):
     return pdr_predictions_dict
 
 
-def update_pdr_global(gps_points_dict, pdr_shots_dict, scale_factor, stride_len=3):
+def update_pdr_global(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad=True, stride_len=3):
     """
     *globally* align pdr predictions to GPS points
 
-    Move a sliding window through the gps points and get 3 neighboring points at a time;
+    Move a sliding window through the gps points and get stride_len neighboring points at a time;
     use them to piece-wise affine transform pdr predictions to align with GPS points
 
     :param gps_points_dict: gps points in topocentric coordinates
     :param pdr_shots_dict: position of each shot as predicted by pdr
     :param scale_factor: reconstruction_scale_factor - scale factor feet per pixel
+    :param skip_bad: avoid bad alignment sections
+    :param stride_len: how many gps points are used for each section
     :return: aligned pdr shot predictions - [x, y, z, dop]
     """
     if len(gps_points_dict) < stride_len or len(pdr_shots_dict) < stride_len:
@@ -712,13 +771,13 @@ def update_pdr_global(gps_points_dict, pdr_shots_dict, scale_factor, stride_len=
 
         # if deviation is very large, skip it
         deviation = math.fabs(1.0 - ratio)
-        if deviation > 0.5:
+        if skip_bad and deviation > 0.5:
             last_deviation = 1.0
             continue
 
         # if x/y rotation is not close to 0, then likely it's 'flipped' and no good
         [x, y, z] = _rotation_matrix_to_euler_angles(A)
-        if math.fabs(x) > 1.0 or math.fabs(y) > 1.0:
+        if skip_bad and (math.fabs(x) > 1.0 or math.fabs(y) > 1.0):
             last_deviation = 1.0
             continue
 
