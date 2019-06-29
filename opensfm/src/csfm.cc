@@ -5,6 +5,7 @@
 #include "types.h"
 #include "hahog.cc"
 #include "multiview.cc"
+#include "notch_filter.cc"
 #include "akaze.cc"
 #include "bundle.h"
 #include "openmvs_exporter.h"
@@ -67,6 +68,8 @@ PYBIND11_MODULE(csfm, m) {
 
   m.def("triangulate_bearings_dlt", csfm::TriangulateBearingsDLT);
   m.def("triangulate_bearings_midpoint", csfm::TriangulateBearingsMidpoint);
+
+  m.def("run_notch_filter", csfm::RunNotchFilter);
 
   py::class_<BundleAdjuster>(m, "BundleAdjuster")
     .def(py::init())
