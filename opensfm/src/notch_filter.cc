@@ -12,12 +12,55 @@ void fftshift(const Mat& inputImg, Mat& outputImg);
 void filter2DFreq(const Mat& inputImg, Mat& outputImg, const Mat& H);
 void synthesizeFilterH(Mat& inputOutput_H, Point center, int radius);
 void calcPSD(const Mat& inputImg, Mat& outputImg, int flag = 0);
+float medianMat(Mat input);
+
+bool IsBandingPresent(char *filename)
+{
+    Mat imgIn = imread(filename, IMREAD_GRAYSCALE);
+    if (imgIn.empty()) //check whether the image is loaded or not
+    {
+        cout << "ERROR : Image cannot be loaded..!!" << endl;
+        return false;
+    }
+
+    imgIn.convertTo(imgIn, CV_32F);
+
+    // it needs to process even image only
+    Rect roi = Rect(0, 0, imgIn.cols & -2, imgIn.rows & -2);
+    imgIn = imgIn(roi);
+
+    // PSD calculation (start)
+    Mat imgPSD;
+    calcPSD(imgIn, imgPSD, 0);
+    fftshift(imgPSD, imgPSD);
+    // PSD calculation (stop)
+
+    // it is observed we normally have horizontal banding at ~6Hz, and significant harmonics
+    // at its odd multiples (3x, 5x). so below by going through 4-20Hz, we catch fundamental
+    // banding frequency plus its 3x harmonics (not really necessary but rather be safe).
+    for (int i=4; i<20; i++)
+    {
+        // test region is a narrow horizontal strip
+        Mat testRegion = Mat(imgPSD, Rect(imgPSD.cols/2-5, imgPSD.rows/2-i, 10, 2)).clone();
+
+        float medianVal = medianMat(testRegion);
+        float ratio = imgPSD.at<float>(imgPSD.rows/2-i, imgPSD.cols/2) / medianVal;
+
+        cout << "i=" << i << ", ratio=" << ratio << endl;
+        if(ratio > 20.0f)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 py::object RunNotchFilter()
 {
     py::list retval;
 
-    Mat imgIn = imread("input.jpg", IMREAD_GRAYSCALE);
+    Mat imgIn = imread("test3.jpg", IMREAD_GRAYSCALE);
     if (imgIn.empty()) //check whether the image is loaded or not
     {
         cout << "ERROR : Image cannot be loaded..!!" << endl;
@@ -26,39 +69,54 @@ py::object RunNotchFilter()
 
     imgIn.convertTo(imgIn, CV_32F);
 
-//! [main]
     // it needs to process even image only
     Rect roi = Rect(0, 0, imgIn.cols & -2, imgIn.rows & -2);
     imgIn = imgIn(roi);
 
     // PSD calculation (start)
     Mat imgPSD;
-    calcPSD(imgIn, imgPSD);
+    calcPSD(imgIn, imgPSD, 1);
     fftshift(imgPSD, imgPSD);
     normalize(imgPSD, imgPSD, 0, 255, NORM_MINMAX);
     // PSD calculation (stop)
 
     //H calculation (start)
+    // NOTE: H = synthesizeFilterH returns a filter that's shifted with 0 at center.
     Mat H = Mat(roi.size(), CV_32F, Scalar(1));
-    const int r = 21;
-    synthesizeFilterH(H, Point(705, 458), r);
-    synthesizeFilterH(H, Point(850, 391), r);
-    synthesizeFilterH(H, Point(993, 325), r);
+    const int r = 1;
+    synthesizeFilterH(H, Point(imgIn.cols/2, imgIn.rows/2-2), r);
+    synthesizeFilterH(H, Point(imgIn.cols/2, imgIn.rows/2-3), r);
+    synthesizeFilterH(H, Point(imgIn.cols/2, imgIn.rows/2-5), r);
+    synthesizeFilterH(H, Point(imgIn.cols/2, imgIn.rows/2-15), r);
+    synthesizeFilterH(H, Point(imgIn.cols/2, imgIn.rows/2-25), r);
+    synthesizeFilterH(H, Point(imgIn.cols/2, imgIn.rows/2-35), r);
+    synthesizeFilterH(H, Point(imgIn.cols/2, imgIn.rows/2-45), r);
+    synthesizeFilterH(H, Point(imgIn.cols/2, imgIn.rows/2-55), r);
+    synthesizeFilterH(H, Point(imgIn.cols/2, imgIn.rows/2-65), r);
+    synthesizeFilterH(H, Point(imgIn.cols/2, imgIn.rows/2-75), r);
+    synthesizeFilterH(H, Point(imgIn.cols/2, imgIn.rows/2-85), r);
     //H calculation (stop)
+
     // filtering (start)
+    // NOTE: filtering runs on spectrum of image that's NOT shifted. but H was created above with 0 at center,
+    // so shifted it back first, then do filtering
     Mat imgOut;
     fftshift(H, H);
     filter2DFreq(imgIn, imgOut, H);
     // filtering (stop)
-//! [main]
 
+    // write result and PSD out
     imgOut.convertTo(imgOut, CV_8U);
     normalize(imgOut, imgOut, 0, 255, NORM_MINMAX);
     imwrite("result.jpg", imgOut);
     imwrite("PSD.jpg", imgPSD);
+
+    // write H out
+    // NOTE: shift H again so it has 0 at center for display
     fftshift(H, H);
     normalize(H, H, 0, 255, NORM_MINMAX);
     imwrite("filter.jpg", H);
+
     return retval;
 }
 
@@ -147,5 +205,16 @@ void calcPSD(const Mat& inputImg, Mat& outputImg, int flag)
     }
 }
 //! [calcPSD]
+
+float medianMat(Mat Input)
+{
+    Input = Input.reshape(0,1); // spread Input Mat to single row
+    std::vector<float> vecFromMat;
+    Input.copyTo(vecFromMat); // Copy Input Mat to vector vecFromMat
+    std::sort( vecFromMat.begin(), vecFromMat.end() ); // sort vecFromMat
+
+    if (vecFromMat.size()%2==0) {return (vecFromMat[vecFromMat.size()/2-1]+vecFromMat[vecFromMat.size()/2])/2;} // in case of even-numbered matrix
+    return vecFromMat[(vecFromMat.size()-1)/2]; // odd-number of elements in matrix
+}
 
 }

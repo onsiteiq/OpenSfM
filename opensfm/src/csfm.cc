@@ -70,6 +70,7 @@ PYBIND11_MODULE(csfm, m) {
   m.def("triangulate_bearings_midpoint", csfm::TriangulateBearingsMidpoint);
 
   m.def("run_notch_filter", csfm::RunNotchFilter);
+  m.def("is_banding_present", csfm::IsBandingPresent);
 
   py::class_<BundleAdjuster>(m, "BundleAdjuster")
     .def(py::init())
