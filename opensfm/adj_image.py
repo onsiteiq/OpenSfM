@@ -14,18 +14,17 @@ beta_max = 200
 gamma = 0.5
 gamma_max = 200
 
-def basicLinearTransform():
+
+def basic_linear_transform():
     return cv.convertScaleAbs(img_original, alpha=alpha, beta=beta)
  
 
-def gammaCorrection():
-    ## [changing-contrast-brightness-gamma-correction]
+def gamma_correction():
     lookUpTable = np.empty((1,256), np.uint8)
     for i in range(256):
         lookUpTable[0,i] = np.clip(pow(i / 255.0, gamma) * 255.0, 0, 255)
 
     return cv.LUT(img_original, lookUpTable)
-    ## [changing-contrast-brightness-gamma-correction]
 
 
 def remove_stripe_fw(image_original, level=None, wname='db5', sigma=2, pad=True):
@@ -78,25 +77,26 @@ def remove_stripe_fw(image_original, level=None, wname='db5', sigma=2, pad=True)
 
     return cv.rotate(image_rotated, cv.ROTATE_90_COUNTERCLOCKWISE)
 
+
 # Entry point
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Code for Changing the contrast and brightness')
     parser.add_argument('--input', help='Path to input image.', default='lena.jpg')
     args = parser.parse_args()
 
-    img_original = cv.imread(cv.samples.findFile(args.input))
+    img_original = cv.imread(args.input)
     if img_original is None:
         print('Could not open or find the image: ', args.input)
         exit(0)
 
-    ##img_corrected = gammaCorrection()
-    #img_corrected = basicLinearTransform()
-    img_corrected = remove_stripe_fw(img_original)
+    if csfm.is_banding_present(args.input):
+        #csfm.run_notch_filter()
+        ##img_corrected = gamma_correction()
+        #img_corrected = basic_linear_transform()
+        img_corrected = remove_stripe_fw(img_original)
 
-    output_filename = args.input + ".new.jpg"
-    cv.imwrite(output_filename, img_corrected)
+        output_filename = args.input + ".new.jpg"
+        cv.imwrite(output_filename, img_corrected)
 
-    csfm.is_banding_present(args.input)
-    #csfm.run_notch_filter()
 
 

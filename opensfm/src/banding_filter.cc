@@ -36,12 +36,12 @@ bool IsBandingPresent(char *filename)
     // PSD calculation (stop)
 
     // it is observed we normally have horizontal banding at ~6Hz, and significant harmonics
-    // at its odd multiples (3x, 5x). so below by going through 4-20Hz, we catch fundamental
-    // banding frequency plus its 3x harmonics (not really necessary but rather be safe).
-    for (int i=4; i<20; i++)
+    // at its odd multiples (3x, 5x). so below by going through 4-40Hz, we catch fundamental
+    // banding frequency plus its 3x, 5x harmonics (not really necessary but rather be safe).
+    for (int i=5; i<40; i++)
     {
         // test region is a narrow horizontal strip
-        Mat testRegion = Mat(imgPSD, Rect(imgPSD.cols/2-5, imgPSD.rows/2-i, 10, 2)).clone();
+        Mat testRegion = Mat(imgPSD, Rect(imgPSD.cols/2-5, imgPSD.rows/2-i, 11, 3)).clone();
 
         float medianVal = medianMat(testRegion);
         float ratio = imgPSD.at<float>(imgPSD.rows/2-i, imgPSD.cols/2) / medianVal;
