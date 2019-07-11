@@ -5,7 +5,7 @@
 #include "types.h"
 #include "hahog.cc"
 #include "multiview.cc"
-#include "notch_filter.cc"
+#include "banding_filter.cc"
 #include "akaze.cc"
 #include "bundle.h"
 #include "openmvs_exporter.h"

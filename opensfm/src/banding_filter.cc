@@ -46,13 +46,14 @@ bool IsBandingPresent(char *filename)
         float medianVal = medianMat(testRegion);
         float ratio = imgPSD.at<float>(imgPSD.rows/2-i, imgPSD.cols/2) / medianVal;
 
-        cout << "i=" << i << ", ratio=" << ratio << endl;
         if(ratio > 20.0f)
         {
+            cout << filename << ": banding found at " << i << "Hz, processing" << endl;
             return true;
         }
     }
 
+    cout << filename << ": no banding found, skip" << endl;
     return false;
 }
 
