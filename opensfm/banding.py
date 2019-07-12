@@ -1,8 +1,8 @@
 from __future__ import print_function
 from __future__ import division
 import os
-import subprocess
 import shutil
+import ntpath
 import logging
 import glob
 import cv2 as cv
@@ -47,11 +47,17 @@ def remove_banding(config, oiq_proc_dir):
         for mkv_file in mkv_files:
             # step 1 - use ffmpeg to extract frames from mkv file
             #subprocess.call(['ffmpeg', '-i', mkv_file, 'img%04d.jpg', '-codec', 'copy'])
-            ffmpeg.input(mkv_file).output('img%04d*.jpg').run()
+            ffmpeg.input(mkv_file).output('%04d.jpg').run()
 
             # step 2 - call horizontal_banding_removal for each frame
-            img_files = sorted(glob.glob(os.path.join(valid_dir, 'img*.jpg')))
+            img_files = sorted(glob.glob(os.path.join(valid_dir, '*.jpg')))
             for img_file in img_files:
+
+                # TESTING
+                if _shot_id_to_int(ntpath.basename(img_file)) > 10:
+                    os.remove(img_file)
+                    continue
+
                 img_original = cv.imread(img_file)
                 if csfm.is_banding_present(img_file):
                     #csfm.run_notch_filter()
@@ -66,11 +72,12 @@ def remove_banding(config, oiq_proc_dir):
             shutil.move(mkv_file, mkv_file_orig)
 
             #subprocess.call(['ffmpeg', '-i', 'img%04d.jpg', '-r', '7', '-codec', 'copy', mkv_file])
-            ffmpeg.input('img%04d*.jpg').output(mkv_file).run()
+            ffmpeg.input('%04d.jpg').output(mkv_file).run()
 
             # step 4 - clean up
             for img_file in img_files:
-                os.remove(img_file)
+                if os.path.exists(img_file):
+                    os.remove(img_file)
 
 
 def basic_linear_transform(img_original):
@@ -146,17 +153,25 @@ def horizontal_banding_removal(image_original, level=None, wname='db5', sigma=5.
     return cv.rotate(image_rotated, cv.ROTATE_90_COUNTERCLOCKWISE)
 
 
+def _shot_id_to_int(shot_id):
+    """
+    Returns: shot id to integer
+    """
+    tokens = shot_id.split(".")
+    return int(tokens[0])
+
+
 # Entry point
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='correct banding')
     parser.add_argument('--input', help='Path to input images.', default='./')
     args = parser.parse_args()
 
-    img_original = cv.imread(args.input)
+    img = cv.imread(args.input)
     if csfm.is_banding_present(args.input):
         # csfm.run_notch_filter()
-        ##img_corrected = gamma_correction(img_original)
-        # img_corrected = basic_linear_transform(img_original)
-        img_corrected = horizontal_banding_removal(img_original)
+        ##img_corrected = gamma_correction(img)
+        # img_corrected = basic_linear_transform(img)
+        img_corrected = horizontal_banding_removal(img)
 
         cv.imwrite(args.input + ".new.jpg", img_corrected)
