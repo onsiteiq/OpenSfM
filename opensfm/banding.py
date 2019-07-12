@@ -26,15 +26,20 @@ gamma_max = 200
 
 
 def remove_banding(config, oiq_proc_dir):
+    raw_dir = os.path.join(oiq_proc_dir, "RAW IMAGES")
     nctech_dir = os.path.join(oiq_proc_dir, "nctech_imu")
 
     # find raw mkv files input
-    valid_dir = oiq_proc_dir
-    mkv_files = glob.glob(os.path.join(oiq_proc_dir, '*.mkv'))
+    valid_dir = raw_dir
+    mkv_files = glob.glob(os.path.join(raw_dir, '*.mkv'))
 
     if not mkv_files:
         valid_dir = nctech_dir
         mkv_files = glob.glob(os.path.join(nctech_dir, '*.mkv'))
+
+        if not mkv_files:
+            valid_dir = oiq_proc_dir
+            mkv_files = glob.glob(os.path.join(oiq_proc_dir, '*.mkv'))
 
     if mkv_files:
         os.chdir(valid_dir)
@@ -80,7 +85,7 @@ def gamma_correction(img_original):
     return cv.LUT(img_original, lookUpTable)
 
 
-def horizontal_banding_removal(image_original, level=None, wname='db5', sigma=2, pad=True):
+def horizontal_banding_removal(image_original, level=None, wname='db5', sigma=5.0, pad=True):
     '''
     implements algorithm described in "Stripe and ring artifact removal with combined
     wavelet — Fourier filtering"
@@ -147,4 +152,11 @@ if __name__ == "__main__":
     parser.add_argument('--input', help='Path to input images.', default='./')
     args = parser.parse_args()
 
-    remove_banding(args.input)
+    img_original = cv.imread(args.input)
+    if csfm.is_banding_present(args.input):
+        # csfm.run_notch_filter()
+        ##img_corrected = gamma_correction(img_original)
+        # img_corrected = basic_linear_transform(img_original)
+        img_corrected = horizontal_banding_removal(img_original)
+
+        cv.imwrite(args.input + ".new.jpg", img_corrected)
