@@ -41,7 +41,7 @@ def remove_banding(config, oiq_proc_dir):
             valid_dir = oiq_proc_dir
             mkv_files = glob.glob(os.path.join(oiq_proc_dir, '*.mkv'))
 
-    if mkv_files:
+    if mkv_files and len(mkv_files) == 4:
         os.chdir(valid_dir)
 
         for mkv_file in mkv_files:
@@ -53,17 +53,28 @@ def remove_banding(config, oiq_proc_dir):
             img_files = sorted(glob.glob(os.path.join(valid_dir, '*.jpg')))
             for img_file in img_files:
 
-                # TESTING
+                # TESTING - only correct 10 images
                 if _shot_id_to_int(ntpath.basename(img_file)) > 10:
-                    os.remove(img_file)
                     continue
 
-                img_original = cv.imread(img_file)
                 if csfm.is_banding_present(img_file):
+                    img_original = cv.imread(img_file)
                     #csfm.run_notch_filter()
                     ##img_corrected = gamma_correction(img_original)
                     #img_corrected = basic_linear_transform(img_original)
                     img_corrected = horizontal_banding_removal(img_original)
+
+                    # high intensity pixels' color is distorted by the filtering process above.
+                    # so we replace them by their original values
+                    grayscaled = cv.cvtColor(img_original, cv.COLOR_BGR2GRAY)
+                    retval, mask = cv.threshold(grayscaled, 220, 255, cv.THRESH_BINARY)
+                    img_corrected[mask == 255] = img_original[mask == 255]
+
+                    # there is a 72x64 pixel area in each raw image that appears to be 2D barcode
+                    # used by the NC Tech Immersive Studio. don't know if the size of this area
+                    # changes when image resolution changes (currently 3968x3008), so need to keep
+                    # an eye on it if/when we switch camera resolution
+                    img_corrected[0:64, 0:72] = img_original[0:64, 0:72]
 
                     cv.imwrite(img_file, img_corrected)
 
@@ -170,8 +181,13 @@ if __name__ == "__main__":
     img = cv.imread(args.input)
     if csfm.is_banding_present(args.input):
         # csfm.run_notch_filter()
-        ##img_corrected = gamma_correction(img)
-        # img_corrected = basic_linear_transform(img)
-        img_corrected = horizontal_banding_removal(img)
+        ##img_processed = gamma_correction(img)
+        # img_processed = basic_linear_transform(img)
+        img_processed = horizontal_banding_removal(img)
 
-        cv.imwrite(args.input + ".new.jpg", img_corrected)
+        grayscaled = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+        retval, mask = cv.threshold(grayscaled, 220, 255, cv.THRESH_BINARY)
+        img_processed[mask == 255] = img[mask == 255]
+        img_processed[0:64, 0:72] = img[0:64, 0:72]
+
+        cv.imwrite(args.input + ".new.jpg", img_processed)
