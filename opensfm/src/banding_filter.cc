@@ -14,13 +14,13 @@ void synthesizeFilterH(Mat& inputOutput_H, Point center, int radius);
 void calcPSD(const Mat& inputImg, Mat& outputImg, int flag = 0);
 float medianMat(Mat input);
 
-bool IsBandingPresent(char *filename)
+int IsBandingPresent(char *filename)
 {
     Mat imgIn = imread(filename, IMREAD_GRAYSCALE);
     if (imgIn.empty()) //check whether the image is loaded or not
     {
         cout << "ERROR : Image cannot be loaded..!!" << endl;
-        return false;
+        return -1;
     }
 
     imgIn.convertTo(imgIn, CV_32F);
@@ -36,25 +36,23 @@ bool IsBandingPresent(char *filename)
     // PSD calculation (stop)
 
     // it is observed we normally have horizontal banding at ~6Hz, and significant harmonics
-    // at its odd multiples (3x, 5x). so below by going through 4-40Hz, we catch fundamental
-    // banding frequency plus its 3x, 5x harmonics (not really necessary but rather be safe).
-    for (int i=5; i<40; i++)
+    // at its odd multiples (3x, 5x).
+    int testFreqs[] = {5, 6, 7, 19};
+    for (int i=0; i<sizeof(testFreqs)/sizeof(testFreqs[0]); i++)
     {
         // test region is a narrow horizontal strip
-        Mat testRegion = Mat(imgPSD, Rect(imgPSD.cols/2-5, imgPSD.rows/2-i, 11, 3)).clone();
+        Mat testRegion = Mat(imgPSD, Rect(imgPSD.cols/2-5, imgPSD.rows/2-testFreqs[i], 11, 3)).clone();
 
         float medianVal = medianMat(testRegion);
-        float ratio = imgPSD.at<float>(imgPSD.rows/2-i, imgPSD.cols/2) / medianVal;
+        float ratio = imgPSD.at<float>(imgPSD.rows/2-testFreqs[i], imgPSD.cols/2) / medianVal;
 
         if(ratio > 20.0f)
         {
-            cout << filename << ": banding found at " << i << "Hz, processing" << endl;
-            return true;
+            return testFreqs[i];
         }
     }
 
-    cout << filename << ": no banding found, skip" << endl;
-    return false;
+    return -1;
 }
 
 py::object RunNotchFilter()

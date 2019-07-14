@@ -42,22 +42,45 @@ def remove_banding(config, oiq_proc_dir):
             mkv_files = glob.glob(os.path.join(oiq_proc_dir, '*.mkv'))
 
     if mkv_files and len(mkv_files) == 4:
-        os.chdir(valid_dir)
+        mkv_dirs = []
 
+        # use ffmpeg to extract frames from mkv file
         for mkv_file in mkv_files:
-            # step 1 - use ffmpeg to extract frames from mkv file
+            os.chdir(valid_dir)
+            mkv_dir = os.path.splitext(mkv_file)[0]
+            mkv_dirs.append(mkv_dir)
+            os.makedirs(mkv_dir, exist_ok=True)
+            os.chdir(mkv_dir)
+
             #subprocess.call(['ffmpeg', '-i', mkv_file, 'img%04d.jpg', '-codec', 'copy'])
             ffmpeg.input(mkv_file).output('%04d.jpg').run()
 
-            # step 2 - call horizontal_banding_removal for each frame
-            img_files = sorted(glob.glob(os.path.join(valid_dir, '*.jpg')))
-            for img_file in img_files:
+        # call horizontal_banding_removal for each set of 4 frames
+        for idx in range(1, len(glob.glob(os.path.join(mkv_dirs[0], '*.jpg')))+1):
 
-                # TESTING - only correct 10 images
-                if _shot_id_to_int(ntpath.basename(img_file)) > 10:
-                    continue
+            # TESTING - only correct 10 images
+            if idx > 10:
+                continue
 
-                if csfm.is_banding_present(img_file):
+            img_set = []
+            for mkv_dir in mkv_dirs:
+                img_set.append(os.path.join(mkv_dir, _int_to_shot_id(idx)))
+
+            banding_cnt = 0
+            for img_file in img_set:
+                freq = csfm.is_banding_present(img_file)
+                if freq != -1:
+                    logger.info('{}Hz banding'.format(freq))
+                    banding_cnt += 1
+                else:
+                    logger.info('no banding')
+
+            logger.info('{}: banding found in {}/4 images'.format(_int_to_shot_id(idx), banding_cnt))
+
+            if banding_cnt >= 2:
+                logger.info('removing banding...')
+
+                for img_file in img_set:
                     img_original = cv.imread(img_file)
                     #csfm.run_notch_filter()
                     ##img_corrected = gamma_correction(img_original)
@@ -78,17 +101,21 @@ def remove_banding(config, oiq_proc_dir):
 
                     cv.imwrite(img_file, img_corrected)
 
-            # step 3 - save original mkv. use ffmpeg to encode processed frames to new mkv.
+        # save original mkv. use ffmpeg to encode processed frames to new mkv.
+        for mkv_file in mkv_files:
+            os.chdir(valid_dir)
             mkv_file_orig = mkv_file + ".orig"
             shutil.move(mkv_file, mkv_file_orig)
 
-            #subprocess.call(['ffmpeg', '-i', 'img%04d.jpg', '-r', '7', '-codec', 'copy', mkv_file])
-            ffmpeg.input('%04d.jpg').output(mkv_file).run()
+        for mkv_dir in mkv_dirs:
+            os.chdir(mkv_dir)
 
-            # step 4 - clean up
-            for img_file in img_files:
-                if os.path.exists(img_file):
-                    os.remove(img_file)
+            #subprocess.call(['ffmpeg', '-i', 'img%04d.jpg', '-r', '7', '-codec', 'copy', mkv_file])
+            ffmpeg.input('%04d.jpg').output(mkv_dir + ".mkv").run()
+
+            shutil.rmtree(mkv_dir)
+
+    os.chdir(oiq_proc_dir)
 
 
 def basic_linear_transform(img_original):
@@ -170,6 +197,13 @@ def _shot_id_to_int(shot_id):
     """
     tokens = shot_id.split(".")
     return int(tokens[0])
+
+
+def _int_to_shot_id(shot_int):
+    """
+    Returns: integer to shot id
+    """
+    return str(shot_int).zfill(4) + ".jpg"
 
 
 # Entry point
