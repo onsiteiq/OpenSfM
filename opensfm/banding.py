@@ -12,6 +12,8 @@ import pywt
 import argparse
 
 from opensfm import csfm
+from opensfm import log
+from opensfm.context import parallel_map
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,8 @@ gamma_max = 200
 
 
 def remove_banding(config, oiq_proc_dir):
+    processes = config['num_processes']
+
     raw_dir = os.path.join(oiq_proc_dir, "RAW IMAGES")
     nctech_dir = os.path.join(oiq_proc_dir, "nctech_imu")
 
@@ -56,50 +60,8 @@ def remove_banding(config, oiq_proc_dir):
             ffmpeg.input(mkv_file).output('%04d.jpg').run()
 
         # call horizontal_banding_removal for each set of 4 frames
-        for idx in range(1, len(glob.glob(os.path.join(mkv_dirs[0], '*.jpg')))+1):
-
-            # TESTING - only correct 10 images
-            if idx > 10:
-                continue
-
-            img_set = []
-            for mkv_dir in mkv_dirs:
-                img_set.append(os.path.join(mkv_dir, _int_to_shot_id(idx)))
-
-            banding_cnt = 0
-            for img_file in img_set:
-                freq = csfm.is_banding_present(img_file)
-                if freq != -1:
-                    logger.info('{}Hz banding'.format(freq))
-                    banding_cnt += 1
-                else:
-                    logger.info('no banding')
-
-            logger.info('{}: banding found in {}/4 images'.format(_int_to_shot_id(idx), banding_cnt))
-
-            if banding_cnt >= 2:
-                logger.info('removing banding...')
-
-                for img_file in img_set:
-                    img_original = cv.imread(img_file)
-                    #csfm.run_notch_filter()
-                    ##img_corrected = gamma_correction(img_original)
-                    #img_corrected = basic_linear_transform(img_original)
-                    img_corrected = horizontal_banding_removal(img_original)
-
-                    # high intensity pixels' color is distorted by the filtering process above.
-                    # so we replace them by their original values
-                    grayscaled = cv.cvtColor(img_original, cv.COLOR_BGR2GRAY)
-                    retval, mask = cv.threshold(grayscaled, 220, 255, cv.THRESH_BINARY)
-                    img_corrected[mask == 255] = img_original[mask == 255]
-
-                    # there is a 72x64 pixel area in each raw image that appears to be 2D barcode
-                    # used by the NC Tech Immersive Studio. don't know if the size of this area
-                    # changes when image resolution changes (currently 3968x3008), so need to keep
-                    # an eye on it if/when we switch camera resolution
-                    img_corrected[0:64, 0:72] = img_original[0:64, 0:72]
-
-                    cv.imwrite(img_file, img_corrected)
+        args = [(idx, mkv_dirs) for idx in range(1, len(glob.glob(os.path.join(mkv_dirs[0], '*.jpg')))+1)]
+        parallel_map(remove, args, processes)
 
         # save original mkv. use ffmpeg to encode processed frames to new mkv.
         for mkv_file in mkv_files:
@@ -116,6 +78,55 @@ def remove_banding(config, oiq_proc_dir):
             shutil.rmtree(mkv_dir)
 
     os.chdir(oiq_proc_dir)
+
+
+def remove(args):
+    log.setup()
+
+    idx, mkv_dirs = args
+
+    # TESTING - only correct 10 images
+    #if idx > 10:
+        #return
+
+    img_set = []
+    for mkv_dir in mkv_dirs:
+        img_set.append(os.path.join(mkv_dir, _int_to_shot_id(idx)))
+
+    banding_cnt = 0
+    for img_file in img_set:
+        freq = csfm.is_banding_present(img_file)
+        if freq != -1:
+            logger.info('{}: {}Hz banding'.format(idx, freq))
+            banding_cnt += 1
+        else:
+            logger.info('{}: no banding'.format(idx))
+
+    logger.info('{}: banding found in {}/4 images'.format(_int_to_shot_id(idx), banding_cnt))
+
+    if banding_cnt >= 2:
+        logger.info('{}: removing banding...'.format(idx))
+
+        for img_file in img_set:
+            img_original = cv.imread(img_file)
+            #csfm.run_notch_filter()
+            ##img_corrected = gamma_correction(img_original)
+            #img_corrected = basic_linear_transform(img_original)
+            img_corrected = horizontal_banding_removal(img_original)
+
+            # high intensity pixels' color is distorted by the filtering process above.
+            # so we replace them by their original values
+            grayscaled = cv.cvtColor(img_original, cv.COLOR_BGR2GRAY)
+            retval, mask = cv.threshold(grayscaled, 220, 255, cv.THRESH_BINARY)
+            img_corrected[mask == 255] = img_original[mask == 255]
+
+            # there is a 72x64 pixel area in each raw image that appears to be 2D barcode
+            # used by the NC Tech Immersive Studio. don't know if the size of this area
+            # changes when image resolution changes (currently 3968x3008), so need to keep
+            # an eye on it if/when we switch camera resolution
+            img_corrected[0:64, 0:72] = img_original[0:64, 0:72]
+
+            cv.imwrite(img_file, img_corrected)
 
 
 def basic_linear_transform(img_original):
