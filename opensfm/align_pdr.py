@@ -44,6 +44,10 @@ def init_pdr_predictions(data):
         topocentric_gps_points_dict[key] = [x, y, z]
 
     pdr_predictions_dict = update_pdr_global(topocentric_gps_points_dict, pdr_shots_dict, scale_factor)
+    if len(pdr_predictions_dict) != len(pdr_shots_dict):
+        # under degenerate configurations, update_pdr_global can fail to produce pdr predictions for
+        # every shot. in that case, we revert to 2-point alignment below
+        pdr_predictions_dict = update_pdr_global_2d(topocentric_gps_points_dict, pdr_shots_dict, scale_factor)
 
     data.save_topocentric_gps_points(topocentric_gps_points_dict)
     data.save_pdr_predictions(pdr_predictions_dict)
@@ -612,7 +616,7 @@ def reposition_reconstruction(reconstruction, recon_predictions_dict):
 
 def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor):
     """
-    *globally* align pdr predictions to GPS points (not used, kept code)
+    *globally* align pdr predictions to GPS points
 
     use 2 gps points at a time to align pdr predictions
 
@@ -649,11 +653,10 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor):
 
         # debugging
         [x, y, z] = _rotation_matrix_to_euler_angles(A)
-        logger.info("rotation=%f, %f, %f", np.degrees(x), np.degrees(y), np.degrees(z))
+        logger.debug("rotation=%f, %f, %f", np.degrees(x), np.degrees(y), np.degrees(z))
 
         if not ((0.50 * expected_scale) < s < (2.0 * expected_scale)):
-            logger.info("s/expected_scale={}, discard".format(s/expected_scale))
-            continue
+            logger.debug("suspicious s/expected_scale={}".format(s/expected_scale))
 
         start_shot_id = all_gps_shot_ids[i]
         end_shot_id = all_gps_shot_ids[i+1]
@@ -665,6 +668,7 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor):
         elif i == len(gps_points_dict)-2:
             end_shot_id = _int_to_shot_id(len(pdr_shots_dict)-1)
 
+        logger.debug("transforming {} to {}".format(start_shot_id, end_shot_id))
         new_dict = apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id,
                                           s, A, b,
                                           deviation, [all_gps_shot_ids[i], all_gps_shot_ids[i+1]])
@@ -683,6 +687,7 @@ def update_pdr_global(gps_points_dict, pdr_shots_dict, scale_factor, stride_len=
     :param gps_points_dict: gps points in topocentric coordinates
     :param pdr_shots_dict: position of each shot as predicted by pdr
     :param scale_factor: reconstruction_scale_factor - scale factor feet per pixel
+    :param stride_len: size of sliding window
     :return: aligned pdr shot predictions - [x, y, z, dop]
     """
     if len(gps_points_dict) < stride_len or len(pdr_shots_dict) < stride_len:
