@@ -11,7 +11,10 @@ import matplotlib.text as text
 from opensfm import config
 from opensfm import align_pdr
 
+logging.basicConfig()
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+logging.getLogger("opensfm.align_pdr").setLevel(logging.DEBUG)
 
 
 class LabeledCircle(object):

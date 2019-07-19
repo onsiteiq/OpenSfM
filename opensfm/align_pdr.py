@@ -165,10 +165,7 @@ def update_gps_picker(curr_gps_points_dict, pdr_shots_dict, scale_factor, num_ex
             shot_id = _int_to_shot_id(i)
             pdr_predictions_dict[shot_id] = tuple(map(sum, zip(offset, scaled_pdr_shots_dict[shot_id])))
     else:
-        if len(curr_gps_points_dict) == 2:
-            all_predictions_dict = update_pdr_global_2d(curr_gps_points_dict, pdr_shots_dict, scale_factor, False)
-        else:
-            all_predictions_dict = update_pdr_global(curr_gps_points_dict, pdr_shots_dict, scale_factor)
+        all_predictions_dict = update_pdr_global_2d(curr_gps_points_dict, pdr_shots_dict, scale_factor, False)
 
         sorted_gps_ids = sorted(curr_gps_points_dict.keys(), reverse=True)
         num = _shot_id_to_int(sorted_gps_ids[0]) + num_extrapolation
@@ -696,7 +693,7 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad
         for j in range(2):
             shot_id = all_gps_shot_ids[i+j]
             gps_coords.append(gps_points_dict[shot_id])
-            pdr_coords.append([pdr_shots_dict[shot_id][0], -pdr_shots_dict[shot_id][1], 0])
+            pdr_coords.append([pdr_shots_dict[shot_id][0], pdr_shots_dict[shot_id][1], 0])
 
         s, A, b = get_affine_transform_2d(gps_coords, pdr_coords)
 
@@ -705,10 +702,10 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad
 
         # debugging
         [x, y, z] = _rotation_matrix_to_euler_angles(A)
-        logger.info("rotation=%f, %f, %f", np.degrees(x), np.degrees(y), np.degrees(z))
+        logger.debug("update_pdr_global_2d: deviation=%f, rotation=%f, %f, %f", deviation, np.degrees(x), np.degrees(y), np.degrees(z))
 
         if skip_bad and not ((0.50 * expected_scale) < s < (2.0 * expected_scale)):
-            logger.info("s/expected_scale={}, discard".format(s/expected_scale))
+            logger.debug("s/expected_scale={}, discard".format(s/expected_scale))
             continue
 
         start_shot_id = all_gps_shot_ids[i]
@@ -786,12 +783,10 @@ def update_pdr_global(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad=Tr
 
         # if x/y rotation is not close to 0, then likely it's 'flipped' and no good
         [x, y, z] = _rotation_matrix_to_euler_angles(A)
+        logger.debug("update_pdr_global: deviation=%f, rotation=%f, %f, %f", deviation, np.degrees(x), np.degrees(y), np.degrees(z))
         if skip_bad and (math.fabs(x) > 1.0 or math.fabs(y) > 1.0):
             last_deviation = 1.0
             continue
-
-        # debugging
-        #logger.info("deviation=%f, rotation=%f, %f, %f", deviation, x, y, z)
 
         # based on deviation, we choose different starting pdr shot to transform
         if deviation < last_deviation:
