@@ -644,7 +644,7 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor):
         for j in range(2):
             shot_id = all_gps_shot_ids[i+j]
             gps_coords.append(gps_points_dict[shot_id])
-            pdr_coords.append([pdr_shots_dict[shot_id][0], -pdr_shots_dict[shot_id][1], 0])
+            pdr_coords.append([pdr_shots_dict[shot_id][0], pdr_shots_dict[shot_id][1], 0])
 
         s, A, b = get_affine_transform_2d(gps_coords, pdr_coords)
 
