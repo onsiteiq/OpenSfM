@@ -707,10 +707,10 @@ class SphericalCamera(Camera):
         for pixel in pixels:
             bearing = self.unfolded_pixel_bearing( pixel )
             
-            if bearing is None:
-                logger.error( 'Pixel outside valid image region: ' + str( pixel ) )
-            
-            bearings.append( bearing.tolist() )
+            if bearing is not None:
+                bearings.append( bearing.tolist() )
+            else:
+                bearings.append( None )
         
         return np.array( bearings )
 
