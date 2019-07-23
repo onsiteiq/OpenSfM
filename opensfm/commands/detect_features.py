@@ -202,6 +202,17 @@ def detect(args):
             # --------------------------------------------------------------
             
             if len(p_unsorted) > 0:
+            
+                # Mask pixels that are out of valid image bounds before converting to equirectangular image coordinates
+
+                bearings = image_camera_model.unfolded_pixel_bearings( p_unsorted[:, :2] )
+
+                p_mask = np.array([ point is not None for point in bearings ])
+                
+                p_unsorted = p_unsorted[ p_mask ]
+                f_unsorted = f_unsorted[ p_mask ]
+                c_unsorted = c_unsorted[ p_mask ]
+                
                 p_unsorted[:, :2] = unfolded_cube_to_equi_normalized_image_coordinates( p_unsorted[:, :2], image_camera_model )
             
             # Visualize the same features converted back to equirectangular image coordinates

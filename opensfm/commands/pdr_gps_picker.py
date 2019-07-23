@@ -88,16 +88,17 @@ class LabeledCircle(object):
 
 
 class DragMover(object):
-    def __init__(self, fig, ax, pdr_shots_dict, scale_factor, num_extrapolation):
+    def __init__(self, fig, ax, shape, pdr_shots_dict, scale_factor, num_extrapolation):
         self.fig = fig
         self.ax = ax
+        self.shape = shape
         self.pdr_shots_dict = pdr_shots_dict
         self.scale_factor = scale_factor
         self.num_extrapolation = num_extrapolation
         self.shot_objs = []
 
-        # scale shots to roughly the right scale and make them visible
-        self.update()
+        # place shot 0 at center of floor plan
+        self.place_shot_0()
 
         self.fig.canvas.mpl_connect('button_press_event', self.on_press)
         self.fig.canvas.mpl_connect('button_release_event', self.on_release)
@@ -139,6 +140,13 @@ class DragMover(object):
     def on_motion(self, event):
         if self.currently_dragging:
             self.update(event)
+
+    def place_shot_0(self):
+        shot_obj = LabeledCircle(str(0).zfill(10) + ".jpg", (self.shape[1]/2, self.shape[0]/2, 0))
+        shot_obj.show(self.ax)
+        self.shot_objs.append(shot_obj)
+
+        self.fig.canvas.draw_idle()
 
     def update(self, event=None):
         if event:
@@ -189,7 +197,7 @@ def draw_floor_plan(plan_path):
     img = cv2.imread(plan_path, cv2.IMREAD_COLOR)
     ax.imshow(img)
 
-    return fig, ax
+    return fig, ax, img.shape
 
 
 def load_pdr_shots(pdr_shots_path):
@@ -213,13 +221,13 @@ def pdr_gps_picker(plan_path, pdr_shots_path, scale_factor, num_extrapolation):
     main routine to launch gps picker
     """
     # draw floor plan
-    fig, ax = draw_floor_plan(plan_path)
+    fig, ax, shape = draw_floor_plan(plan_path)
 
     # load pdr shots
     pdr_shots_dict = load_pdr_shots(pdr_shots_path)
 
     # start drag mover
-    drag_mover = DragMover(fig, ax, pdr_shots_dict, scale_factor, num_extrapolation)
+    drag_mover = DragMover(fig, ax, shape, pdr_shots_dict, scale_factor, num_extrapolation)
 
     plt.show()
 

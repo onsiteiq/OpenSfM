@@ -44,6 +44,10 @@ def init_pdr_predictions(data):
         topocentric_gps_points_dict[key] = [x, y, z]
 
     pdr_predictions_dict = update_pdr_global(topocentric_gps_points_dict, pdr_shots_dict, scale_factor)
+    if len(pdr_predictions_dict) != len(pdr_shots_dict):
+        # under degenerate configurations, update_pdr_global can fail to produce pdr predictions for
+        # every shot. in that case, we revert to 2-point alignment below
+        pdr_predictions_dict = update_pdr_global_2d(topocentric_gps_points_dict, pdr_shots_dict, scale_factor, False)
 
     data.save_topocentric_gps_points(topocentric_gps_points_dict)
     data.save_pdr_predictions(pdr_predictions_dict)
@@ -154,7 +158,7 @@ def update_gps_picker(curr_gps_points_dict, pdr_shots_dict, scale_factor, num_ex
     if len(curr_gps_points_dict) < 2:
         if len(curr_gps_points_dict) < 1:
             offset = (2000, 2000, 0)
-            num = num_extrapolation
+            num = 1
         else:
             for shot_id in curr_gps_points_dict:
                 offset = tuple(np.subtract(curr_gps_points_dict[shot_id],
@@ -664,7 +668,7 @@ def reposition_reconstruction(reconstruction, recon_predictions_dict):
 
 def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad=True):
     """
-    *globally* align pdr predictions to GPS points (not used, kept code)
+    *globally* align pdr predictions to GPS points
 
     use 2 gps points at a time to align pdr predictions
 
