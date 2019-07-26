@@ -132,7 +132,7 @@ def direct_align_pdr(data):
         # rotation around its z axis.
         #R = _euler_angles_to_rotation_matrix([np.pi*0.5, 0, np.pi*0.5+heading])
         R1 = _euler_angles_to_rotation_matrix([np.pi*0.5, 0, np.pi*0.5])
-        R2 = _euler_angles_to_rotation_matrix([-np.radians(pdr_shots_dict[img][4]), -np.radians(pdr_shots_dict[img][3]), heading])
+        R2 = _euler_angles_to_rotation_matrix([np.radians(pdr_shots_dict[img][4]), np.radians(pdr_shots_dict[img][3]), heading])
         R = R2.dot(R1)
 
         # below is equivalent to the above but gives more flexibility in specifying the order
