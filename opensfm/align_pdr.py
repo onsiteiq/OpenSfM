@@ -65,6 +65,7 @@ def direct_align_pdr(data):
     :return: reconstruction
     """
     pdr_predictions_dict = init_pdr_predictions(data)
+    pdr_shots_dict = data.load_pdr_shots()
 
     target_images = data.config.get('target_images', [])
     cameras = data.load_camera_models()
@@ -105,9 +106,34 @@ def direct_align_pdr(data):
         if not heading:
             continue
 
-        # OpenSfM floorplan/gps coordinate system: x point right, y point back, z point down
-        # OpenSfM camera coordinate system:        x point right, y point down, z point forward
-        R = _euler_angles_to_rotation_matrix([np.pi*0.5, 0, np.pi*0.5+heading])
+        # Our floorplan/gps coordinate system: x point right, y point back, z point down
+        #
+        # OpenSfM 3D viewer coordinate system: x point left, y point back, z point up (or equivalently it can be
+        # viewed as x point right, y point forward, z point up)
+        #
+        # OpenSfM camera coordinate system: x point right of its body, y point down, z point forward (look-at dir)
+        #
+        # Hence, if camera has 0, 0, 0 rotation relative to OpenSfM viewer coordinate system, then in the 3D viewer,
+        # its lens is pointing up towards the sky (z), as described in doc/cam_coord_system.rst
+        #
+        # Since our floorplan/gps uses a different coordinate system than the OpenSfM 3D viewer, reconstructions
+        # are upside down in the 3D viewer.
+        #
+        # We can fix in one of two ways: 1) assume the origin of the floor plan to be bottom-left, rather than top-
+        # left; or 2) we can hack the OpenSfM 3D viewer for it to follow our coordinate system. The first option is
+        # better, however it will probably require changes in both the current gps picker and our own viewer.
+        #
+        # NC Tech camera imu sensor coordinate system: x point right, y point forward, z point up. Roll, pitch and
+        # heading in pdr_shots.txt is rotation of this coordinate system relative to the ground reference frame
+        # which is assumed to be ENU (east-north-up). However, because the magnetometer is uncalibrated and can't
+        # be trusted, the heading is relative to a rather random starting point and is not absolute.
+        #
+        # The 'heading' calculated above however, is relative to floorplan/gps coordinate system and is the
+        # rotation around its z axis.
+        #R = _euler_angles_to_rotation_matrix([np.pi*0.5, 0, np.pi*0.5+heading])
+        R1 = _euler_angles_to_rotation_matrix([np.pi*0.5, 0, np.pi*0.5])
+        R2 = _euler_angles_to_rotation_matrix([-np.radians(pdr_shots_dict[img][4]), -np.radians(pdr_shots_dict[img][3]), heading])
+        R = R2.dot(R1)
 
         # below is equivalent to the above but gives more flexibility in specifying the order
         # of euler angles if we need it
