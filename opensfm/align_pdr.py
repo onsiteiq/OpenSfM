@@ -113,9 +113,6 @@ def direct_align_pdr(data):
         #
         # OpenSfM camera coordinate system: x point right of its body, y point down, z point forward (look-at dir)
         #
-        # Hence, if camera has 0, 0, 0 rotation relative to OpenSfM viewer coordinate system, then in the 3D viewer,
-        # its lens is pointing up towards the sky (z), as described in doc/cam_coord_system.rst
-        #
         # Since our floorplan/gps uses a different coordinate system than the OpenSfM 3D viewer, reconstructions
         # are upside down in the 3D viewer.
         #
@@ -123,23 +120,37 @@ def direct_align_pdr(data):
         # left; or 2) we can hack the OpenSfM 3D viewer for it to follow our coordinate system. The first option is
         # better, however it will probably require changes in both the current gps picker and our own viewer.
         #
-        # NC Tech camera imu sensor coordinate system: x point right, y point forward, z point up. Roll, pitch and
-        # heading in pdr_shots.txt is rotation of this coordinate system relative to the ground reference frame
-        # which is assumed to be ENU (east-north-up). However, because the magnetometer is uncalibrated and can't
-        # be trusted, the heading is relative to a rather random starting point and is not absolute.
+        # If camera has 0 rotation on all axes relative to OpenSfM 3D viewer coordinate system, then in the
+        # viewer, its lens points up towards the sky. If camera has 0 rotation relative to our floorplan/gps
+        # coordinate system, its lens points down towards the ground.
+        #
+        # What *should* the camera rotation be, when the camera is placed on a table (i.e. there is no roll or
+        # pitch) and have a heading of exactly zero degrees? In this case, the camera lens (z) would be horizontal
+        # looking at the positive x axis. Therefore, relative to our floorplan/gps coordinate system, its rotation
+        # expressed in euler angles in xyz order should be (pi/2, 0, pi/2). This should be considered as the
+        # 'canonical' rotation of the camera in our floorplan/gps coordinate system.
+        #
+        # NC Tech camera imu sensor coordinate system: x point right of body, y point forward, z point up. Roll,
+        # pitch and heading in pdr_shots.txt are rotations of this coordinate system relative to the ground reference
+        # frame which is assumed to be ENU (east-north-up). However, because the magnetometer is uncalibrated and
+        # can't be trusted, the heading is relative to a rather random starting point and is not absolute.
         #
         # The 'heading' calculated above however, is relative to floorplan/gps coordinate system and is the
-        # rotation around its z axis.
-        #R = _euler_angles_to_rotation_matrix([np.pi*0.5, 0, np.pi*0.5+heading])
+        # rotation around its z axis. It will be used to replace the heading in pdr_shots.txt.
+        #
+        # In the 'canonical' configuration, our floorplan/gps has: x point right, y point back, z point down;
+        # camera has x point back, y point down, z point right; imu has x point back, y point right, z point up.
+        # Now we need to convert the roll/pitch that's relative to the imu coordinate system to floorplan/gps
+        # coordinate system, which means we swap roll/pitch. In matrix form this transformation is:
+        #     [0  1  0]
+        #     [1  0  0]
+        #     [0  0 -1]
+        # Again, we will use the 'heading' from calculation above, which is based on alignment with annotated
+        # gps points, and only swap roll/pitch. Finally we concatenate this matrix with the 'canonical'
+        # transformation to obtain the final rotation matrix.
         R1 = _euler_angles_to_rotation_matrix([np.pi*0.5, 0, np.pi*0.5])
         R2 = _euler_angles_to_rotation_matrix([np.radians(pdr_shots_dict[img][4]), np.radians(pdr_shots_dict[img][3]), heading])
         R = R2.dot(R1)
-
-        # below is equivalent to the above but gives more flexibility in specifying the order
-        # of euler angles if we need it
-        #q = tf.quaternion_from_euler(np.pi*0.5, 0, np.pi*0.5+heading)
-        #r = tf.quaternion_matrix(q)
-        #R = r[:3, :3]
 
         t_shot = np.array(pdr_predictions_dict[img][:3])
         tp = -R.T.dot(t_shot)
