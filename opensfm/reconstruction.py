@@ -1704,6 +1704,8 @@ def incremental_reconstruction_sequential(data):
                     data, graph, reconstruction, remaining_images, gcp)
                 reconstructions.append(reconstruction)
 
+                #debug_rotation_prior(reconstruction, data)
+
                 curr_idx = 0
             else:
                 # bootstrap didn't work, try the next pair

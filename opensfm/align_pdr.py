@@ -65,6 +65,7 @@ def direct_align_pdr(data):
     :return: reconstruction
     """
     pdr_predictions_dict = init_pdr_predictions(data)
+    pdr_shots_dict = data.load_pdr_shots()
 
     target_images = data.config.get('target_images', [])
     cameras = data.load_camera_models()
@@ -105,15 +106,51 @@ def direct_align_pdr(data):
         if not heading:
             continue
 
-        # OpenSfM floorplan/gps coordinate system: x point right, y point back, z point down
-        # OpenSfM camera coordinate system:        x point right, y point down, z point forward
-        R = _euler_angles_to_rotation_matrix([np.pi*0.5, 0, np.pi*0.5+heading])
-
-        # below is equivalent to the above but gives more flexibility in specifying the order
-        # of euler angles if we need it
-        #q = tf.quaternion_from_euler(np.pi*0.5, 0, np.pi*0.5+heading)
-        #r = tf.quaternion_matrix(q)
-        #R = r[:3, :3]
+        # Our floorplan/gps coordinate system: x point right, y point back, z point down
+        #
+        # OpenSfM 3D viewer coordinate system: x point left, y point back, z point up (or equivalently it can be
+        # viewed as x point right, y point forward, z point up)
+        #
+        # OpenSfM camera coordinate system: x point right of its body, y point down, z point forward (look-at dir)
+        #
+        # Since our floorplan/gps uses a different coordinate system than the OpenSfM 3D viewer, reconstructions
+        # are upside down in the 3D viewer.
+        #
+        # We can fix in one of two ways: 1) assume the origin of the floor plan to be bottom-left, rather than top-
+        # left; or 2) we can hack the OpenSfM 3D viewer for it to follow our coordinate system. The first option is
+        # better, however it will probably require changes in both the current gps picker and our own viewer.
+        #
+        # If camera has 0 rotation on all axes relative to OpenSfM 3D viewer coordinate system, then in the
+        # viewer, its lens points up towards the sky. If camera has 0 rotation relative to our floorplan/gps
+        # coordinate system, its lens points down towards the ground.
+        #
+        # What *should* the camera rotation be, when the camera is placed on a table (i.e. there is no roll or
+        # pitch) and have a heading of exactly zero degrees? In this case, the camera lens (z) would be horizontal
+        # looking at the positive x axis. Therefore, relative to our floorplan/gps coordinate system, its rotation
+        # expressed in euler angles in xyz order should be (pi/2, 0, pi/2). This should be considered as the
+        # 'canonical' rotation of the camera in our floorplan/gps coordinate system.
+        #
+        # NC Tech camera imu sensor coordinate system: x point right of body, y point forward, z point up. Roll,
+        # pitch and heading in pdr_shots.txt are rotations of this coordinate system relative to the ground reference
+        # frame which is assumed to be ENU (east-north-up). However, because the magnetometer is uncalibrated and
+        # can't be trusted, the heading is relative to a rather random starting point and is not absolute.
+        #
+        # The 'heading' calculated above however, is relative to floorplan/gps coordinate system and is the
+        # rotation around its z axis. It will be used to replace the heading in pdr_shots.txt.
+        #
+        # In the 'canonical' configuration, our floorplan/gps has: x point right, y point back, z point down;
+        # camera has x point back, y point down, z point right; imu has x point back, y point right, z point up.
+        # Now we need to convert the roll/pitch that's relative to the imu coordinate system to floorplan/gps
+        # coordinate system, which means we swap roll/pitch. In matrix form this transformation is:
+        #     [0  1  0]
+        #     [1  0  0]
+        #     [0  0 -1]
+        # Again, we will use the 'heading' from calculation above, which is based on alignment with annotated
+        # gps points, and only swap roll/pitch. Finally we concatenate this matrix with the 'canonical'
+        # transformation to obtain the final rotation matrix.
+        R1 = _euler_angles_to_rotation_matrix([np.pi*0.5, 0, np.pi*0.5])
+        R2 = _euler_angles_to_rotation_matrix([np.radians(pdr_shots_dict[img][4]), np.radians(pdr_shots_dict[img][3]), heading])
+        R = R2.dot(R1)
 
         t_shot = np.array(pdr_predictions_dict[img][:3])
         tp = -R.T.dot(t_shot)
@@ -223,7 +260,7 @@ def update_pdr_prediction_rotation(shot_id, reconstruction, data):
 
         # 0.1 radians is roughly 6 degrees
         # TODO: put 0.1 in config
-        tolerance = 0.1
+        tolerance = 0.1 * abs(_shot_id_to_int(base_shot_id_0) - _shot_id_to_int(shot_id))
 
         q_0 = tf.quaternion_from_euler(prediction_0[0], prediction_0[1], prediction_0[2])
         q_1 = tf.quaternion_from_euler(prediction_1[0], prediction_1[1], prediction_1[2])
@@ -231,9 +268,7 @@ def update_pdr_prediction_rotation(shot_id, reconstruction, data):
         if tf.quaternion_distance(q_0, q_1) > tolerance:
             return prediction_0, 999999.0
 
-        # TODO: put 0.5 in config
-        distance_to_base = abs(_shot_id_to_int(base_shot_id_0) - _shot_id_to_int(shot_id))
-        return prediction_0, 0.5*distance_to_base
+        return prediction_0, tolerance
 
     return [0, 0, 0], 999999.0
 
@@ -284,40 +319,55 @@ def cull_resection_pdr(shot_id, reconstruction, data, bs, Xs, track_ids):
     return bs, Xs, track_ids
 
 
+def validate_position(reconstruction, data, shot):
+    p_sfm = shot.pose.get_origin()
+    p_pdr, stddev = update_pdr_prediction_position(shot.id, reconstruction, data)
+
+    p_dist = np.linalg.norm(p_pdr[:2] - p_sfm[:2])
+    if p_dist > stddev*2:
+        logger.debug("validate_position: p_dist {}".format(p_dist))
+
+    return p_dist < stddev*2
+
+
+def validate_rotation(reconstruction, data, shot):
+    r_sfm = _rotation_matrix_to_euler_angles(shot.pose.get_rotation_matrix())
+    r_pdr, stddev = update_pdr_prediction_rotation(shot.id, reconstruction, data)
+
+    q_0 = tf.quaternion_from_euler(r_pdr[0], r_pdr[1], r_pdr[2])
+    q_1 = tf.quaternion_from_euler(r_sfm[0], r_sfm[1], r_sfm[2])
+
+    r_dist = tf.quaternion_distance(q_0, q_1)
+
+    if r_dist > stddev:
+        logger.debug("validate_resection_pdr: r_dist{}".format(r_dist))
+
+    return r_dist < stddev
+
+
 def validate_resection_pdr(reconstruction, data, shot):
+    is_pos_ok = is_rot_ok = True
     if data.pdr_shots_exist():
-        p_sfm = shot.pose.get_origin()
-        p_pdr, stddev1 = update_pdr_prediction_position(shot.id, reconstruction, data)
+        is_pos_ok = validate_position(reconstruction, data, shot)
+        is_rot_ok = validate_rotation(reconstruction, data, shot)
 
-        p_dist = np.linalg.norm(p_pdr[:2] - p_sfm[:2])
-
-        r_sfm = _rotation_matrix_to_euler_angles(shot.pose.get_rotation_matrix())
-        r_pdr, stddev2 = update_pdr_prediction_rotation(shot.id, reconstruction, data)
-
-        q_0 = tf.quaternion_from_euler(r_pdr[0], r_pdr[1], r_pdr[2])
-        q_1 = tf.quaternion_from_euler(r_sfm[0], r_sfm[1], r_sfm[2])
-
-        r_dist = tf.quaternion_distance(q_0, q_1)
-
-        #if p_dist > stddev1*2 or r_dist > stddev2*2:
-            #logger.debug("validate_resection_pdr: p_dist {}, r_dist{}".format(p_dist, r_dist))
-
-        return p_dist < stddev1*2, r_dist < stddev2/2
-
-    return True, True
+    return is_pos_ok, is_rot_ok
 
 
 def debug_rotation_prior(reconstruction, data):
     if len(reconstruction.shots) < 3:
         return
 
+    dists = []
     for shot_id in reconstruction.shots:
         rotation_prior, dop = update_pdr_prediction_rotation(shot_id, reconstruction, data)
-        rotation_sfm = tf.euler_from_quaternion(tf.quaternion_from_matrix(reconstruction.shots[shot_id].pose.get_rotation_matrix()))
-
         q_p = tf.quaternion_from_euler(rotation_prior[0], rotation_prior[1], rotation_prior[2])
-        q_s = tf.quaternion_from_euler(rotation_sfm[0], rotation_sfm[1], rotation_sfm[2])
-        logger.debug("{}, rotation prior/sfm distance is {} degrees".format(shot_id, np.degrees(tf.quaternion_distance(q_p, q_s))))
+        q_s = tf.quaternion_from_matrix(reconstruction.shots[shot_id].pose.get_rotation_matrix())
+
+        #logger.debug("{}, rotation prior/sfm distance is {} degrees".format(shot_id, np.degrees(tf.quaternion_distance(q_p, q_s))))
+        dists.append(np.degrees(tf.quaternion_distance(q_p, q_s)))
+
+    logger.debug("avg prior/sfm diff {} degrees".format(np.mean(np.array(dists))))
 
 
 def scale_reconstruction_to_pdr(reconstruction, data):
@@ -588,16 +638,16 @@ def rotation_extrapolate(shot_id, base_shot_id, reconstruction, data):
     """
     pdr_shots_dict = data.load_pdr_shots()
 
-    base_pdr_rotation = pdr_shots_dict[base_shot_id][3:6]
-    pdr_rotation = pdr_shots_dict[shot_id][3:6]
-    base_sfm_rotation = reconstruction.shots[base_shot_id].pose.get_rotation_matrix()
+    # calculate delta rotation
+    base_pdr_rotation = _euler_angles_to_rotation_matrix(np.radians(pdr_shots_dict[base_shot_id][3:6]))
+    pdr_rotation = _euler_angles_to_rotation_matrix(np.radians(pdr_shots_dict[shot_id][3:6]))
+    delta_rotation = pdr_rotation.dot(base_pdr_rotation.T)
 
-    qdiff = tf.quaternion_diff(np.radians(base_pdr_rotation), np.radians(pdr_rotation))
-    qr = tf.quaternion_from_matrix(base_sfm_rotation.T)
+    # get sfm rotation of base shot
+    base_sfm_rotation = reconstruction.shots[base_shot_id].pose.get_rotation_matrix().T
 
-    qnew = tf.quaternion_inverse(tf.quaternion_multiply(qdiff, qr))
-
-    return tf.euler_from_quaternion(qnew)
+    # return prediction
+    return _rotation_matrix_to_euler_angles((delta_rotation.dot(base_sfm_rotation)).T)
 
 
 def transform_reconstruction(reconstruction, ref_shots_dict):
