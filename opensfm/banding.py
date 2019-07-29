@@ -75,7 +75,9 @@ def remove_banding( num_processes, mkv_search_paths = [], working_dir = None):
 
             #subprocess.call(['ffmpeg', '-i', 'img%04d.jpg', '-r', '7', '-codec', 'copy', mkv_file])
             ffmpeg.input('%04d.jpg').output(mkv_dir + ".mkv").run()
-
+            
+            os.chdir(working_dir)
+            
             shutil.rmtree(mkv_dir)
 
     os.chdir(working_dir)
@@ -105,7 +107,7 @@ def remove(args):
 
     logger.info('{}: banding found in {}/4 images'.format(_int_to_shot_id(idx), banding_cnt))
 
-    if banding_cnt >= 2:
+    if banding_cnt >= 1:
         logger.info('{}: removing banding...'.format(idx))
 
         for img_file in img_set:
