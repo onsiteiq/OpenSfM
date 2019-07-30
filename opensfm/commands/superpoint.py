@@ -775,13 +775,13 @@ if __name__ == '__main__':
   while True:
 
     start = time.time()
+    # get the filename to be used for filepath to store the features.
+    fname = vs.listing[vs.i][-14:]
+
     # Get a new image.
     img, grayimg, status = vs.next_frame()
     if status is False:
       break
-
-    # get the filename to be used for filepath to store the features.
-    fname = vs.listing[vs.i][-14:]
 
     # Get points and descriptors.
     start1 = time.time()
