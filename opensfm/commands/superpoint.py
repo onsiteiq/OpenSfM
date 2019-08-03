@@ -19,6 +19,7 @@ import torch
 
 from opensfm import types
 from opensfm.commands import undistort
+from opensfm.context import parallel_map
 
 # Stub to warn about opencv version.
 if int(cv2.__version__[0]) < 3: # pragma: no cover
@@ -460,44 +461,19 @@ class VideoStreamer(object):
     2.) A directory of images (files in directory matching 'img_glob').
     3.) A video file, such as an .mp4 or .avi file.
   """
-  def __init__(self, basedir, camid, height, width, skip, img_glob):
-    self.cap = []
-    self.camera = False
-    self.video_file = False
+  def __init__(self, basedir, height, width, skip, img_glob):
     self.listing = []
     self.sizer = [height, width]
-    self.i = 0
     self.skip = skip
     self.maxlen = 1000000
-    # If the "basedir" string is the word camera, then use a webcam.
-    if basedir == "camera/" or basedir == "camera":
-      print('==> Processing Webcam Input.')
-      self.cap = cv2.VideoCapture(camid)
-      self.listing = range(0, self.maxlen)
-      self.camera = True
-    else:
-      # Try to open as a video.
-      self.cap = cv2.VideoCapture(basedir)
-      lastbit = basedir[-4:len(basedir)]
-      if (type(self.cap) == list or not self.cap.isOpened()) and (lastbit == '.mp4'):
-        raise IOError('Cannot open movie file')
-      elif type(self.cap) != list and self.cap.isOpened() and (lastbit != '.txt'):
-        print('==> Processing Video Input.')
-        num_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        self.listing = range(0, num_frames)
-        self.listing = self.listing[::self.skip]
-        self.camera = True
-        self.video_file = True
-        self.maxlen = len(self.listing)
-      else:
-        print('==> Processing Image Directory Input.')
-        search = os.path.join(basedir, img_glob)
-        self.listing = glob.glob(search)
-        self.listing.sort()
-        self.listing = self.listing[::self.skip]
-        self.maxlen = len(self.listing)
-        if self.maxlen == 0:
-          raise IOError('No images were found (maybe bad \'--img_glob\' parameter?)')
+    print('==> Processing Image Directory Input.')
+    search = os.path.join(basedir, img_glob)
+    self.listing = glob.glob(search)
+    self.listing.sort()
+    self.listing = self.listing[::self.skip]
+    self.maxlen = len(self.listing)
+    if self.maxlen == 0:
+      raise IOError('No images were found (maybe bad \'--img_glob\' parameter?)')
 
   def read_image(self, impath, img_size):
     """ Read image as grayscale and resize to img_size.
@@ -603,30 +579,17 @@ class VideoStreamer(object):
 
     return norm_pixels
 
-  def next_frame(self):
-    """ Return the next frame, and increment internal counter.
+  def get_frame(self, idx):
+    """ Return frame with index idx
     Returns
-       image: Next H x W image.
+       image: H x W image.
        status: True or False depending whether image was loaded.
     """
-    if self.i == self.maxlen:
+    if idx >= self.maxlen:
       return (None, False)
-    if self.camera:
-      ret, input_image = self.cap.read()
-      if ret is False:
-        print('VideoStreamer: Cannot get image from camera (maybe bad --camid?)')
-        return (None, False)
-      if self.video_file:
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.listing[self.i])
-      input_image = cv2.resize(input_image, (self.sizer[1], self.sizer[0]),
-                               interpolation=cv2.INTER_AREA)
-      gray_image = cv2.cvtColor(input_image, cv2.COLOR_BGR2GRAY)
-      gray_image = gray_image.astype('float')/255.0
-    else:
-      image_file = self.listing[self.i]
-      input_image, gray_image = self.read_image(image_file, self.sizer)
-    # Increment internal counter.
-    self.i = self.i + 1
+
+    image_file = self.listing[idx]
+    input_image, gray_image = self.read_image(image_file, self.sizer)
     gray_image = gray_image.astype('float32')
     return (input_image, gray_image, True)
 
@@ -682,7 +645,6 @@ def normalized_image_coordinates(pixel_coords, width, height):
 
   return p.T
 
-
 def denormalized_image_coordinates(norm_coords, width, height):
   size = max(width, height)
   p = np.empty((len(norm_coords), 2))
@@ -690,6 +652,132 @@ def denormalized_image_coordinates(norm_coords, width, height):
   p[:, 1] = norm_coords[:, 1] * size - 0.5 + height / 2.0
 
   return p.T
+
+
+def detect_xyz(args):
+  print(args)
+  idx = args
+
+def detect(args):
+    idx = args
+
+    start = time.time()
+    # get the filename to be used for filepath to store the features.
+    fname = vs.listing[idx][-14:]
+
+    # Get a new image.
+    img, grayimg, status = vs.get_frame(idx)
+    if status is False:
+        return
+
+    # Get points and descriptors.
+    pts, desc, heatmap = fe.run(grayimg)
+    pts, desc = remove_border_points(img, pts, desc, border_size=6)
+
+    # Add points and descriptors to the tracker.
+    tracker.update(pts, desc)
+
+    norm_pts = normalized_image_coordinates(pts.T, img.shape[1], img.shape[0])
+
+    # get the color at the feature extracted to be stored for matching
+    colors = [img[int(round(pt[1])), int(round(pt[0]))] for pt in pts.T]
+    colors = np.array(colors)
+
+    # compute magnitude and direction for feature matching using Opensfm
+    # grayimg is normalized to 0-1 and laplacian will return an error if used.
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    mag = [mag_and_dir(gray, int(round(pt[1])), int(round(pt[0])))[0] for pt in pts.T]
+    mag = np.array(mag)
+    dir = [mag_and_dir(gray, int(round(pt[1])), int(round(pt[0])))[1] for pt in pts.T]
+    dir = np.array(dir)
+
+    # adding mag and dir to the pts(x,y)
+    points = []
+    for i in range(len(mag)):
+        points.append([norm_pts.T[i][0], norm_pts.T[i][1], mag[i], dir[i]])
+    #points = np.array(points, dtype=np.uint8)
+    points = np.array(points)
+
+    desc = desc.T
+    points, desc, colors = vs.convert_points(points, desc, colors)
+
+    end1 = time.time()
+
+    # Get tracks for points which were match successfully across all frames.
+    tracks = tracker.get_tracks(opt.min_length)
+
+    # Primary output - Show point tracks overlayed on top of input image.
+    out1 = img.copy()
+
+    for pt in pts.T:
+        pt1 = (int(round(pt[0])), int(round(pt[1])))
+        cv2.circle(out1, pt1, 1, (0, 255, 0), -1, lineType=16)
+    # cv2.putText(out1, 'Raw Point Detections', font_pt, font, font_sc, font_clr, lineType=16)
+
+    # Extra output -- Show current point detections.
+    out2 = img.copy()
+    tracks[:, 1] /= float(fe.nn_thresh)  # Normalize track scores to [0,1].
+    tracker.draw_tracks(out2, tracks)
+    if opt.show_extra:
+        cv2.putText(out2, 'Point Tracks', font_pt, font, font_sc, font_clr, lineType=16)
+
+    # Extra output -- Show the point confidence heatmap.
+    if heatmap is not None:
+        min_conf = 0.001
+        heatmap[heatmap < min_conf] = min_conf
+        heatmap = -np.log(heatmap)
+        heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min() + .00001)
+        out3 = myjet[np.round(np.clip(heatmap*10, 0, 9)).astype('int'), :]
+        out3 = (out3*255).astype('uint8')
+    else:
+        out3 = np.zeros_like(out2)
+    cv2.putText(out3, 'Raw Point Confidences', font_pt, font, font_sc, font_clr, lineType=16)
+
+    # Resize final output.
+    if opt.show_extra:
+        out = np.hstack((out1, out2, out3))
+        out = cv2.resize(out, (3*opt.display_scale*opt.W, opt.display_scale*opt.H))
+    else:
+        out = cv2.resize(out1, (opt.display_scale*opt.W, opt.display_scale*opt.H))
+
+    # Display visualization image to screen.
+    if display:
+        cv2.imshow(win, out)
+        #key = cv2.waitKey(opt.waitkey) & 0xFF
+        #if key == ord('q'):
+            #print('Quitting, \'q\' pressed.')
+            #break
+
+    # save the features
+    if write:
+        out_file = os.path.join(write_dir, fname)
+        npz_file = fname + '.npz'
+        preemptive_npz_file = fname + '_preemptive' + '.npz'
+        npz_outfile = os.path.join(write_dir, npz_file)
+        preemptive_npz_outfile = os.path.join(write_dir, preemptive_npz_file)
+        save_features(npz_outfile, points, desc, colors)
+        save_features(preemptive_npz_outfile, points[-200:], desc[-200:], None)
+        print('Saving features to %s' % npz_outfile)
+
+        flann_params = dict(algorithm=2,
+                            branching=16,
+                            iterations=10)
+
+        flann_file = fname + '.flann'
+        flann_outfile = os.path.join(write_dir, flann_file)
+        index = cv2.flann_Index(desc, flann_params)
+        index.save(flann_outfile)
+
+        # uncomment the line below to save annotated frames w superpoints
+        # cv2.imwrite(out_file, out)
+
+    end = time.time()
+    net_t = (1./ float(end1 - start))
+    total_t = (1./ float(end - start))
+    if opt.show_extra:
+        print('Processed image %d (net+post_process: %.2f FPS, total: %.2f FPS).'\
+              % (vs.i, net_t, total_t))
+
 
 if __name__ == '__main__':
 
@@ -718,21 +806,19 @@ if __name__ == '__main__':
       help='Detector confidence threshold (default: 0.015).')
   parser.add_argument('--nn_thresh', type=float, default=0.5,
       help='Descriptor matching threshold (default: 0.7).')
-  parser.add_argument('--camid', type=int, default=0,
-      help='OpenCV webcam video capture ID, usually 0 or 1 (default: 0).')
   parser.add_argument('--waitkey', type=int, default=1,
       help='OpenCV waitkey time in ms (default: 1).')
   parser.add_argument('--cuda', action='store_true',
       help='Use cuda GPU to speed up network processing speed (default: False)')
 
-  display = True
+  display = False
 
   opt = parser.parse_args()
   # print(opt)
 
   # This class helps load input images from different sources.
   input = './frames'  # input is the relative path to the frames
-  vs = VideoStreamer(input, opt.camid, opt.H, opt.W, opt.skip, opt.img_glob)
+  vs = VideoStreamer(input, opt.H, opt.W, opt.skip, opt.img_glob)
 
   print('==> Loading pre-trained network.')
   current_dir = os.path.dirname(__file__)
@@ -772,126 +858,8 @@ if __name__ == '__main__':
       os.makedirs(write_dir)
 
   print('==> Running Demo.')
-  while True:
-
-    start = time.time()
-    # get the filename to be used for filepath to store the features.
-    fname = vs.listing[vs.i][-14:]
-
-    # Get a new image.
-    img, grayimg, status = vs.next_frame()
-    if status is False:
-      break
-
-    # Get points and descriptors.
-    start1 = time.time()
-    pts, desc, heatmap = fe.run(grayimg)
-    pts, desc = remove_border_points(img, pts, desc, border_size=6)
-
-    # Add points and descriptors to the tracker.
-    tracker.update(pts, desc)
-
-    norm_pts = normalized_image_coordinates(pts.T, img.shape[1], img.shape[0])
-
-    # get the color at the feature extracted to be stored for matching
-    colors = [img[int(round(pt[1])), int(round(pt[0]))] for pt in pts.T]
-    colors = np.array(colors)
-
-    # compute magnitude and direction for feature matching using Opensfm
-    # grayimg is normalized to 0-1 and laplacian will return an error if used.
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    mag = [mag_and_dir(gray, int(round(pt[1])), int(round(pt[0])))[0] for pt in pts.T]
-    mag = np.array(mag)
-    dir = [mag_and_dir(gray, int(round(pt[1])), int(round(pt[0])))[1] for pt in pts.T]
-    dir = np.array(dir)
-
-    # adding mag and dir to the pts(x,y)
-    points = []
-    for i in range(len(mag)):
-      points.append([norm_pts.T[i][0], norm_pts.T[i][1], mag[i], dir[i]])
-    #points = np.array(points, dtype=np.uint8)
-    points = np.array(points)
-
-    desc = desc.T
-    points, desc, colors = vs.convert_points(points, desc, colors)
-
-    end1 = time.time()
-
-    # Get tracks for points which were match successfully across all frames.
-    tracks = tracker.get_tracks(opt.min_length)
-
-    # Primary output - Show point tracks overlayed on top of input image.
-    out1 = img.copy()
-
-    for pt in pts.T:
-      pt1 = (int(round(pt[0])), int(round(pt[1])))
-      cv2.circle(out1, pt1, 1, (0, 255, 0), -1, lineType=16)
-    # cv2.putText(out1, 'Raw Point Detections', font_pt, font, font_sc, font_clr, lineType=16)
-
-    # Extra output -- Show current point detections.
-    out2 = img.copy()
-    tracks[:, 1] /= float(fe.nn_thresh)  # Normalize track scores to [0,1].
-    tracker.draw_tracks(out2, tracks)
-    if opt.show_extra:
-      cv2.putText(out2, 'Point Tracks', font_pt, font, font_sc, font_clr, lineType=16)
-
-    # Extra output -- Show the point confidence heatmap.
-    if heatmap is not None:
-      min_conf = 0.001
-      heatmap[heatmap < min_conf] = min_conf
-      heatmap = -np.log(heatmap)
-      heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min() + .00001)
-      out3 = myjet[np.round(np.clip(heatmap*10, 0, 9)).astype('int'), :]
-      out3 = (out3*255).astype('uint8')
-    else:
-      out3 = np.zeros_like(out2)
-    cv2.putText(out3, 'Raw Point Confidences', font_pt, font, font_sc, font_clr, lineType=16)
-
-    # Resize final output.
-    if opt.show_extra:
-      out = np.hstack((out1, out2, out3))
-      out = cv2.resize(out, (3*opt.display_scale*opt.W, opt.display_scale*opt.H))
-    else:
-      out = cv2.resize(out1, (opt.display_scale*opt.W, opt.display_scale*opt.H))
-
-    # Display visualization image to screen.
-    if display:
-      cv2.imshow(win, out)
-      key = cv2.waitKey(opt.waitkey) & 0xFF
-      if key == ord('q'):
-        print('Quitting, \'q\' pressed.')
-        break
-
-    # save the features
-    if write:
-      out_file = os.path.join(write_dir, fname)
-      npz_file = fname + '.npz'
-      preemptive_npz_file = fname + '_preemptive' + '.npz'
-      npz_outfile = os.path.join(write_dir, npz_file)
-      preemptive_npz_outfile = os.path.join(write_dir, preemptive_npz_file)
-      save_features(npz_outfile, points, desc, colors)
-      save_features(preemptive_npz_outfile, points[-200:], desc[-200:], None)
-      print('Saving features to %s' % npz_outfile)
-
-      flann_params = dict(algorithm=2,
-                          branching=16,
-                          iterations=10)
-
-      flann_file = fname + '.flann'
-      flann_outfile = os.path.join(write_dir, flann_file)
-      index = cv2.flann_Index(desc, flann_params)
-      index.save(flann_outfile)
-
-
-      # uncomment the line below to save annotated frames w superpoints
-      # cv2.imwrite(out_file, out)
-
-    end = time.time()
-    net_t = (1./ float(end1 - start))
-    total_t = (1./ float(end - start))
-    if opt.show_extra:
-      print('Processed image %d (net+post_process: %.2f FPS, total: %.2f FPS).'\
-            % (vs.i, net_t, total_t))
+  arguments = list(range(len(vs.listing)))
+  parallel_map(detect, arguments, 10)
 
   # Close any remaining windows.
   cv2.destroyAllWindows()
