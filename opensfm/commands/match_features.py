@@ -343,8 +343,8 @@ def match(args):
             i1 = None
             i2 = None
 
-        p1_s, f1_s, c1_s = superpoint.load_feature_index(im1)
-        p2_s, f2_s, c2_s = superpoint.load_feature_index(im2)
+        p1_s, f1_s, c1_s = superpoint.load_features(im1)
+        p2_s, f2_s, c2_s = superpoint.load_features(im2)
         if config['matcher_type'] == 'FLANN':
             i1_s = superpoint.load_feature_index(im1, f1_s)
             i2_s = superpoint.load_feature_index(im2, f2_s)
