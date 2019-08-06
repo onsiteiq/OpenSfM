@@ -617,11 +617,38 @@ def mag_and_dir(grayim, x, y):
   return size, angle
 
 
-def save_features(filepath, points, desc, colors):
-  np.savez_compressed(filepath,
+def save_features(feature_outfile, points, desc, colors):
+  np.savez_compressed(feature_outfile,
            points=points.astype(np.float32),
            descriptors=desc.astype(np.float32),
            colors=colors)
+
+
+def load_features(image):
+  filepath = './osfm/superpoints'
+
+  try:
+    s = np.load(os.path.join(filepath, image + '.npz'))
+    return s['points'], s['descriptors'], s['colors'].astype(float)
+  except FileNotFoundError:
+    return None, None, None
+
+
+def save_feature_index(flann_outfile, desc):
+  flann_params = dict(algorithm=2,
+                      branching=16,
+                      iterations=10)
+
+  index = cv2.flann_Index(desc, flann_params)
+  index.save(flann_outfile)
+
+
+def load_feature_index(image, features):
+  filepath = './osfm/superpoints'
+
+  index = cv2.flann_Index()
+  index.load(features, os.path.join(filepath, image + '.flann'))
+  return index
 
 
 def remove_border_points(img, pts, desc, border_size=5):
@@ -750,7 +777,6 @@ def detect(args):
 
     # save the features
     if write:
-        out_file = os.path.join(write_dir, fname)
         npz_file = fname + '.npz'
         preemptive_npz_file = fname + '_preemptive' + '.npz'
         npz_outfile = os.path.join(write_dir, npz_file)
@@ -759,16 +785,13 @@ def detect(args):
         save_features(preemptive_npz_outfile, points[-200:], desc[-200:], None)
         print('Saving features to %s' % npz_outfile)
 
-        flann_params = dict(algorithm=2,
-                            branching=16,
-                            iterations=10)
-
-        flann_file = fname + '.flann'
-        flann_outfile = os.path.join(write_dir, flann_file)
-        index = cv2.flann_Index(desc, flann_params)
-        index.save(flann_outfile)
+        idx_file = fname + '.flann'
+        idx_outfile = os.path.join(write_dir, idx_file)
+        save_feature_index(idx_outfile, desc)
+        print('Saving feature index to %s' % idx_outfile)
 
         # uncomment the line below to save annotated frames w superpoints
+        # out_file = os.path.join(write_dir, fname)
         # cv2.imwrite(out_file, out)
 
     end = time.time()
@@ -822,7 +845,7 @@ if __name__ == '__main__':
 
   print('==> Loading pre-trained network.')
   current_dir = os.path.dirname(__file__)
-  weights_path = os.path.join(current_dir, 'superpoint.pth')
+  weights_path = os.path.join(os.path.dirname(current_dir), 'data/superpoint.pth')
 
   # This class runs the SuperPoint network and processes its outputs.
   fe = SuperPointFrontend(weights_path=weights_path,
@@ -851,7 +874,7 @@ if __name__ == '__main__':
   # Create output directory if desired.
 
   write = True
-  write_dir = './superpoints'
+  write_dir = './osfm/superpoints'
   if write:
     print('==> Will write outputs to %s' % write_dir)
     if not os.path.exists(write_dir):

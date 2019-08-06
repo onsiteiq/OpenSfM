@@ -12,6 +12,7 @@ from opensfm import log
 from opensfm import matching
 from opensfm.context import parallel_map
 from opensfm.align_pdr import init_pdr_predictions
+from opensfm.commands import superpoint
 
 
 logger = logging.getLogger(__name__)
@@ -341,6 +342,22 @@ def match(args):
         else:
             i1 = None
             i2 = None
+
+        p1_s, f1_s, c1_s = superpoint.load_feature_index(im1)
+        p2_s, f2_s, c2_s = superpoint.load_feature_index(im2)
+        if config['matcher_type'] == 'FLANN':
+            i1_s = superpoint.load_feature_index(im1, f1_s)
+            i2_s = superpoint.load_feature_index(im2, f2_s)
+        else:
+            i1_s = None
+            i2_s = None
+
+        p1 = p1 + p1_s
+        p2 = p2 + p2_s
+        f1 = f1 + f1_s
+        f2 = f2 + f2_s
+        i1 = i1 + i1_s
+        i2 = i2 + i2_s
 
         matches = matching.match_symmetric(f1, i1, f2, i2, config)
         logger.debug('{} - {} has {} candidate matches'.format(
