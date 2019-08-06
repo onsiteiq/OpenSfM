@@ -252,7 +252,10 @@ class SuperPointFrontend(object):
       desc = torch.nn.functional.grid_sample(coarse_desc, samp_pts)
       desc = desc.data.cpu().numpy().reshape(D, -1)
       desc /= np.linalg.norm(desc, axis=0)[np.newaxis, :]
-    return pts, desc, heatmap
+
+    # reduce dimensions of each descriptor from 256 to 128 (to match other feature types)
+    even_rows = [x for x in range(256) if x % 2 == 0]
+    return pts, desc[even_rows, :], heatmap
 
 
 class PointTracker(object):
@@ -680,10 +683,6 @@ def denormalized_image_coordinates(norm_coords, width, height):
 
   return p.T
 
-
-def detect_xyz(args):
-  print(args)
-  idx = args
 
 def detect(args):
     idx = args

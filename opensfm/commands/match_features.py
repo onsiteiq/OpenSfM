@@ -10,6 +10,7 @@ from opensfm import geo
 from opensfm import io
 from opensfm import log
 from opensfm import matching
+from opensfm import features
 from opensfm.context import parallel_map
 from opensfm.align_pdr import init_pdr_predictions
 from opensfm.commands import superpoint
@@ -332,32 +333,24 @@ def match(args):
         p1, f1, c1 = ctx.data.load_features(im1)
         p2, f2, c2 = ctx.data.load_features(im2)
 
+        p1_s, f1_s, c1_s = superpoint.load_features(im1)
+        p2_s, f2_s, c2_s = superpoint.load_features(im2)
+
+        p1 = np.concatenate((p1, p1_s), axis=0)
+        f1 = np.concatenate((f1, f1_s), axis=0)
+        p2 = np.concatenate((p2, p2_s), axis=0)
+        f2 = np.concatenate((f2, f2_s), axis=0)
+
         if p1 is None or p2 is None:
             im1_matches[im2] = []
             continue
 
         if config['matcher_type'] == 'FLANN':
-            i1 = ctx.data.load_feature_index(im1, f1)
-            i2 = ctx.data.load_feature_index(im2, f2)
+            i1 = features.build_flann_index(f1, config)
+            i2 = features.build_flann_index(f2, config)
         else:
             i1 = None
             i2 = None
-
-        p1_s, f1_s, c1_s = superpoint.load_features(im1)
-        p2_s, f2_s, c2_s = superpoint.load_features(im2)
-        if config['matcher_type'] == 'FLANN':
-            i1_s = superpoint.load_feature_index(im1, f1_s)
-            i2_s = superpoint.load_feature_index(im2, f2_s)
-        else:
-            i1_s = None
-            i2_s = None
-
-        p1 = p1 + p1_s
-        p2 = p2 + p2_s
-        f1 = f1 + f1_s
-        f2 = f2 + f2_s
-        i1 = i1 + i1_s
-        i2 = i2 + i2_s
 
         matches = matching.match_symmetric(f1, i1, f2, i2, config)
         logger.debug('{} - {} has {} candidate matches'.format(

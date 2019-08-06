@@ -1,4 +1,5 @@
 import logging
+import numpy as np
 from timeit import default_timer as timer
 
 from networkx.algorithms import bipartite
@@ -49,8 +50,8 @@ class Command:
             p, f, c = data.load_features(im)
 
             p_s, f_s, c_s = superpoint.load_features(im)
-            p = p + p_s
-            c = c + c_s
+            p = np.concatenate((p, p_s), axis=0)
+            c = np.concatenate((c, c_s), axis=0)
 
             if p is not None:
                 features[im] = p[:, :2]
