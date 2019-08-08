@@ -12,6 +12,8 @@ feature_root: 1               # If 1, apply square root mapping to features
 feature_min_frames: 4000      # If fewer frames are detected, sift_peak_threshold/surf_hessian_threshold is reduced.
 feature_process_size: 2048    # Resize the image if its size is larger than specified. Set to -1 for original size
 feature_use_adaptive_suppression: no
+feature_use_superpoint: yes   # If yes, generate 'super point' features
+feature_process_size_superpoint: 1280   
 
 # Params for SIFT
 sift_peak_threshold: 0.1     # Smaller value -> more features

@@ -333,17 +333,18 @@ def match(args):
         p1, f1, c1 = ctx.data.load_features(im1)
         p2, f2, c2 = ctx.data.load_features(im2)
 
-        p1_s, f1_s, c1_s = superpoint.load_features(im1)
-        p2_s, f2_s, c2_s = superpoint.load_features(im2)
-
-        p1 = np.concatenate((p1, p1_s), axis=0)
-        f1 = np.concatenate((f1, f1_s), axis=0)
-        p2 = np.concatenate((p2, p2_s), axis=0)
-        f2 = np.concatenate((f2, f2_s), axis=0)
-
         if p1 is None or p2 is None:
             im1_matches[im2] = []
             continue
+
+        p1_s, f1_s, c1_s = superpoint.load_features(im1)
+        p2_s, f2_s, c2_s = superpoint.load_features(im2)
+
+        if p1_s is not None and p2_s is not None:
+            p1 = np.concatenate((p1, p1_s), axis=0)
+            f1 = np.concatenate((f1, f1_s), axis=0)
+            p2 = np.concatenate((p2, p2_s), axis=0)
+            f2 = np.concatenate((f2, f2_s), axis=0)
 
         if config['matcher_type'] == 'FLANN':
             i1 = features.build_flann_index(f1, config)
@@ -374,8 +375,8 @@ def match(args):
         logger.debug('Robust matching time : {0}s'.format(
             timer() - t_robust_matching))
 
-        logger.debug("Full matching {0} / {1}, time: {2}s".format(
-            len(rmatches), len(matches), timer() - t))
+        logger.debug("{} - {} Full matching {} / {}, time: {}s".format(
+            im1, im2, len(rmatches), len(matches), timer() - t))
     ctx.data.save_matches(im1, im1_matches)
 
 

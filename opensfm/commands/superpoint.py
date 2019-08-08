@@ -21,6 +21,26 @@ from opensfm import types
 from opensfm.commands import undistort
 from opensfm.context import parallel_map
 
+# global variables
+size_w = 1280
+size_h = 640
+write = True
+write_dir = './osfm/superpoints'
+input_dir = './frames'
+fe = None
+win = None
+tracker = None
+display = False
+opt = None
+vs = None
+
+# Font parameters for visualizaton.
+font = cv2.FONT_HERSHEY_DUPLEX
+font_clr = (255, 255, 255)
+font_pt = (4, 10)
+font_sc = 0.4
+
+
 # Stub to warn about opencv version.
 if int(cv2.__version__[0]) < 3: # pragma: no cover
   print('Warning: OpenCV 3 is not installed')
@@ -762,9 +782,9 @@ def detect(args):
     # Resize final output.
     if opt.show_extra:
         out = np.hstack((out1, out2, out3))
-        out = cv2.resize(out, (3*opt.display_scale*opt.W, opt.display_scale*opt.H))
+        out = cv2.resize(out, (3*opt.display_scale*size_w, opt.display_scale*size_h))
     else:
-        out = cv2.resize(out1, (opt.display_scale*opt.W, opt.display_scale*opt.H))
+        out = cv2.resize(out1, (opt.display_scale*size_w, opt.display_scale*size_h))
 
     # Display visualization image to screen.
     if display:
@@ -777,17 +797,18 @@ def detect(args):
     # save the features
     if write:
         npz_file = fname + '.npz'
-        preemptive_npz_file = fname + '_preemptive' + '.npz'
         npz_outfile = os.path.join(write_dir, npz_file)
-        preemptive_npz_outfile = os.path.join(write_dir, preemptive_npz_file)
         save_features(npz_outfile, points, desc, colors)
-        save_features(preemptive_npz_outfile, points[-200:], desc[-200:], None)
         print('Saving features to %s' % npz_outfile)
 
-        idx_file = fname + '.flann'
-        idx_outfile = os.path.join(write_dir, idx_file)
-        save_feature_index(idx_outfile, desc)
-        print('Saving feature index to %s' % idx_outfile)
+        #preemptive_npz_file = fname + '_preemptive' + '.npz'
+        #preemptive_npz_outfile = os.path.join(write_dir, preemptive_npz_file)
+        #save_features(preemptive_npz_outfile, points[-200:], desc[-200:], None)
+
+        #idx_file = fname + '.flann'
+        #idx_outfile = os.path.join(write_dir, idx_file)
+        #save_feature_index(idx_outfile, desc)
+        #print('Saving feature index to %s' % idx_outfile)
 
         # uncomment the line below to save annotated frames w superpoints
         # out_file = os.path.join(write_dir, fname)
@@ -801,7 +822,7 @@ def detect(args):
               % (vs.i, net_t, total_t))
 
 
-if __name__ == '__main__':
+def gen_ss(W, processes):
 
   # TODO: parameters can be moved to the config file.
 
@@ -812,10 +833,6 @@ if __name__ == '__main__':
       help='Images to skip if input is movie or directory (default: 1).')
   parser.add_argument('--show_extra', action='store_true',
       help='Show extra debug outputs (default: False).')
-  parser.add_argument('--H', type=int, default=640,
-      help='Input image height (default: 120).')
-  parser.add_argument('--W', type=int, default=1280,
-      help='Input image width (default:160).')
   parser.add_argument('--display_scale', type=int, default=1,
       help='Factor to scale output visualization (default: 2).')
   parser.add_argument('--min_length', type=int, default=2,
@@ -833,14 +850,13 @@ if __name__ == '__main__':
   parser.add_argument('--cuda', action='store_true',
       help='Use cuda GPU to speed up network processing speed (default: False)')
 
-  display = False
-
   opt = parser.parse_args()
-  # print(opt)
+  print(opt)
 
+  size_w = W
+  size_h = W/2
   # This class helps load input images from different sources.
-  input = './frames'  # input is the relative path to the frames
-  vs = VideoStreamer(input, opt.H, opt.W, opt.skip, opt.img_glob)
+  vs = VideoStreamer(input_dir, size_h, size_w, opt.skip, opt.img_glob)
 
   print('==> Loading pre-trained network.')
   current_dir = os.path.dirname(__file__)
@@ -864,16 +880,8 @@ if __name__ == '__main__':
   else:
     print('Skipping visualization, will not show a GUI.')
 
-  # Font parameters for visualizaton.
-  font = cv2.FONT_HERSHEY_DUPLEX
-  font_clr = (255, 255, 255)
-  font_pt = (4, 10)
-  font_sc = 0.4
-
   # Create output directory if desired.
 
-  write = True
-  write_dir = './osfm/superpoints'
   if write:
     print('==> Will write outputs to %s' % write_dir)
     if not os.path.exists(write_dir):
@@ -881,9 +889,14 @@ if __name__ == '__main__':
 
   print('==> Running Demo.')
   arguments = list(range(len(vs.listing)))
-  parallel_map(detect, arguments, 10)
+  parallel_map(detect, arguments, processes)
 
   # Close any remaining windows.
   cv2.destroyAllWindows()
 
   print('.. finished Extracting Super Points.')
+
+
+if __name__ == '__main__':
+  gen_ss(1280, 10)
+

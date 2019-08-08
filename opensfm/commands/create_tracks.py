@@ -49,17 +49,19 @@ class Command:
         for im in data.images():
             p, f, c = data.load_features(im)
 
-            p_s, f_s, c_s = superpoint.load_features(im)
-            p = np.concatenate((p, p_s), axis=0)
-            c = np.concatenate((c, c_s), axis=0)
-
-            if p is not None:
-                features[im] = p[:, :2]
-                colors[im] = c
-            else:
+            if p is None:
                 features[im] = []
                 colors[im] = []
-                
+                continue
+
+            p_s, f_s, c_s = superpoint.load_features(im)
+            if p_s is not None:
+                p = np.concatenate((p, p_s), axis=0)
+                c = np.concatenate((c, c_s), axis=0)
+
+            features[im] = p[:, :2]
+            colors[im] = c
+
         return features, colors
 
     def load_matches(self, data):
