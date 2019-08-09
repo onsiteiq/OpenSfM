@@ -24,15 +24,26 @@ from opensfm.context import parallel_map
 # global variables
 size_w = 1280
 size_h = 640
+
+display = False
+show_extra = False
+win = None
+
 write = True
 write_dir = './osfm/superpoints'
 input_dir = './frames'
-fe = None
-win = None
-tracker = None
-display = False
-opt = None
-vs = None
+weights_file = './data/superpoint.pth'
+img_glob = '*.jpg'
+
+skip = 1
+display_scale = 1
+min_length = 2
+max_length = 5
+nms_dist = 4
+conf_thresh = 0.15
+nn_thresh = 0.5
+waitkey = 1
+cuda = False
 
 # Font parameters for visualizaton.
 font = cv2.FONT_HERSHEY_DUPLEX
@@ -705,7 +716,7 @@ def denormalized_image_coordinates(norm_coords, width, height):
 
 
 def detect(args):
-    idx = args
+    idx, vs, fe, tracker = args
 
     start = time.time()
     # get the filename to be used for filepath to store the features.
@@ -750,7 +761,7 @@ def detect(args):
     end1 = time.time()
 
     # Get tracks for points which were match successfully across all frames.
-    tracks = tracker.get_tracks(opt.min_length)
+    tracks = tracker.get_tracks(min_length)
 
     # Primary output - Show point tracks overlayed on top of input image.
     out1 = img.copy()
@@ -764,7 +775,7 @@ def detect(args):
     out2 = img.copy()
     tracks[:, 1] /= float(fe.nn_thresh)  # Normalize track scores to [0,1].
     tracker.draw_tracks(out2, tracks)
-    if opt.show_extra:
+    if show_extra:
         cv2.putText(out2, 'Point Tracks', font_pt, font, font_sc, font_clr, lineType=16)
 
     # Extra output -- Show the point confidence heatmap.
@@ -780,16 +791,16 @@ def detect(args):
     cv2.putText(out3, 'Raw Point Confidences', font_pt, font, font_sc, font_clr, lineType=16)
 
     # Resize final output.
-    if opt.show_extra:
+    if show_extra:
         out = np.hstack((out1, out2, out3))
-        out = cv2.resize(out, (3*opt.display_scale*size_w, opt.display_scale*size_h))
+        out = cv2.resize(out, (3*display_scale*size_w, display_scale*size_h))
     else:
-        out = cv2.resize(out1, (opt.display_scale*size_w, opt.display_scale*size_h))
+        out = cv2.resize(out1, (display_scale*size_w, display_scale*size_h))
 
     # Display visualization image to screen.
     if display:
         cv2.imshow(win, out)
-        #key = cv2.waitKey(opt.waitkey) & 0xFF
+        #key = cv2.waitKey(waitkey) & 0xFF
         #if key == ord('q'):
             #print('Quitting, \'q\' pressed.')
             #break
@@ -817,61 +828,32 @@ def detect(args):
     end = time.time()
     net_t = (1./ float(end1 - start))
     total_t = (1./ float(end - start))
-    if opt.show_extra:
+    if show_extra:
         print('Processed image %d (net+post_process: %.2f FPS, total: %.2f FPS).'\
               % (vs.i, net_t, total_t))
 
 
 def gen_ss(W, processes):
-
-  # TODO: parameters can be moved to the config file.
-
-  parser = argparse.ArgumentParser(description='PyTorch SuperPoint Demo.')
-  parser.add_argument('--img_glob', type=str, default='*.jpg',
-      help='Glob match if directory of images is specified (default: \'*.jpg\').')
-  parser.add_argument('--skip', type=int, default=1,
-      help='Images to skip if input is movie or directory (default: 1).')
-  parser.add_argument('--show_extra', action='store_true',
-      help='Show extra debug outputs (default: False).')
-  parser.add_argument('--display_scale', type=int, default=1,
-      help='Factor to scale output visualization (default: 2).')
-  parser.add_argument('--min_length', type=int, default=2,
-      help='Minimum length of point tracks (default: 2).')
-  parser.add_argument('--max_length', type=int, default=5,
-      help='Maximum length of point tracks (default: 5).')
-  parser.add_argument('--nms_dist', type=int, default=4,
-      help='Non Maximum Suppression (NMS) distance (default: 4).')
-  parser.add_argument('--conf_thresh', type=float, default=0.15,
-      help='Detector confidence threshold (default: 0.015).')
-  parser.add_argument('--nn_thresh', type=float, default=0.5,
-      help='Descriptor matching threshold (default: 0.7).')
-  parser.add_argument('--waitkey', type=int, default=1,
-      help='OpenCV waitkey time in ms (default: 1).')
-  parser.add_argument('--cuda', action='store_true',
-      help='Use cuda GPU to speed up network processing speed (default: False)')
-
-  opt = parser.parse_args()
-  print(opt)
-
   size_w = W
-  size_h = W/2
+  size_h = W//2
+
   # This class helps load input images from different sources.
-  vs = VideoStreamer(input_dir, size_h, size_w, opt.skip, opt.img_glob)
+  vs = VideoStreamer(input_dir, size_h, size_w, skip, img_glob)
 
   print('==> Loading pre-trained network.')
   current_dir = os.path.dirname(__file__)
-  weights_path = os.path.join(os.path.dirname(current_dir), 'data/superpoint.pth')
+  weights_path = os.path.join(os.path.dirname(current_dir), weights_file)
 
   # This class runs the SuperPoint network and processes its outputs.
   fe = SuperPointFrontend(weights_path=weights_path,
-                          nms_dist=opt.nms_dist,
-                          conf_thresh=opt.conf_thresh,
-                          nn_thresh=opt.nn_thresh,
-                          cuda=opt.cuda)
+                          nms_dist=nms_dist,
+                          conf_thresh=conf_thresh,
+                          nn_thresh=nn_thresh,
+                          cuda=cuda)
   print('==> Successfully loaded pre-trained network.')
 
   # This class helps merge consecutive point matches into tracks.
-  tracker = PointTracker(opt.max_length, nn_thresh=fe.nn_thresh)
+  tracker = PointTracker(max_length, nn_thresh=fe.nn_thresh)
 
   # Create a window to display the demo.
   if display:
@@ -888,7 +870,7 @@ def gen_ss(W, processes):
       os.makedirs(write_dir)
 
   print('==> Running Demo.')
-  arguments = list(range(len(vs.listing)))
+  arguments = [(idx, vs, fe, tracker) for idx in range(len(vs.listing))]
   parallel_map(detect, arguments, processes)
 
   # Close any remaining windows.
