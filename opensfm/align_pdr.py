@@ -750,6 +750,9 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad
             pdr_coords.append([pdr_shots_dict[shot_id][0], pdr_shots_dict[shot_id][1], 0])
 
         s, A, b = get_affine_transform_2d(gps_coords, pdr_coords)
+        s1, A1, b1 = get_affine_transform_2d_simplified(gps_coords, pdr_coords)
+        logger.debug("update_pdr_global_2d: s={}, A={}, b={}".format(s, A, b))
+        logger.debug("update_pdr_global_2d: s1={}, A1={}, b1={}".format(s1, A1, b1))
 
         # the closer s is to expected_scale, the better the fit, and the less the deviation
         deviation = math.fabs(1.0 - s/expected_scale)
@@ -1019,6 +1022,26 @@ def get_affine_transform_2d(gps_coords, pdr_coords):
         T[1, 2],
         Xp[:, 2].mean() - s * X[:, 2].mean()  # vertical alignment
     ])
+
+    return s, A, b
+
+
+def get_affine_transform_2d_simplified(gps_coords, pdr_coords):
+    """
+    get affine transform between 2 pdr points and 2 GPS coordinates.
+    this simplification applies when we have 2 pdr points to be aligned with 2 gps points. we will avoid
+    numpy functions as much as possible, so as to make the porting to Javascript easier.
+    """
+    diff_x = [i - j for i, j in zip(pdr_coords[1], pdr_coords[0])]
+    diff_xp = [i - j for i, j in zip(gps_coords[1], gps_coords[0])]
+
+    dot = diff_x[0] * diff_xp[0] + diff_x[1] * diff_xp[1]  # dot product
+    det = diff_x[0] * diff_xp[1] - diff_x[1] * diff_xp[0]  # determinant
+    theta = np.arctan2(det, dot)  # atan2(y, x) or atan2(sin, cos)
+
+    A = _euler_angles_to_rotation_matrix([0, 0, theta])
+    s = np.linalg.norm(diff_xp) / np.linalg.norm(diff_x)
+    b = gps_coords[1] - s*A.dot(pdr_coords[1])
 
     return s, A, b
 
