@@ -749,17 +749,15 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad
             gps_coords.append(gps_points_dict[shot_id])
             pdr_coords.append([pdr_shots_dict[shot_id][0], pdr_shots_dict[shot_id][1], 0])
 
-        s, A, b = get_affine_transform_2d(gps_coords, pdr_coords)
-        s1, A1, b1 = get_affine_transform_2d_simplified(gps_coords, pdr_coords)
-        logger.debug("update_pdr_global_2d: s={}, A={}, b={}".format(s, A, b))
-        logger.debug("update_pdr_global_2d: s1={}, A1={}, b1={}".format(s1, A1, b1))
+        #s, A, b = get_affine_transform_2d(gps_coords, pdr_coords)
+        s, A, b = get_affine_transform_2d_no_numpy(gps_coords, pdr_coords)
 
         # the closer s is to expected_scale, the better the fit, and the less the deviation
         deviation = math.fabs(1.0 - s/expected_scale)
 
         # debugging
-        [x, y, z] = _rotation_matrix_to_euler_angles(A)
-        logger.debug("update_pdr_global_2d: deviation=%f, rotation=%f, %f, %f", deviation, np.degrees(x), np.degrees(y), np.degrees(z))
+        #[x, y, z] = _rotation_matrix_to_euler_angles(A)
+        #logger.debug("update_pdr_global_2d: deviation=%f, rotation=%f, %f, %f", deviation, np.degrees(x), np.degrees(y), np.degrees(z))
 
         if skip_bad and not ((0.50 * expected_scale) < s < (2.0 * expected_scale)):
             logger.debug("s/expected_scale={}, discard".format(s/expected_scale))
@@ -776,7 +774,10 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad
         if i == len(gps_points_dict)-2:
             end_shot_id = _int_to_shot_id(len(pdr_shots_dict)-1)
 
-        new_dict = apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id,
+        #new_dict = apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id,
+                                          #s, A, b,
+                                          #deviation, [all_gps_shot_ids[i], all_gps_shot_ids[i+1]])
+        new_dict = apply_affine_transform_no_numpy(pdr_shots_dict, start_shot_id, end_shot_id,
                                           s, A, b,
                                           deviation, [all_gps_shot_ids[i], all_gps_shot_ids[i+1]])
         pdr_predictions_dict.update(new_dict)
@@ -1004,6 +1005,41 @@ def apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id, s, A, b, 
     return new_dict
 
 
+def apply_affine_transform_no_numpy(pdr_shots_dict, start_shot_id, end_shot_id, s, A, b, deviation, gps_shot_ids=[]):
+    """Apply a similarity (y = s A x + b) to a reconstruction.
+
+    :param pdr_shots_dict: all original pdr predictions
+    :param start_shot_id: start shot id to perform transform
+    :param end_shot_id: end shot id to perform transform
+    :param s: The scale (a scalar)
+    :param A: The rotation matrix (3x3)
+    :param b: The translation vector (3)
+    :param gps_shot_ids: gps shot ids the affine transform is based on
+    :param deviation: a measure of how closely pdr predictions match gps points
+    :return: pdr shots between start and end shot id transformed by s, A, b
+    """
+    new_dict = {}
+
+    start_index = _shot_id_to_int(start_shot_id)
+    end_index = _shot_id_to_int(end_shot_id)
+
+    # transform pdr shots
+    for i in range(start_index, end_index + 1):
+        shot_id = _int_to_shot_id(i)
+        dop = get_dop(shot_id, deviation, gps_shot_ids)
+
+        if shot_id in pdr_shots_dict:
+            X = pdr_shots_dict[shot_id]
+            A_dot_X = [A[0][0]*X[0] + A[0][1]*X[1] + A[0][2]*X[2],
+                          A[1][0]*X[0] + A[1][1]*X[1] + A[1][2]*X[2],
+                          A[2][0]*X[0] + A[2][1]*X[1] + A[2][2]*X[2]]
+            Xp = [i*s + j for i, j in zip(A_dot_X, b)]
+            new_dict[shot_id] = [Xp[0], Xp[1], Xp[2], dop]
+            #logger.info("new_dict {} = {} {} {} {}".format(shot_id, new_dict[shot_id][0], new_dict[shot_id][1], new_dict[shot_id][2], new_dict[shot_id][3]))
+
+    return new_dict
+
+
 def get_affine_transform_2d(gps_coords, pdr_coords):
     """
     get affine transform between pdr an GPS coordinates (dim 2)
@@ -1026,22 +1062,30 @@ def get_affine_transform_2d(gps_coords, pdr_coords):
     return s, A, b
 
 
-def get_affine_transform_2d_simplified(gps_coords, pdr_coords):
+def get_affine_transform_2d_no_numpy(gps_coords, pdr_coords):
     """
     get affine transform between 2 pdr points and 2 GPS coordinates.
     this simplification applies when we have 2 pdr points to be aligned with 2 gps points. we will avoid
-    numpy functions as much as possible, so as to make the porting to Javascript easier.
+    numpy functions, so as to make the porting to Javascript easier.
     """
     diff_x = [i - j for i, j in zip(pdr_coords[1], pdr_coords[0])]
     diff_xp = [i - j for i, j in zip(gps_coords[1], gps_coords[0])]
 
     dot = diff_x[0] * diff_xp[0] + diff_x[1] * diff_xp[1]  # dot product
     det = diff_x[0] * diff_xp[1] - diff_x[1] * diff_xp[0]  # determinant
-    theta = np.arctan2(det, dot)  # atan2(y, x) or atan2(sin, cos)
+    theta = math.atan2(det, dot)  # atan2(y, x) or atan2(sin, cos)
 
-    A = _euler_angles_to_rotation_matrix([0, 0, theta])
-    s = np.linalg.norm(diff_xp) / np.linalg.norm(diff_x)
-    b = gps_coords[1] - s*A.dot(pdr_coords[1])
+    A = [[math.cos(theta), -math.sin(theta), 0],
+         [math.sin(theta), math.cos(theta), 0],
+         [0, 0, 1]]
+    s = math.sqrt((diff_xp[0]*diff_xp[0]+diff_xp[1]*diff_xp[1]+diff_xp[2]*diff_xp[2])/
+                  (diff_x[0]*diff_x[0]+diff_x[1]*diff_x[1]+diff_x[2]*diff_x[2]))
+
+    x1 = pdr_coords[1]
+    a_dot_x1 = [A[0][0]*x1[0] + A[0][1]*x1[1] + A[0][2]*x1[2],
+                  A[1][0]*x1[0] + A[1][1]*x1[1] + A[1][2]*x1[2],
+                  A[2][0]*x1[0] + A[2][1]*x1[1] + A[2][2]*x1[2]]
+    b = [i - j*s for i, j in zip(gps_coords[1], a_dot_x1)]
 
     return s, A, b
 
