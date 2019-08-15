@@ -16,22 +16,21 @@ class Command:
     def add_arguments(self, parser):
         parser.add_argument('dataset', help='dataset to process')
         parser.add_argument('--partials-only', nargs = '*', help = 'indices of partial reconstructions to reconstruct' )
-        parser.add_argument('--exluded-images', nargs = '*', help = 'ids/names of images to exclude' )
+        parser.add_argument('--excluded-images', nargs = '*', help = 'ids/names of images to exclude' )
+        parser.add_argument('--remove-image-subset', help = 'JSON file specifying a subset of images to remove' )
         parser.add_argument('--image-subset', help = 'JSON file specifying a subset of images to reprocess' )
         parser.add_argument('--direct-align', help = 'Direct alignment of an image subset', action='store_true' )
         
     def run(self, args):
         
         start = time.time()
-        
+
         partials = []
         if args.partials_only:
             partials = [ int(p) for p in args.partials_only ]
         
-        excluded_images = []
-        if args.exluded_images:
-            excluded_images = args.exluded_images
-        
+        excluded_images = args.excluded_images
+
         image_subset = []
         if args.image_subset is not None:
             with open( args.image_subset, 'r' ) as fin:
@@ -58,13 +57,6 @@ class Command:
                 
                 target_images.extend( shot_ids )
             
-            try:
-                for shot_id in excluded_images:
-                    target_images.remove( shot_id )
-            except ValueError as e:
-                logger.debug('Excluded image {0} does not exist.'.format( shot_id ) )
-                return
-                
             data.config['target_images'] = target_images
             
             data.save_reconstruction( reconstructions , "reconstruction.json.bak" )
@@ -80,7 +72,7 @@ class Command:
                 reconstructions = []
 
             data.config['target_images'] = image_subset
-        
+
         # Run the incremental reconstruction
         
         if args.direct_align:
@@ -128,9 +120,22 @@ class Command:
             
             for recon in new_recons:
                 merged_recons.append( recon )
-    
+
         else:
             merged_recons = new_recons
+
+        if excluded_images:
+
+            for id in excluded_images:
+                for recon in merged_recons:
+
+                    to_remove = [ s for s in recon.shots.values() if s.id == id ]
+
+                    for s in to_remove:
+                        del recon.shots[s.id]
+
+            # remove any recon that's empty
+            merged_recons[:] = [recon for recon in merged_recons if recon.shots]
 
         # Subsets and splits don't prevent duplicates across partial reconstructions
         # The first reconstruction with a particular image gets to keep it.
