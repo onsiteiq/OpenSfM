@@ -58,16 +58,19 @@ def init_pdr_predictions(data):
     return pdr_predictions_dict
 
 
-def direct_align_pdr(data):
+def direct_align_pdr(data, target_images=None):
     """
     directly form a reconstruction based on pdr data
     :param data:
+    :param target_images:
     :return: reconstruction
     """
     pdr_predictions_dict = init_pdr_predictions(data)
     pdr_shots_dict = data.load_pdr_shots()
 
-    target_images = data.config.get('target_images', [])
+    if not target_images:
+        target_images = data.config.get('target_images', [])
+
     cameras = data.load_camera_models()
 
     reconstruction = types.Reconstruction()
@@ -349,6 +352,20 @@ def scale_reconstruction_to_pdr(reconstruction, data):
 
 def align_reconstructions_to_pdr(reconstructions, data):
     """
+    for any reconstruction that's not aligned with gps, use pdr predictions to align them
+    """
+    reconstructions[:] = [align_reconstruction_to_pdr(recon, data) for recon in reconstructions]
+
+
+def align_reconstruction_to_pdr(reconstruction, data):
+    if not reconstruction.alignment.aligned:
+        reconstruction = direct_align_pdr(data, reconstruction.shots.keys())
+
+    return reconstruction
+
+
+def align_reconstructions_to_pdr_old(reconstructions, data):
+    """
     attempt to align un-anchored reconstructions
     """
     if not data.gps_points_exist():
@@ -374,10 +391,10 @@ def align_reconstructions_to_pdr(reconstructions, data):
     for reconstruction in reconstructions:
         if not reconstruction.alignment.aligned:
             reconstruction.alignment.aligned = \
-                align_reconstruction_to_pdr(reconstruction, walkthrough_dict, gps_points_dict, scale_factor)
+                align_reconstruction_to_pdr_old(reconstruction, walkthrough_dict, gps_points_dict, scale_factor)
 
 
-def align_reconstruction_to_pdr(reconstruction, walkthrough_dict, gps_points_dict, scale_factor):
+def align_reconstruction_to_pdr_old(reconstruction, walkthrough_dict, gps_points_dict, scale_factor):
     """
     align one partial reconstruction to 'best' pdr predictions
     """
