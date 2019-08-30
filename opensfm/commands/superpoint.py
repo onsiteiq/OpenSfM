@@ -729,6 +729,10 @@ def detect(args):
 
     # Get points and descriptors.
     pts, desc, heatmap = fe.run(grayimg)
+
+    if pts is None or desc is None:
+        return
+
     pts, desc = remove_border_points(img, pts, desc, border_size=6)
 
     # Add points and descriptors to the tracker.
@@ -822,8 +826,8 @@ def detect(args):
         #print('Saving feature index to %s' % idx_outfile)
 
         # uncomment the line below to save annotated frames w superpoints
-        # out_file = os.path.join(write_dir, fname)
-        # cv2.imwrite(out_file, out)
+        out_file = os.path.join(write_dir, fname)
+        cv2.imwrite(out_file, out)
 
     end = time.time()
     net_t = (1./ float(end1 - start))

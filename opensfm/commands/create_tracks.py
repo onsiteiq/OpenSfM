@@ -23,14 +23,15 @@ class Command:
         data = dataset.DataSet(args.dataset)
 
         start = timer()
-        features, colors = self.load_features(data)
+        features, colors, reg_counts = self.load_features(data)
         features_end = timer()
         matches = self.load_matches(data)
         matches_end = timer()
-        tracks_graph = matching.create_tracks_graph(features, colors, matches,
+        tracks_graph, tracks_superpoint = matching.create_tracks_graph(features, colors, reg_counts, matches,
                                                     data.config)
         tracks_end = timer()
         data.save_tracks_graph(tracks_graph)
+        data.save_tracks_superpoint(tracks_superpoint)
         end = timer()
 
         with open(data.profile_log(), 'a') as fout:
@@ -46,13 +47,17 @@ class Command:
         logging.info('reading features')
         features = {}
         colors = {}
+        reg_counts = {}
         for im in data.images():
             p, f, c = data.load_features(im)
 
             if p is None:
                 features[im] = []
                 colors[im] = []
+                reg_counts[im] = 0
                 continue
+
+            reg_counts[im] = len(p)
 
             p_s, f_s, c_s = superpoint.load_features(im)
             if p_s is not None:
@@ -62,7 +67,7 @@ class Command:
             features[im] = p[:, :2]
             colors[im] = c
 
-        return features, colors
+        return features, colors, reg_counts
 
     def load_matches(self, data):
         matches = {}

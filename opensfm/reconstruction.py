@@ -988,8 +988,7 @@ class TrackTriangulator:
         
         return np.median( index_dists )*20.0
 
-    def triangulate(self, track, reproj_threshold, min_ray_angle_degrees,
-                    min_distance=0, max_distance=999999, max_z_diff=999999):
+    def triangulate(self, track, reproj_threshold, min_ray_angle_degrees):
         """Triangulate track and add point to reconstruction."""
         os, bs = [], []
         for shot_id in self.graph[track]:
@@ -1006,29 +1005,11 @@ class TrackTriangulator:
             e, X = csfm.triangulate_bearings_midpoint(
                 os, bs, thresholds, np.radians(min_ray_angle_degrees))
             if X is not None:
-                within_range = True
-                if self.reconstruction.alignment.aligned:
-                    for shot_origin in os:
-                        v = X - np.array(shot_origin)
-                        distance = np.linalg.norm(v)
+                point = types.Point()
+                point.id = track
+                point.coordinates = X.tolist()
 
-                        if distance < min_distance or distance > max_distance:
-                            within_range = False
-                            break
-
-                        if np.fabs(v[2]) > max_z_diff:
-                            within_range = False
-                            break
-
-                if within_range:
-                    point = types.Point()
-                    point.id = track
-                    point.coordinates = X.tolist()
-
-                    self.reconstruction.add_point(point)
-                else:
-                    if track in self.reconstruction.points:
-                        del self.reconstruction.points[track]
+                self.reconstruction.add_point(point)
 
     def triangulate_dlt(self, track, reproj_threshold, min_ray_angle_degrees):
         """Triangulate track using DLT and add point to reconstruction."""
@@ -1082,13 +1063,9 @@ def triangulate_shot_features(graph, reconstruction, shot_id, config):
 
     triangulator = TrackTriangulator(graph, reconstruction)
 
-    max_distance = config['max_triangulation_distance']/config['reconstruction_scale_factor']
-    min_distance = config['min_triangulation_distance']/config['reconstruction_scale_factor']
-    max_z_diff = config['max_triangulation_height_diff']/config['reconstruction_scale_factor']
-
     for track in graph[shot_id]:
         if track not in reconstruction.points:
-            triangulator.triangulate(track, reproj_threshold, min_ray_angle, min_distance, max_distance, max_z_diff)
+            triangulator.triangulate(track, reproj_threshold, min_ray_angle)
 
 
 def retriangulate(graph, reconstruction, config):
@@ -1100,18 +1077,41 @@ def retriangulate(graph, reconstruction, config):
     min_ray_angle = config['triangulation_min_ray_angle']
     triangulator = TrackTriangulator(graph, reconstruction)
 
-    max_distance = config['max_triangulation_distance']/config['reconstruction_scale_factor']
-    min_distance = config['min_triangulation_distance']/config['reconstruction_scale_factor']
-    max_z_diff = config['max_triangulation_height_diff']/config['reconstruction_scale_factor']
-
     tracks, images = matching.tracks_and_images(graph)
     for track in tracks:
-        triangulator.triangulate(track, threshold, min_ray_angle, min_distance, max_distance, max_z_diff)
+        triangulator.triangulate(track, threshold, min_ray_angle)
     report['num_points_after'] = len(reconstruction.points)
     chrono.lap('retriangulate')
     report['wall_time'] = chrono.total_time()
     return report
 
+
+def hlf_to_gcp(graph, reconstruction, hlf, tracks_superpoint, config):
+    if not reconstruction.alignment.aligned:
+        return None
+
+    gcp = []
+    max_distance = config['max_triangulation_distance']/config['reconstruction_scale_factor']
+
+    for track in reconstruction.points:
+        if track in tracks_superpoint:
+            for hlf_origin in hlf:
+                v = track.coordinates - np.array(hlf_origin)
+                distance = np.linalg.norm(v)
+
+                if distance < max_distance:
+                    # for the dynamically generated gcp, we don't really care what the true lat/lon/alt is,
+                    # they are merely used as key to group observations together
+                    lat, lon, alt = np.random.random(3)
+                    for shot_id in graph[track]:
+                        o = types.GroundControlPointObservation()
+                        o.lla = np.array([lat, lon, alt])
+                        o.coordinates = np.array(hlf_origin)
+                        o.shot_id = shot_id
+                        o.shot_coordinates = graph[track][shot_id]['feature']
+                        gcp.append(o)
+
+    return gcp
 
 def remove_outliers(graph, reconstruction, config):
     """Remove points with large reprojection error."""
@@ -1247,10 +1247,13 @@ class ShouldRetriangulate:
         self.num_points_last = len(self.reconstruction.points)
 
 
-def grow_reconstruction_sequential(data, graph, reconstruction, images, gcp):
+def grow_reconstruction_sequential(data, graph, reconstruction, images, hlf):
     """Incrementally add shots to an initial reconstruction."""
     config = data.config
     report = {'steps': []}
+
+    gcp = None
+    tracks_superpoint = data.load_tracks_superpoint()
 
     bundle(graph, reconstruction, None, config)
     remove_outliers(graph, reconstruction, config)
@@ -1282,6 +1285,7 @@ def grow_reconstruction_sequential(data, graph, reconstruction, images, gcp):
 
             np_before = len(reconstruction.points)
             triangulate_shot_features(graph, reconstruction, image, config)
+            gcp = hlf_to_gcp(graph, reconstruction, hlf, tracks_superpoint, config)
             np_after = len(reconstruction.points)
             step['triangulated_points'] = np_after - np_before
             logger.info("grow_reconstruction_sequential: {} points in the reconstruction".format(np_after))
@@ -1292,6 +1296,7 @@ def grow_reconstruction_sequential(data, graph, reconstruction, images, gcp):
                 rrep = retriangulate(graph, reconstruction, config)
                 b2rep = bundle(graph, reconstruction, None, config)
                 remove_outliers(graph, reconstruction, config)
+                gcp = hlf_to_gcp(graph, reconstruction, hlf, tracks_superpoint, config)
                 align_reconstruction(reconstruction, gcp, config)
                 step['bundle'] = b1rep
                 step['retriangulation'] = rrep
@@ -1642,9 +1647,8 @@ def incremental_reconstruction_sequential(data):
 
     chrono.lap('load_tracks_graph')
     
-    gcp = None
-    if data.ground_control_points_exist():
-        gcp = data.load_ground_control_points()
+    hlf = None
+    #hlf = data.load_high_level_features()
 
     common_tracks = matching.all_common_tracks(graph, tracks)
 
@@ -1701,7 +1705,7 @@ def incremental_reconstruction_sequential(data):
                 remaining_images.remove(im1)
                 remaining_images.remove(im2)
                 reconstruction, rec_report['grow'] = grow_reconstruction_sequential(
-                    data, graph, reconstruction, remaining_images, gcp)
+                    data, graph, reconstruction, remaining_images, hlf)
                 reconstructions.append(reconstruction)
 
                 #debug_rotation_prior(reconstruction, data)

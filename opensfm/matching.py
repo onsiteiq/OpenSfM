@@ -170,7 +170,7 @@ def _good_track(track, min_length):
     return True
 
 
-def create_tracks_graph(features, colors, matches, config):
+def create_tracks_graph(features, colors, reg_counts, matches, config):
     """Link matches into tracks."""
     logger.debug('Merging features onto tracks')
     uf = UnionFind()
@@ -190,7 +190,9 @@ def create_tracks_graph(features, colors, matches, config):
     logger.debug('Good tracks: {}'.format(len(tracks)))
 
     tracks_graph = nx.Graph()
+    tracks_superpoint = []
     for track_id, track in enumerate(tracks):
+        is_regular_feature = False
         for image, featureid in track:
             if image not in features:
                 continue
@@ -204,7 +206,13 @@ def create_tracks_graph(features, colors, matches, config):
                                   feature_id=featureid,
                                   feature_color=(float(r), float(g), float(b)))
 
-    return tracks_graph
+            if featureid < reg_counts[image]:
+                is_regular_feature = True
+
+        if not is_regular_feature:
+            tracks_superpoint.append(str(track_id))
+
+    return tracks_graph, tracks_superpoint
 
 
 def tracks_and_images(graph):

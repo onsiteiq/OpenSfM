@@ -521,14 +521,28 @@ class DataSet:
         """Return path of tracks file"""
         return os.path.join(self.data_path, filename or 'tracks.csv')
 
+    def _tracks_superpoint_file(self, filename=None):
+        """Return path of superpoint tracks file"""
+        return os.path.join(self.data_path, filename or 'tracks_superpoint.pkl')
+
     def load_tracks_graph(self, filename=None):
         """Return graph (networkx data structure) of tracks"""
         with open(self._tracks_graph_file(filename)) as fin:
             return load_tracks_graph(fin)
 
+    def load_tracks_superpoint(self, filename=None):
+        """Return superpoint tracks"""
+        with open(self._tracks_superpoint_file(filename), 'rb') as fp:
+            track_ids = pickle.load(fp)
+        return track_ids
+
     def save_tracks_graph(self, graph, filename=None):
         with io.open_wt(self._tracks_graph_file(filename)) as fout:
             save_tracks_graph(fout, graph)
+
+    def save_tracks_superpoint(self, track_ids, filename=None):
+        with open(self._tracks_superpoint_file(filename), 'wb') as fp:
+            pickle.dump(track_ids, fp)
 
     def load_undistorted_tracks_graph(self):
         return self.load_tracks_graph('undistorted_tracks.csv')
