@@ -332,8 +332,9 @@ def triangulate_single_gcp(reconstruction, observations):
             bs.append(r.dot(b))
 
     if len(os) >= 2:
+        thresholds = len(os) * [reproj_threshold]
         e, X = csfm.triangulate_bearings_midpoint(
-            os, bs, reproj_threshold, np.radians(min_ray_angle_degrees))
+            os, bs, thresholds, np.radians(min_ray_angle_degrees))
         return X
 
 

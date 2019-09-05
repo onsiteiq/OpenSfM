@@ -16,7 +16,7 @@ class Command:
     def add_arguments(self, parser):
         parser.add_argument('dataset', help='dataset to process')
         parser.add_argument('--partials-only', nargs = '*', help = 'indices of partial reconstructions to reconstruct' )
-        parser.add_argument('--exluded-images', nargs = '*', help = 'ids/names of images to exclude' )
+        parser.add_argument('--excluded-images', nargs = '*', help = 'ids/names of images to exclude' )
         parser.add_argument('--image-subset', help = 'JSON file specifying a subset of images to reprocess' )
         parser.add_argument('--direct-align', help = 'Direct alignment of an image subset', action='store_true' )
         
@@ -29,8 +29,8 @@ class Command:
             partials = [ int(p) for p in args.partials_only ]
         
         excluded_images = []
-        if args.exluded_images:
-            excluded_images = args.exluded_images
+        if args.excluded_images:
+            excluded_images = args.excluded_images
         
         image_subset = []
         if args.image_subset is not None:

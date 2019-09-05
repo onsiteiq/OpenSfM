@@ -1010,6 +1010,9 @@ class TrackTriangulator:
                 point.coordinates = X.tolist()
 
                 self.reconstruction.add_point(point)
+                return True
+
+        return False
 
     def triangulate_dlt(self, track, reproj_threshold, min_ray_angle_degrees):
         """Triangulate track using DLT and add point to reconstruction."""
@@ -1063,10 +1066,15 @@ def triangulate_shot_features(graph, reconstruction, shot_id, config):
 
     triangulator = TrackTriangulator(graph, reconstruction)
 
+    new_points = []
     for track in graph[shot_id]:
         if track not in reconstruction.points:
-            triangulator.triangulate(track, reproj_threshold, min_ray_angle)
+            triangulated = triangulator.triangulate(track, reproj_threshold, min_ray_angle)
 
+            if triangulated:
+                new_points.append(track)
+
+    return new_points
 
 def retriangulate(graph, reconstruction, config):
     """Retrianguate all points"""
@@ -1086,32 +1094,48 @@ def retriangulate(graph, reconstruction, config):
     return report
 
 
-def hlf_to_gcp(graph, reconstruction, hlf, tracks_superpoint, config):
+def hlf_to_gcp(graph, reconstruction, new_points, gcp, hlf, tracks_superpoint, config):
+    '''
+    if a triangulated point is close enough to a high-level feature (room corner,
+    door frame corner, etc), we convert it into a gcp
+    :param graph:
+    :param reconstruction:
+    :param new_points:
+    :param hlf:
+    :param tracks_superpoint:
+    :param config:
+    :return:
+    '''
     if not reconstruction.alignment.aligned:
         return None
 
-    gcp = []
     max_distance = config['max_triangulation_distance']/config['reconstruction_scale_factor']
 
-    for track in reconstruction.points:
+    for track in new_points:
         if track in tracks_superpoint:
+            distances = []
             for hlf_origin in hlf:
-                v = track.coordinates - np.array(hlf_origin)
-                distance = np.linalg.norm(v)
+                v = reconstruction.points[track].coordinates - np.array(hlf_origin)
+                distances.append(np.linalg.norm(v))
 
-                if distance < max_distance:
-                    # for the dynamically generated gcp, we don't really care what the true lat/lon/alt is,
-                    # they are merely used as key to group observations together
-                    lat, lon, alt = np.random.random(3)
-                    for shot_id in graph[track]:
-                        o = types.GroundControlPointObservation()
-                        o.lla = np.array([lat, lon, alt])
-                        o.coordinates = np.array(hlf_origin)
-                        o.shot_id = shot_id
-                        o.shot_coordinates = graph[track][shot_id]['feature']
-                        gcp.append(o)
+            min_idx = distances.index(min(distances))
+            if distances[min_idx] < max_distance:
+                logger.info("hlf_to_gcp: track {} hlf {} distance {}".format(track, hlf[min_idx], distances[min_idx]))
+                # for the dynamically generated gcp, we don't really care what the true lat/lon/alt is,
+                # they are merely used as key to group observations together
+                lat, lon, alt = np.random.random(3)
+                for shot_id in graph[track]:
+                    o = types.GroundControlPointObservation()
+                    o.lla = np.array([lat, lon, alt])
+                    o.coordinates = np.array(hlf[min_idx])
+                    o.shot_id = shot_id
+                    o.shot_coordinates = graph[track][shot_id]['feature']
+                    gcp.append(o)
 
-    return gcp
+                    x = o.shot_coordinates[0] * 11000 - 0.5 + 11000 / 2.0
+                    y = o.shot_coordinates[1] * 11000 - 0.5 + 5500 / 2.0
+                    logger.info("hlf_to_gcp: shot_id {} shot_coords {} {}".format(shot_id, x, y))
+
 
 def remove_outliers(graph, reconstruction, config):
     """Remove points with large reprojection error."""
@@ -1252,7 +1276,7 @@ def grow_reconstruction_sequential(data, graph, reconstruction, images, hlf):
     config = data.config
     report = {'steps': []}
 
-    gcp = None
+    gcp = []
     tracks_superpoint = data.load_tracks_superpoint()
 
     bundle(graph, reconstruction, None, config)
@@ -1284,8 +1308,8 @@ def grow_reconstruction_sequential(data, graph, reconstruction, images, hlf):
             images.remove(image)
 
             np_before = len(reconstruction.points)
-            triangulate_shot_features(graph, reconstruction, image, config)
-            gcp = hlf_to_gcp(graph, reconstruction, hlf, tracks_superpoint, config)
+            new_points = triangulate_shot_features(graph, reconstruction, image, config)
+            hlf_to_gcp(graph, reconstruction, new_points, gcp, hlf, tracks_superpoint, config)
             np_after = len(reconstruction.points)
             step['triangulated_points'] = np_after - np_before
             logger.info("grow_reconstruction_sequential: {} points in the reconstruction".format(np_after))
@@ -1296,7 +1320,8 @@ def grow_reconstruction_sequential(data, graph, reconstruction, images, hlf):
                 rrep = retriangulate(graph, reconstruction, config)
                 b2rep = bundle(graph, reconstruction, None, config)
                 remove_outliers(graph, reconstruction, config)
-                gcp = hlf_to_gcp(graph, reconstruction, hlf, tracks_superpoint, config)
+                gcp = []
+                hlf_to_gcp(graph, reconstruction, reconstruction.points, gcp, hlf, tracks_superpoint, config)
                 align_reconstruction(reconstruction, gcp, config)
                 step['bundle'] = b1rep
                 step['retriangulation'] = rrep
@@ -1647,8 +1672,62 @@ def incremental_reconstruction_sequential(data):
 
     chrono.lap('load_tracks_graph')
     
-    hlf = None
-    #hlf = data.load_high_level_features()
+    hlf = [
+        (3350, 4127, 300),
+        (3646, 3839, 300),
+        (3761, 3839, 300),
+        (3968, 5139, 300),
+        (4544, 4983, 300),
+        (4544, 4450, 300),
+        (4456, 3837, 300),
+        (3802, 3838, 300),
+        (3645, 3838, 300),
+        (3756, 3838, 300),
+        (3765, 3782, 300),
+        (3350, 4127, -100),
+        (3646, 3839, -100),
+        (3761, 3839, -100),
+        (3968, 5139, -100),
+        (4544, 4983, -100),
+        (4544, 4450, -100),
+        (4456, 3837, -100),
+        (3802, 3838, -100),
+        (3645, 3838, -100),
+        (3756, 3838, -100),
+        (3765, 3782, -100),
+        (3330, 3821, 300),
+        (3330, 3974, 300),
+        (3000, 3373, 300),
+        (3000, 3185, 300),
+        (3000, 3129, 300),
+        (3074, 3129, 300),
+        (3224, 3129, 300),
+        (3333, 3129, 300),
+        (3333, 3351, 300),
+        (3492, 3140, 300),
+        (3492, 3140, 300),
+        (3707, 3351, 300),
+        (3801, 3351, 300),
+        (4016, 3129, 300),
+        (4172, 3129, 300),
+        (4423, 3129, 300),
+        (4508, 3353, 300),
+        (4672, 3151, 300),
+        (4672, 3310, 300),
+        (4661, 3371, 300),
+        (4670, 3600, 300),
+        (4670, 3600, 300),
+        (3840, 3382, 300),
+        (3840, 3658, 300),
+        (3898, 3658, 300),
+        (3898, 3794, 300),
+        (4142, 3539, 300),
+        (4483, 3632, 300),
+        (4377, 3550, 300),
+        (4483, 3800, 300)]
+
+
+        #hlf = data.load_high_level_features()
 
     common_tracks = matching.all_common_tracks(graph, tracks)
 

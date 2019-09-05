@@ -105,7 +105,7 @@ def remove(args):
 
     logger.info('{}: banding found in {}/4 images'.format(_int_to_shot_id(idx), banding_cnt))
 
-    if banding_cnt >= 2:
+    if banding_cnt >= 1:
         logger.info('{}: removing banding...'.format(idx))
 
         for img_file in img_set:
