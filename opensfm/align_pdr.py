@@ -255,8 +255,10 @@ def update_pdr_prediction_rotation(shot_id, reconstruction, data):
         base_shot_id_0 = sorted_shot_ids[0]
         base_shot_id_1 = sorted_shot_ids[1]
 
-        prediction_0 = rotation_extrapolate(shot_id, base_shot_id_0, reconstruction, data)
-        prediction_1 = rotation_extrapolate(shot_id, base_shot_id_1, reconstruction, data)
+        prediction_0 = rotation_extrapolate(shot_id, base_shot_id_0,
+                                            reconstruction.shots[base_shot_id_0].pose.get_rotation_matrix(), data)
+        prediction_1 = rotation_extrapolate(shot_id, base_shot_id_1,
+                                            reconstruction.shots[base_shot_id_1].pose.get_rotation_matrix(), data)
 
         # 0.1 radians is roughly 6 degrees
         # TODO: put 0.1 in config
@@ -370,33 +372,43 @@ def debug_rotation_prior(reconstruction, data):
     logger.debug("avg prior/sfm diff {} degrees".format(np.mean(np.array(dists))))
 
 
-def scale_reconstruction_to_pdr(reconstruction, data):
+def scale_reconstruction_to_pdr(reconstructions, two_view_recon, data):
     """
-    scale the reconstruction to pdr predictions
+    bring bootstrapped reconstruction (2 view) to metric scale
+
+    :param reconstructions:
+    :param two_view_recon:
+    :param data:
+    :return:
     """
-    if not data.gps_points_exist():
+    if not reconstructions:
         return
 
     if not data.pdr_shots_exist():
         return
 
-    pdr_predictions_dict = data.load_pdr_predictions()
+    # get updated predictions
+    aligned_sfm_points_dict = {}
+    for reconstruction in reconstructions:
+        if reconstruction.alignment.aligned:
+            for shot in reconstruction.shots.values():
+                aligned_sfm_points_dict[shot.id] = shot.pose
 
-    ref_shots_dict = {}
-    for shot in reconstruction.shots.values():
-        if pdr_predictions_dict and shot.id in pdr_predictions_dict:
-            ref_shots_dict[shot.id] = pdr_predictions_dict[shot.id][:3]
+    for shot_id in two_view_recon.shots:
+        # figure out closest shot in aligned reconstructions to the two shots
+        sorted_shot_ids = get_closest_shots(shot_id, aligned_sfm_points_dict.keys())
 
-    two_ref_shots_dict = ref_shots_dict
-    if len(ref_shots_dict) > 2:
-        two_ref_shots_dict, distance = get_farthest_shots(ref_shots_dict)
+        # predict the rotation for each of the two shots
+        pred_rotation = rotation_extrapolate(shot_id, sorted_shot_ids[0],
+                                             aligned_sfm_points_dict[sorted_shot_ids[0]].get_rotation_matrix(), data)
 
-    transform_reconstruction(reconstruction, two_ref_shots_dict)
+        # predict the origin for each of the two shots
+        pred_origin = position_extrapolate(shot_id, sorted_shot_ids[0],
+                                           aligned_sfm_points_dict[sorted_shot_ids[0]], data)
 
-    # setting scaled=true will prevent this routine from being called again. we will perform
-    # this scaling operation a couple times at beginning of a reconstruction
-    if len(reconstruction.shots) > 3:
-        reconstruction.alignment.scaled = True
+        # update the pose of two shots
+        two_view_recon.shots[shot_id].pose.set_rotation_matrix(_euler_angles_to_rotation_matrix(pred_rotation))
+        two_view_recon.shots[shot_id].pose.set_origin(pred_origin)
 
 
 def align_reconstructions_to_pdr(reconstructions, data):
@@ -524,7 +536,7 @@ def pdr_walk_forward(aligned_sfm_points_dict, pdr_shots_dict):
                     delta_distance = pdr_info_dist_1[6]
 
                 trust = max(trust1, trust2) + 1
-                walkthrough_dict[pred_id] = position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), trust
+                walkthrough_dict[pred_id] = position_extrapolate_legacy(dist_1_coords, dist_2_coords, delta_heading, delta_distance), trust
             else:
                 walkthrough_dict[pred_id] = aligned_sfm_points_dict[pred_id], 0
 
@@ -580,7 +592,7 @@ def pdr_walk_backward(aligned_sfm_points_dict, pdr_shots_dict):
                     delta_distance = pdr_info_dist_1[6]
 
                 trust = max(trust1, trust2) + 1
-                walkthrough_dict[pred_id] = position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), trust
+                walkthrough_dict[pred_id] = position_extrapolate_legacy(dist_1_coords, dist_2_coords, delta_heading, delta_distance), trust
             else:
                 walkthrough_dict[pred_id] = aligned_sfm_points_dict[pred_id], 0
 
@@ -604,7 +616,7 @@ def pdr_walkthrough(aligned_sfm_points_dict, pdr_shots_dict):
     return final_dict
 
 
-def position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance):
+def position_extrapolate_legacy(dist_1_coords, dist_2_coords, delta_heading, delta_distance):
     """
     update pdr predictions based on extrapolating last SfM position and direction
 
@@ -625,14 +637,60 @@ def position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_dist
     return [x, y, z]
 
 
-def rotation_extrapolate(shot_id, base_shot_id, reconstruction, data):
+def position_extrapolate(shot_id, base_shot_id, base_pose, data):
+    """
+    extrapolate the position of current shot, based on the position and rotation of
+    base shot and pdr
+    :param shot_id:
+    :param base_shot_id:
+    :param base_pose:
+    :param data:
+    :return:
+    """
+    pdr_shots_dict = data.load_pdr_shots()
+
+    idx = _shot_id_to_int(shot_id)
+    base_idx = _shot_id_to_int(base_shot_id)
+
+    if base_idx < idx:
+        step = 1
+    else:
+        step = -1
+
+    last_idx = base_idx
+    last_dir = (_rotation_matrix_to_euler_angles(base_pose.get_rotation_matrix().T))[1]
+    [last_x, last_y, last_z] = base_pose.get_origin()
+
+    for curr_idx in range(base_idx+step, idx+step, step):
+        last_rotation = np.radians(pdr_shots_dict[_int_to_shot_id(last_idx)][3:6])
+        curr_rotation = np.radians(pdr_shots_dict[_int_to_shot_id(curr_idx)][3:6])
+
+        delta_heading = tf.delta_heading(last_rotation, curr_rotation)
+        delta_rotation = curr_rotation.dot(last_rotation.T)
+        delta_distance = pdr_shots_dict[_int_to_shot_id(curr_idx)][6]
+
+        curr_dir = last_dir + delta_heading
+        curr_x = last_x + delta_distance*np.cos(curr_dir)
+        curr_y = last_y + delta_distance*np.sin(curr_dir)
+        curr_z = last_z
+
+        last_dir = curr_dir
+        last_idx = curr_idx
+        last_x = curr_x
+        last_y = curr_y
+        last_z = curr_z
+
+    return [curr_x, curr_y, curr_z]
+
+
+def rotation_extrapolate(shot_id, base_shot_id, base_rotation, data):
     """
     based on pdr rotations of base shot and current shot, calculate a delta rotation,
     then apply this delta rotation to sfm rotation of base to obtain a prediction/prior
     for sfm rotation of current shot
     :param shot_id:
     :param base_shot_id:
-    :param reconstruction:
+    :param base_rotation:
     :param data:
     :return: prediction for sfm rotation of current shot
     """
@@ -644,7 +702,7 @@ def rotation_extrapolate(shot_id, base_shot_id, reconstruction, data):
     delta_rotation = pdr_rotation.dot(base_pdr_rotation.T)
 
     # get sfm rotation of base shot
-    base_sfm_rotation = reconstruction.shots[base_shot_id].pose.get_rotation_matrix().T
+    base_sfm_rotation = base_rotation.T
 
     # return prediction
     return _rotation_matrix_to_euler_angles((delta_rotation.dot(base_sfm_rotation)).T)
@@ -910,7 +968,7 @@ def update_pdr_local(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor):
             delta_distance = pdr_info_dist_1[6]
 
         # TODO: put 200 in config
-        return position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), 200
+        return position_extrapolate_legacy(dist_1_coords, dist_2_coords, delta_heading, delta_distance), 200
     else:
         # we cannot find 2 consecutive shots to extrapolate, so use 3 shots to estimate affine
         #sorted_shot_ids = get_closest_shots(shot_id, sfm_points_dict.keys())

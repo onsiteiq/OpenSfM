@@ -1340,9 +1340,6 @@ def grow_reconstruction_sequential(data, graph, reconstruction, images, hlf):
                 remove_outliers(graph, reconstruction, config)
                 step['local_bundle'] = brep
 
-            if not reconstruction.alignment.scaled:
-                scale_reconstruction_to_pdr(reconstruction, data)
-
             break
         else:
             break
@@ -1671,7 +1668,15 @@ def incremental_reconstruction_sequential(data):
         images = target_images
 
     chrono.lap('load_tracks_graph')
-    
+
+
+    #hlf = data.load_high_level_features()
+
+    # hand-picked high-level features (mainly room corners) for 2 Wash, 05/09, 'AX-109A - CONSTRUCTION FLOOR - 15'
+    # the z coordinate of our gps points are 0, which effectively means features the same height as the camera
+    # will have z = 0. This in turn means the room corners on the ground will have z roughly 300 (because the scale
+    # factor for this floor is 0.02 and camera is about 6 feet from ground), and room corners on the ceiling will
+    # have z roughly -100 (about 2 feet above camera).
     hlf = [
         (3350, 4127, 300),
         (3646, 3839, 300),
@@ -1726,9 +1731,6 @@ def incremental_reconstruction_sequential(data):
         (4377, 3550, 300),
         (4483, 3800, 300)]
 
-
-        #hlf = data.load_high_level_features()
-
     common_tracks = matching.all_common_tracks(graph, tracks)
 
     # debug - print # of common tracks between adjacent images
@@ -1779,6 +1781,8 @@ def incremental_reconstruction_sequential(data):
 
             reconstruction, rec_report['bootstrap'] = bootstrap_reconstruction(
                 data, graph, im1, im2, p1, p2)
+
+            scale_reconstruction_to_pdr(reconstructions, reconstruction, data)
 
             if reconstruction:
                 remaining_images.remove(im1)
