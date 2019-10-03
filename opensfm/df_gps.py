@@ -96,73 +96,22 @@ def construct_bayes_net(df_indices, pdr_shots_dict, doors):
     return model
 
 
-def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad=True):
-    """
-    *globally* align pdr predictions to GPS points
+def extrapolate_pos(node_idx, df_indices, doors, door_1_idx, door_2_idx, pdr_shots_dict):
+    df_1_idx = df_indices[node_idx-2]
+    df_2_idx = df_indices[node_idx-1]
 
-    use 2 gps points at a time to align pdr predictions
+    door_gps_coords = []
+    door_gps_coords.append(doors[door_1_idx])
+    door_gps_coords.append(doors[door_2_idx])
 
-    :param gps_points_dict: gps points in topocentric coordinates
-    :param pdr_shots_dict: position of each shot as predicted by pdr
-    :param scale_factor: reconstruction_scale_factor
-    :param skip_bad: avoid bad alignment sections
-    :return: aligned pdr shot predictions
-    """
-    if len(gps_points_dict) < 2 or len(pdr_shots_dict) < 2:
-        return {}
+    pdr_coords = []
+    pdr_coords.append([pdr_shots_dict[df_1_idx][0], pdr_shots_dict[df_1_idx][1], 0])
+    pdr_coords.append([pdr_shots_dict[df_2_idx][0], pdr_shots_dict[df_2_idx][1], 0])
 
-    # reconstruction_scale_factor is from oiq_config.yaml, and it's feet per pixel.
-    # 0.3048 is meter per foot. 1.0 / (reconstruction_scale_factor * 0.3048) is
-    # therefore pixels/meter, and since pdr output is in meters, it's the
-    # expected scale
-    expected_scale = 1.0 / (scale_factor * 0.3048)
+    s, A, b = get_affine_transform_2d_no_numpy(door_gps_coords, pdr_coords)
 
-    pdr_predictions_dict = {}
-
-    all_gps_shot_ids = sorted(gps_points_dict.keys())
-    for i in range(len(all_gps_shot_ids) - 1):
-        gps_coords = []
-        pdr_coords = []
-
-        for j in range(2):
-            shot_id = all_gps_shot_ids[i+j]
-            gps_coords.append(gps_points_dict[shot_id])
-            pdr_coords.append([pdr_shots_dict[shot_id][0], pdr_shots_dict[shot_id][1], 0])
-
-        #s, A, b = get_affine_transform_2d(gps_coords, pdr_coords)
-        s, A, b = get_affine_transform_2d_no_numpy(gps_coords, pdr_coords)
-
-        # the closer s is to expected_scale, the better the fit, and the less the deviation
-        deviation = math.fabs(1.0 - s/expected_scale)
-
-        # debugging
-        #[x, y, z] = _rotation_matrix_to_euler_angles(A)
-        #logger.debug("update_pdr_global_2d: deviation=%f, rotation=%f, %f, %f", deviation, np.degrees(x), np.degrees(y), np.degrees(z))
-
-        if skip_bad and not ((0.50 * expected_scale) < s < (2.0 * expected_scale)):
-            logger.debug("s/expected_scale={}, discard".format(s/expected_scale))
-            continue
-
-        start_shot_id = all_gps_shot_ids[i]
-        end_shot_id = all_gps_shot_ids[i+1]
-
-        # in first iteration, we transform pdr from first shot
-        # in last iteration, we transform pdr until last shot
-        if i == 0:
-            start_shot_id = _int_to_shot_id(0)
-
-        if i == len(gps_points_dict)-2:
-            end_shot_id = _int_to_shot_id(len(pdr_shots_dict)-1)
-
-        #new_dict = apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id,
-                                          #s, A, b,
-                                          #deviation, [all_gps_shot_ids[i], all_gps_shot_ids[i+1]])
-        new_dict = apply_affine_transform_no_numpy(pdr_shots_dict, start_shot_id, end_shot_id,
-                                          s, A, b,
-                                          deviation, [all_gps_shot_ids[i], all_gps_shot_ids[i+1]])
-        pdr_predictions_dict.update(new_dict)
-
-    return pdr_predictions_dict
+    pos = apply_affine_transform_no_numpy(pdr_shots_dict, df_indices[node_idx], s, A, b)
+    return pos
 
 
 def get_affine_transform_2d_no_numpy(gps_coords, pdr_coords):
@@ -193,39 +142,14 @@ def get_affine_transform_2d_no_numpy(gps_coords, pdr_coords):
     return s, A, b
 
 
-def apply_affine_transform_no_numpy(pdr_shots_dict, start_shot_id, end_shot_id, s, A, b, deviation, gps_shot_ids=[]):
-    """Apply a similarity (y = s A x + b) to a reconstruction.
+def apply_affine_transform_no_numpy(pdr_shots_dict, shot_id, s, A, b):
+    X = pdr_shots_dict[shot_id]
+    A_dot_X = [A[0][0]*X[0] + A[0][1]*X[1] + A[0][2]*X[2],
+               A[1][0]*X[0] + A[1][1]*X[1] + A[1][2]*X[2],
+               A[2][0]*X[0] + A[2][1]*X[1] + A[2][2]*X[2]]
+    Xp = [i*s + j for i, j in zip(A_dot_X, b)]
 
-    we avoid all numpy calls, to make it easier to port to Javascript for use in gps picker
-
-    :param pdr_shots_dict: all original pdr predictions
-    :param start_shot_id: start shot id to perform transform
-    :param end_shot_id: end shot id to perform transform
-    :param s: The scale (a scalar)
-    :param A: The rotation matrix (3x3)
-    :param b: The translation vector (3)
-    :param gps_shot_ids: gps shot ids the affine transform is based on
-    :param deviation: a measure of how closely pdr predictions match gps points
-    :return: pdr shots between start and end shot id transformed by s, A, b
-    """
-    new_dict = {}
-
-    start_index = _shot_id_to_int(start_shot_id)
-    end_index = _shot_id_to_int(end_shot_id)
-
-    # transform pdr shots
-    for i in range(start_index, end_index + 1):
-        shot_id = _int_to_shot_id(i)
-
-        if shot_id in pdr_shots_dict:
-            X = pdr_shots_dict[shot_id]
-            A_dot_X = [A[0][0]*X[0] + A[0][1]*X[1] + A[0][2]*X[2],
-                          A[1][0]*X[0] + A[1][1]*X[1] + A[1][2]*X[2],
-                          A[2][0]*X[0] + A[2][1]*X[1] + A[2][2]*X[2]]
-            Xp = [i*s + j for i, j in zip(A_dot_X, b)]
-            new_dict[shot_id] = [Xp[0], Xp[1], Xp[2]]
-
-    return new_dict
+    return Xp
 
 
 def make_door_prediction(model, df_indices):
