@@ -25,6 +25,8 @@ from opensfm.align_pdr import init_pdr_predictions, direct_align_pdr, \
     cull_resection_pdr, validate_resection_pdr, \
     scale_reconstruction_to_pdr, align_reconstructions_to_pdr, \
     debug_rotation_prior
+from opensfm.df_gps import df_gps
+
 from opensfm.context import parallel_map, current_memory_usage
 from opensfm import transformations as tf
 
@@ -1676,6 +1678,9 @@ def incremental_reconstruction_sequential(data):
 
     else:
         image_groups.append( full_images )
+
+    # TESTING
+    df_gps(data)
 
     # load pdr data and globally align with gps points
     init_pdr_predictions(data)

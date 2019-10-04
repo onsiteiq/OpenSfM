@@ -22,16 +22,16 @@ def df_gps(data):
 
     # door coordinates for 2 Wash, 05/09, 'AX-109A - CONSTRUCTION FLOOR - 15'
     doors = [
-        (3350, 4127, 0),
-        (4483, 3632, 0),
-        (4377, 3550, 0),
-        (4483, 3800, 0)]
+        (3340, 3909, 0),
+        (4595, 3356, 0),
+        (5146, 4408, 0),
+        (4680, 3227, 0)]
 
     # TODO: TESTING
     #df_indices = data.load_df_detect()
 
     # detected door frame image indices
-    df_indices = [0, 100, 200, 300]
+    df_indices = [13, 90, 159, 173]
 
     if not data.pdr_shots_exist():
         return
@@ -47,7 +47,7 @@ def df_gps(data):
 
     # make a maximum likelihood prediction over which doors on floor plan corresponds to detected
     # door frames
-    predicted_doors = make_door_predictions(bayes_model)
+    predicted_doors = make_door_predictions(bayes_model, len(df_indices))
     logger.debug(predicted_doors)
 
     # convert predictions to gps points
@@ -55,8 +55,8 @@ def df_gps(data):
     data.save_topocentric_gps_points(topocentric_gps_points_dict)
 
 
-def gen_1st_node_distribution(num_doors):
-    logger.debug("gen_1st_node_distribution")
+def gen_node_0_distribution(num_doors):
+    logger.debug("gen_node_distribution: node 0")
 
     prob_dict = {}
     for i in range(num_doors):
@@ -65,64 +65,82 @@ def gen_1st_node_distribution(num_doors):
     return DiscreteDistribution(prob_dict)
 
 
-def gen_2nd_node_distribution(scale_factor, df_indices, pdr_shots_dict, doors, parent_node):
-    logger.debug("gen_2nd_node_distribution")
+def gen_node_1_distribution(scale_factor, df_indices, pdr_shots_dict, doors, parent_node):
+    logger.debug("gen_node_distribution: node 1")
 
     shot_id_1 = _int_to_shot_id(df_indices[0])
     shot_id_2 = _int_to_shot_id(df_indices[1])
+
+    pdr_diff = ((pdr_shots_dict[shot_id_1][0]-pdr_shots_dict[shot_id_2][0])/(scale_factor * 0.3048),
+                (pdr_shots_dict[shot_id_1][1]-pdr_shots_dict[shot_id_2][1])/(scale_factor * 0.3048), 0)
+    pdr_distance = np.linalg.norm(pdr_diff)
+    #logger.debug("pdr_distance = {}".format(pdr_distance))
 
     cpt_entries = []
     for i in range(len(doors)):
         distance_doors = np.linalg.norm(np.asarray(doors) - np.asarray(doors[i]), axis=1)
 
-        pdr_diff = ((pdr_shots_dict[shot_id_1][0]-pdr_shots_dict[shot_id_2][0])/(scale_factor * 0.3048),
-                    (pdr_shots_dict[shot_id_1][1]-pdr_shots_dict[shot_id_2][1])/(scale_factor * 0.3048), 0)
-        pdr_distance = np.linalg.norm(pdr_diff)
-
-        prob = 1./((distance_doors - pdr_distance) ** 2)
-        prob = prob/np.linalg.norm(prob)
+        prob = 1./(np.fabs(distance_doors - pdr_distance))
+        prob = prob/np.sum(prob)
         for j in range(len(doors)):
             cpt_entries.append([str(i), str(j), prob[j]])
 
     cond_table = ConditionalProbabilityTable(cpt_entries, [parent_node.distribution])
+    #logger.debug("gen_2nd_node_distribution: {}".format(cond_table))
 
     return cond_table
 
 
-def gen_next_node_distribution(node_idx, df_indices, pdr_shots_dict, doors, parent_node_1, parent_node_2):
-    logger.debug("gen_next_node_distribution, node = {}".format(node_idx))
+def gen_node_n_distribution(scale_factor, node_idx, df_indices, pdr_shots_dict, doors, parent_node_1, parent_node_2):
+    logger.debug("gen_node_distribution: node {}".format(node_idx+1))
 
     cpt_entries = []
-    for (i, j) in combinations(range(len(doors)), 2):
-        pos = extrapolate_pos(node_idx, df_indices, doors, i, j, pdr_shots_dict)
+    for i in range(len(doors)):
+        for j in range(len(doors)):
+            if i != j:
+                pos = extrapolate_pos(node_idx, df_indices, doors, i, j, pdr_shots_dict)
 
-        # probability for any door is inversely proportional to its squared distance to pos. then normalize
-        prob = 1./np.sum((np.asarray(doors) - np.asarray(pos)) ** 2, axis=1)
-        prob = prob/np.linalg.norm(prob)
+                # probability for any door is inversely proportional to its squared distance to pos.
+                prob = 1./np.linalg.norm(np.asarray(doors) - np.asarray(pos), axis=1)
+                prob = prob/np.sum(prob)
+            else:
+                shot_id_1 = _int_to_shot_id(df_indices[node_idx-1])
+                shot_id_2 = _int_to_shot_id(df_indices[node_idx])
 
-        for k in range(len(doors)):
-            cpt_entries.append([str(i), str(j), str(k), prob[k]])
+                pdr_diff = ((pdr_shots_dict[shot_id_1][0]-pdr_shots_dict[shot_id_2][0])/(scale_factor * 0.3048),
+                            (pdr_shots_dict[shot_id_1][1]-pdr_shots_dict[shot_id_2][1])/(scale_factor * 0.3048), 0)
+                pdr_distance = np.linalg.norm(pdr_diff)
+
+                distance_doors = np.linalg.norm(np.asarray(doors) - np.asarray(doors[j]), axis=1)
+
+                prob = 1./(np.fabs(distance_doors - pdr_distance))
+
+            prob = prob/np.sum(prob)
+            for k in range(len(doors)):
+                cpt_entries.append([str(i), str(j), str(k), prob[k]])
 
     cond_table = ConditionalProbabilityTable(cpt_entries,
                                              [parent_node_1.distribution, parent_node_2.distribution])
+    #logger.debug("gen_next_node_distribution: {}".format(cond_table))
     return cond_table
 
 
 def extrapolate_pos(node_idx, df_indices, doors, door_1_idx, door_2_idx, pdr_shots_dict):
-    df_1_idx = df_indices[node_idx-2]
-    df_2_idx = df_indices[node_idx-1]
+    shot_id_1 = _int_to_shot_id(df_indices[node_idx-2])
+    shot_id_2 = _int_to_shot_id(df_indices[node_idx-1])
+    shot_id = _int_to_shot_id(df_indices[node_idx])
 
     door_gps_coords = []
     door_gps_coords.append(doors[door_1_idx])
     door_gps_coords.append(doors[door_2_idx])
 
     pdr_coords = []
-    pdr_coords.append([pdr_shots_dict[df_1_idx][0], pdr_shots_dict[df_1_idx][1], 0])
-    pdr_coords.append([pdr_shots_dict[df_2_idx][0], pdr_shots_dict[df_2_idx][1], 0])
+    pdr_coords.append([pdr_shots_dict[shot_id_1][0], pdr_shots_dict[shot_id_1][1], 0])
+    pdr_coords.append([pdr_shots_dict[shot_id_2][0], pdr_shots_dict[shot_id_2][1], 0])
 
     s, A, b = get_affine_transform_2d_no_numpy(door_gps_coords, pdr_coords)
 
-    pos = apply_affine_transform_no_numpy(pdr_shots_dict, df_indices[node_idx], s, A, b)
+    pos = apply_affine_transform_no_numpy(pdr_shots_dict, shot_id, s, A, b)
     return pos
 
 
@@ -162,34 +180,42 @@ def apply_affine_transform_no_numpy(pdr_shots_dict, shot_id, s, A, b):
 def construct_bayes_net(df_indices, pdr_shots_dict, doors, scale_factor):
     model = BayesianNetwork("Door Predictor")
 
-    s1 = Node(gen_1st_node_distribution(len(doors)), name="Node 1")
-    model.add_state(s1)
+    all_nodes = []
+    all_nodes.append(Node(gen_node_0_distribution(len(doors)), name="Node 0"))
+    model.add_state(all_nodes[0])
 
-    s2 = Node(gen_2nd_node_distribution(scale_factor, df_indices, pdr_shots_dict, doors, s1), name="Node 2")
-    model.add_state(s2)
-    model.add_edge(s1, s2)
+    all_nodes.append(Node(gen_node_1_distribution(scale_factor, df_indices, pdr_shots_dict, doors,
+                                                    all_nodes[0]), name="Node 1"))
+    model.add_state(all_nodes[1])
+    model.add_edge(all_nodes[0], all_nodes[1])
 
-    parent_node_1 = s1
-    parent_node_2 = s2
-    for i in range(2, len(df_indices)):
-        dist = gen_next_node_distribution(i, df_indices, pdr_shots_dict, doors, parent_node_1, parent_node_2)
-        s = Node(dist, name="Node "+str(i))
-        model.add_state(s)
-        model.add_edge(parent_node_1, s)
-        model.add_edge(parent_node_2, s)
-        parent_node_1 = parent_node_2
-        parent_node_2 = s
+    for n in range(2, len(df_indices)):
+        dist = gen_node_n_distribution(scale_factor, n, df_indices, pdr_shots_dict, doors,
+                                       all_nodes[n-2], all_nodes[n-1])
+        all_nodes.append(Node(dist, name="Node "+str(n)))
+        model.add_state(all_nodes[n])
+        model.add_edge(all_nodes[n-2], all_nodes[n])
+        model.add_edge(all_nodes[n-1], all_nodes[n])
 
     model.bake()
+
+    logger.debug("Model {}".format(model))
     return model
 
 
-def make_door_predictions(model, df_indices):
-    node_list = []
-    for i in range(len(df_indices)):
-        node_list.append(None)
+def make_door_predictions(model, num_nodes):
+    pred_node_list = []
+    for i in range(num_nodes):
+        pred_node_list.append(None)
 
-    return model.predict(node_list)
+    #return model.predict([pred_node_list])
+    #return model.predict([['0', '1', '2', '3']])
+    #return model.predict([['0', '1', '2', None]])
+    #return model.predict([['0', '1', None, '3']])
+    #return model.predict([['0', None, '2', '3']])
+    #return model.predict([[None, '1', '2', '3']])
+    #return model.predict([[None, '1', '2', None]])
+    return model.predict([['0', '1', None, None]])
 
 
 def predictions_to_gps(predicted_doors, doors, df_indices):
