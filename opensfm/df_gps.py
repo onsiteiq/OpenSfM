@@ -111,6 +111,12 @@ def gen_node_1_distribution(scale_factor, df_indices, pdr_shots_dict, doors, par
     cpt_entries = []
     for i in range(len(doors)):
         '''
+        Ideally the prob distribution of node 1 will depend on node 0, based on pdr 
+        predictions. But pdr predictions are not accurate enough, so we use a uniform
+        distribution instead.
+        '''
+
+        '''
         distance_doors = np.linalg.norm(np.asarray(doors) - np.asarray(doors[i]), axis=1)
 
         prob = 1./(np.fabs(distance_doors - pdr_distance))
@@ -141,6 +147,10 @@ def gen_node_n_distribution(scale_factor, node_idx, df_indices, pdr_shots_dict, 
                     prob = 1./np.linalg.norm(np.asarray(doors) - np.asarray(pos), axis=1)
                     prob = prob/np.sum(prob)
                 else:
+                    '''
+                    extrapolate_pos will return [-1, -1, 0] if the caculated scale is too large or too
+                    small to be true. in this case we set the probabilities to be 0
+                    '''
                     prob = np.zeros(len(doors))
 
                 '''
@@ -153,6 +163,12 @@ def gen_node_n_distribution(scale_factor, node_idx, df_indices, pdr_shots_dict, 
                 '''
 
             else:
+                '''
+                if the last two nodes were the same door, ideally we should base our prediction of
+                next door on pdr. however, for the same reason as with node 1, the pdr prediction is
+                not accurate enough, so we use a uniform distribution instead
+                '''
+
                 '''
                 if abs(df_indices[node_idx-1] - df_indices[node_idx]) < abs(df_indices[node_idx-2]-df_indices[node_idx]):
                     shot_id_1 = _int_to_shot_id(df_indices[node_idx-1])
