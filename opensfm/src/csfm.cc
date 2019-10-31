@@ -6,6 +6,7 @@
 #include "hahog.cc"
 #include "multiview.cc"
 #include "banding_filter.cc"
+#include "hlf.cc"
 #include "akaze.cc"
 #include "bundle.h"
 #include "openmvs_exporter.h"
@@ -71,6 +72,8 @@ PYBIND11_MODULE(csfm, m) {
 
   m.def("run_notch_filter", csfm::RunNotchFilter);
   m.def("is_banding_present", csfm::IsBandingPresent);
+
+  m.def("run_hlf_matcher", csfm::RunHlfMatcher);
 
   py::class_<BundleAdjuster>(m, "BundleAdjuster")
     .def(py::init())
