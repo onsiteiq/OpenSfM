@@ -3,8 +3,7 @@
 //  match high level features detected in images to floor plan annotations
 //
 
-#include "hash_2d.h"
-#include "hashing.hpp"
+#include "geo_hash.h"
 
 #include <opencv2/core/core.hpp>
 #include <iostream>

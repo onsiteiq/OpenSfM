@@ -1,11 +1,23 @@
-// 2D hashing
-// code adapted from http://www.cs.rpi.edu/academics/courses/spring08/cs2/homework/09/
+//
+//  hashing.hpp
+//  Geometric hashing - code adapted from GeoHash by Daniel Mesham
+//
 
-#ifndef hash_2d_h_
-#define hash_2d_h_
+#ifndef hashing_hpp
+#define hashing_hpp
 
+#include <opencv2/core/core.hpp>
+#include <iostream>
+#include <stdio.h>
+#include <map>
 #include <list>
 #include <vector>
+
+
+using namespace std;
+using namespace cv;
+
+// 2D hashing
 
 //  A point location in 2d
 class point {
@@ -70,7 +82,7 @@ public:
 
   //  How many points are in bins immediately next to target bin?
   int points_in_neighborhood(point loc);
-    
+
   //  How many non-empty bins are there?
   int num_non_empty() const;
 
@@ -78,7 +90,7 @@ public:
   int num_points() const;
 
   //  What is the size of the hash table?
-  int table_size() const;  
+  int table_size() const;
 
 private:
   //  This is an internal record for an entry in the table.
@@ -98,20 +110,20 @@ private:
 
   //  Find the table location and list iterator within the table for
   //  the given point.  Used when changes to the table are possible.
-  bool find_entry_iterator( point                  loc, 
+  bool find_entry_iterator( point                  loc,
                             int                  & table_index,
                             table_entry_iterator & itr);
 
   //  Find the table location and list iterator within the table for
   //  the given point.  Used when changes to the table are not
   //  possible.
-  bool find_entry_iterator( point                        loc, 
+  bool find_entry_iterator( point                        loc,
                             int                        & table_index,
                             const_table_entry_iterator & itr) const;
 
   //  Find the table location and list iterator within the table for
   //  the given bin.  Used when changes to the table are possible.
-  bool find_entry_iterator( bin_index              bin, 
+  bool find_entry_iterator( bin_index              bin,
                             int                  & table_index,
                             table_entry_iterator & itr);
 
@@ -135,4 +147,54 @@ private:
 };
 
 
-#endif
+class HashTable {
+public:
+    HashTable(hash_2d table_in, vector<int> basis_in) : table(table_in), basis(basis_in) {};
+    
+    hash_2d table;
+    vector<int> basis;
+    float votes = 0;
+    
+    bool operator > (const HashTable& ht) const
+    {
+        return (votes > ht.votes);
+    }
+    
+    bool operator < (const HashTable& ht) const
+    {
+        return (votes < ht.votes);
+    }
+};
+
+// correspondance map
+class CorrInfo {
+public:
+    CorrInfo(map<int, int> corr_map_in, float scale_in, float rot_in, float votes_in) : corr_map(corr_map_in), scale(scale_in), rot(rot_in), votes(votes_in) {};
+    
+    map<int, int> corr_map;
+    float votes = 0;
+    float scale;
+    float rot;
+    
+    bool operator > (const CorrInfo& ci) const
+    {
+        //return (corr_map.size() > 2) && (votes > ci.votes);
+        return (corr_map.size() > ci.corr_map.size()) || ((corr_map.size() == ci.corr_map.size()) && (votes > ci.votes));
+        
+    }
+};
+
+class hashing {
+public:
+    static HashTable createTable(vector<int> basisID, vector<Point2f> modelPoints, float sigma);
+    static vector<HashTable> voteForTables(vector<HashTable> tables, vector<Point2f> imgPoints, vector<int> imgBasis);
+    static vector<HashTable> clearVotes(vector<HashTable> tables);
+    static vector<Mat> getOrderedPoints(vector<int> imgBasis, HashTable ht, vector<Point2f> modelPoints, vector<Point2f> imgPoints);
+    static map<int, int> getMatchedPoints(vector<int> imgBasis, HashTable ht, vector<Point2f> modelPoints, vector<Point2f> imgPoints, float &scale, float &rot, float distThresh, float estScale=-1);
+    static Point2f basisCoords(vector<Point2f> basis, Point2f p);
+    static Mat pointsToMat2D(vector<Point2f> points);
+    static Mat pointsToHomog(Mat m);
+    static float calcBinWidth(vector<Point2f> coords, float sigma);
+};
+
+#endif /* hashing_hpp */
