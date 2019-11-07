@@ -40,6 +40,8 @@ class DataSet:
         self.pdr_shots_dict = {}
         self.topocentric_gps_points_dict = {}
         self.pdr_predictions_dict = {}
+        self.hlf_list = []
+        self.hlf_det_list = []
         self._load_config()
         self._load_image_list()
         self._load_mask_list()
@@ -762,6 +764,42 @@ class DataSet:
         with open(self._ground_control_points_file()) as fin:
             return io.read_ground_control_points_list(
                 fin, self.load_reference_lla(), exif)
+
+    def _hlf_list_file(self):
+        return os.path.join(self.data_path, 'hlf_list.txt')
+
+    def hlf_list_exist(self):
+        return os.path.isfile(self._hlf_list_file())
+
+    def load_hlf_list(self):
+        """
+        Load high level features list
+        """
+        if not self.hlf_list:
+            with open(self._hlf_list_file()) as fin:
+                next(fin)
+                for line in fin:
+                    (x, y, type) = line.split()
+                    self.hlf_list.append([float(x), float(y)])
+
+        return self.hlf_list
+
+    def _hlf_det_list_file(self):
+        return os.path.join(self.data_path, 'tp_doors.txt')
+
+    def hlf_det_list_exist(self):
+        return os.path.isfile(self._hlf_det_list_file())
+
+    def load_hlf_det_list(self):
+        """
+        Load list of images where high level feature is detected
+        """
+        if not self.hlf_det_list:
+            with open(self._hlf_det_list_file()) as fin:
+                for line in fin:
+                    self.hlf_det_list.append(line.rstrip('\n'))
+
+        return self.hlf_det_list
 
     def image_as_array(self, image):
         logger.warning("image_as_array() is deprecated. Use load_image() instead.")

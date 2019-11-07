@@ -8,6 +8,7 @@
 #include "multiview.cc"
 #include "banding_filter.cc"
 #include "hlf.cc"
+#include "geo_hash.cc"
 #include "akaze.cc"
 #include "bundle.h"
 #include "openmvs_exporter.h"

@@ -13,6 +13,7 @@
 #include <list>
 #include <vector>
 
+namespace csfm {
 
 using namespace std;
 using namespace cv;
@@ -197,4 +198,5 @@ public:
     static float calcBinWidth(vector<Point2f> coords, float sigma);
 };
 
+}
 #endif /* hashing_hpp */

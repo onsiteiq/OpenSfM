@@ -259,7 +259,7 @@ int runAlgo() {
 }
 
 py::dict RunHlfMatcher(const py::list &hlf_list, const py::list &det_list,
-    const py::list &ground_truth, float scale_factor) {
+    const py::list &gt_list, float scale_factor) {
     for (int i = 0; i < py::len(hlf_list); ++i) {
         pyarray_f hlf_array = hlf_list[i].cast<pyarray_f>();
         const float *h = hlf_array.data();
@@ -272,7 +272,7 @@ py::dict RunHlfMatcher(const py::list &hlf_list, const py::list &det_list,
         const float *d = det_array.data();
 
         sfmCoords.push_back(Point2f(d[0], d[1]));
-        groundTruth.push_back(ground_truth[i].cast<int>());
+        groundTruth.push_back(gt_list[i].cast<int>());
     }
 
     actual_scale_factor = scale_factor;

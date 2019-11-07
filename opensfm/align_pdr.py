@@ -9,6 +9,7 @@ from cmath import rect, phase
 
 from itertools import combinations
 
+from opensfm import csfm
 from opensfm import geo
 from opensfm import multiview
 from opensfm import types
@@ -228,71 +229,6 @@ def update_gps_picker(curr_gps_points_dict, pdr_shots_dict, scale_factor, num_ex
     return pdr_predictions_dict
 
 
-def test_geo_hash(reconstruction, data):
-    if not data.pdr_shots_exist():
-        return
-
-    pdr_shots_dict = data.load_pdr_shots()
-
-    X, Xp = [], []
-    onplane, verticals = [], []
-    for shot_id in reconstruction.shots.keys():
-        X.append(reconstruction.shots[shot_id].pose.get_origin())
-        Xp.append(pdr_shots_dict[shot_id])
-        R = reconstruction.shots[shot_id].pose.get_rotation_matrix()
-        onplane.append(R[0,:])
-        onplane.append(R[2,:])
-        verticals.append(R[1,:])
-
-    X = np.array(X)
-    Xp = np.array(Xp)
-
-    # Estimate ground plane.
-    p = multiview.fit_plane(X - X.mean(axis=0), onplane, verticals)
-    Rplane = multiview.plane_horizontalling_rotation(p)
-    X = Rplane.dot(X.T).T
-
-    # Estimate 2d similarity to align to pdr predictions
-    T = tf.affine_matrix_from_points(X.T[:2], Xp.T[:2], shear=False)
-    s = np.linalg.det(T[:2, :2]) ** 0.5
-    A = np.eye(3)
-    A[:2, :2] = T[:2, :2] / s
-    A = A.dot(Rplane)
-    b = np.array([
-        T[0, 2],
-        T[1, 2],
-        Xp[:, 2].mean() - s * X[:, 2].mean()  # vertical alignment
-    ])
-
-    # Align points.
-    for point in reconstruction.points.values():
-        p = s * A.dot(point.coordinates) + b
-        point.coordinates = p.tolist()
-
-    # Align cameras.
-    for shot in reconstruction.shots.values():
-        R = shot.pose.get_rotation_matrix()
-        t = np.array(shot.pose.translation)
-        Rp = R.dot(A.T)
-        tp = -Rp.dot(b) + s * t
-        try:
-           shot.pose.set_rotation_matrix(Rp)
-           shot.pose.translation = list(tp)
-        except:
-            logger.debug("unable to transform reconstruction!")
-
-    return reconstruction
-
-
-def export_coordinates(reconstructions):
-    with open(os.path.join('.', 'test_geo_hash.txt'), 'w') as f:
-        for reconstruction in reconstructions:
-            f.write("new reconstruction")
-            for shot_id in reconstruction.shots.keys():
-                o = reconstruction.shots[shot_id].pose.get_origin()
-                f.write("{} {} {}\n".format(o[0], o[1], shot_id))
-
-
 def update_pdr_prediction_position(shot_id, reconstruction, data):
     if data.pdr_shots_exist():
         if len(reconstruction.shots) < 3:
@@ -449,16 +385,16 @@ def scale_reconstruction_to_pdr(reconstruction, data):
     """
     scale the reconstruction to pdr predictions
     """
-    if not data.gps_points_exist():
-        return
-
-    if not data.pdr_shots_exist():
-        return
-
     pdr_predictions_dict = data.load_pdr_predictions()
-    
-    if not pdr_predictions_dict:
-        return
+
+    if pdr_predictions_dict:
+        scale_recon_1(reconstruction, data)
+    else:
+        scale_recon_2(reconstruction, data)
+
+
+def scale_recon_1(reconstruction, data):
+    pdr_predictions_dict = data.load_pdr_predictions()
 
     ref_shots_dict = {}
     for shot in reconstruction.shots.values():
@@ -477,32 +413,115 @@ def scale_reconstruction_to_pdr(reconstruction, data):
         reconstruction.alignment.scaled = True
 
 
+def scale_recon_2(reconstruction, data):
+    if not data.pdr_shots_exist():
+        return
+
+    pdr_shots_dict = data.load_pdr_shots()
+
+    X, Xp = [], []
+    onplane, verticals = [], []
+    for shot_id in reconstruction.shots.keys():
+        X.append(reconstruction.shots[shot_id].pose.get_origin())
+        Xp.append(pdr_shots_dict[shot_id])
+        R = reconstruction.shots[shot_id].pose.get_rotation_matrix()
+        onplane.append(R[0,:])
+        onplane.append(R[2,:])
+        verticals.append(R[1,:])
+
+    X = np.array(X)
+    Xp = np.array(Xp)
+
+    # Estimate ground plane.
+    p = multiview.fit_plane(X - X.mean(axis=0), onplane, verticals)
+    Rplane = multiview.plane_horizontalling_rotation(p)
+    X = Rplane.dot(X.T).T
+
+    # Estimate 2d similarity to align to pdr predictions
+    T = tf.affine_matrix_from_points(X.T[:2], Xp.T[:2], shear=False)
+    s = np.linalg.det(T[:2, :2]) ** 0.5
+    A = np.eye(3)
+    A[:2, :2] = T[:2, :2] / s
+    A = A.dot(Rplane)
+    b = np.array([
+        T[0, 2],
+        T[1, 2],
+        Xp[:, 2].mean() - s * X[:, 2].mean()  # vertical alignment
+    ])
+
+    # Align points.
+    for point in reconstruction.points.values():
+        p = s * A.dot(point.coordinates) + b
+        point.coordinates = p.tolist()
+
+    # Align cameras.
+    for shot in reconstruction.shots.values():
+        R = shot.pose.get_rotation_matrix()
+        t = np.array(shot.pose.translation)
+        Rp = R.dot(A.T)
+        tp = -Rp.dot(b) + s * t
+        try:
+            shot.pose.set_rotation_matrix(Rp)
+            shot.pose.translation = list(tp)
+        except:
+            logger.debug("unable to transform reconstruction!")
+
+
 def align_reconstructions_to_pdr(reconstructions, data):
     """
     for any reconstruction that's not aligned with gps, use pdr predictions to align them
     """
     reconstructions[:] = [align_reconstruction_to_pdr(recon, data) for recon in reconstructions]
 
-    # debugging
-    export_coordinates(reconstructions)
-
 
 def align_reconstruction_to_pdr(reconstruction, data):
     if not reconstruction.alignment.aligned:
-        pdr_predictions_dict = init_pdr_predictions(data, True)
-
-        if not pdr_predictions_dict:
-            reconstruction = test_geo_hash(reconstruction, data)
-        else:
-            reconstruction = direct_align_pdr(data, reconstruction.shots.keys())
+        reconstruction = direct_align_pdr(data, reconstruction.shots.keys())
 
     return reconstruction
 
 
+def align_reconstructions_to_hlf(reconstructions, data):
+    # 1. load list of hlf coordinates on floor plan
+    hlf_list = data.load_hlf_list()
+    logger.debug("hlf_list has {} entries {}".format(len(hlf_list), hlf_list))
+
+    # 2. load list of images detected with hlf
+    hlf_det_list = data.load_hlf_det_list()
+    logger.debug("hlf_det_list has {} entries".format(len(hlf_det_list)))
+
+    # 3. for each reconstruction, attempt to auto discover gps
+    for recon in reconstructions:
+        det_list = []
+        img_list = []
+        gt_list = []
+
+        # first, scale reconstruction to that of the pdr
+        scale_reconstruction_to_pdr(recon, data)
+
+        # second, get all shot ids in this recon that has hlf detection
+        for shot_id in hlf_det_list:
+            if shot_id in recon.shots:
+                o = recon.shots[shot_id].pose.get_origin()
+                det_list.append([o[0], o[1]])
+                img_list.append(shot_id)
+
+        logger.debug("det_list has {} entries {}".format(len(det_list), det_list))
+        logger.debug("img_list {}".format(img_list))
+
+        for i in range(len(det_list)):
+            # change this if we add ground truth manually
+            gt_list.append(-1)
+
+        matches = csfm.run_hlf_matcher(hlf_list, det_list, gt_list,
+                                       data.config['reconstruction_scale_factor'])
+
+        logger.debug("matches = {}".format(matches))
+
+
 def align_reconstructions_to_pdr_old(reconstructions, data):
     """
-    attempt to align un-anchored reconstructions
-    """
+    attempt to align un-anchored reconstructions """
     if not data.gps_points_exist():
         return
 

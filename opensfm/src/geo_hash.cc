@@ -10,6 +10,7 @@
 #include <opencv2/calib3d.hpp>
 #include "geo_hash.h"
 
+namespace csfm {
 float hashing::calcBinWidth(vector<Point2f> basis, float sigma) {
     /*
      * half of the distance between the two basis points will be equal to
@@ -41,7 +42,8 @@ HashTable hashing::createTable(vector<int> basisID, vector<Point2f> modelPoints,
 }
 
 
-vector<HashTable> hashing::voteForTables(vector<HashTable> tables, vector<Point2f> imgPoints, vector<int> imgBasis) {
+vector<HashTable> hashing::voteForTables(vector<HashTable> tables, vector<Point2f> imgPoints, vector<int> imgBasis)
+{
     /*
      * Generates a vote for each table based on how many model points lie in the same
      * bin as a given image point when in the coordinate system of the given basis.
@@ -527,4 +529,5 @@ hash_2d::find_entry_iterator( bin_index                    bin,
         itr != m_table[table_index].end() && ! (itr->bin == bin); ++itr )
         ;
     return ( itr != m_table[table_index].end() );
+}
 }

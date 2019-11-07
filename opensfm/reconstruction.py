@@ -23,7 +23,7 @@ from opensfm.align import align_reconstruction, align_reconstruction_segments, a
 from opensfm.align_pdr import init_pdr_predictions, direct_align_pdr, \
     update_pdr_prediction_position, update_pdr_prediction_rotation, \
     cull_resection_pdr, validate_resection_pdr, \
-    scale_reconstruction_to_pdr, align_reconstructions_to_pdr, \
+    scale_reconstruction_to_pdr, align_reconstructions_to_pdr, align_reconstructions_to_hlf, \
     debug_rotation_prior
 from opensfm.context import parallel_map, current_memory_usage
 from opensfm import transformations as tf
@@ -1712,9 +1712,9 @@ def incremental_reconstruction_sequential(data):
                 curr_idx += 1
 
     if reconstructions:
-        if len(target_images) == 0:
+        #if len(target_images) == 0:
             # only tries pdr alignment when we are not subsetting
-            align_reconstructions_to_pdr(reconstructions, data)
+            #align_reconstructions_to_pdr(reconstructions, data)
 
         reconstructions = sorted(reconstructions, key=lambda x: -len(x.shots))
         data.save_reconstruction(reconstructions)
