@@ -30,7 +30,7 @@ HashTable hashing::createTable(vector<int> basisID, vector<Point2f> modelPoints,
     vector<Point2f> basis = { modelPoints[basisID[0]], modelPoints[basisID[1]] };
     float binWidth = calcBinWidth(basis, sigma);
     hash_2d gh(binWidth);
-    
+
     for (int j = 0; j < modelPoints.size(); j++) {
         // Do not hash basis
         if (j == basisID[0] || j == basisID[1]) continue;
@@ -58,7 +58,7 @@ vector<HashTable> hashing::voteForTables(vector<HashTable> tables, vector<Point2
         if (i == imgBasis[0] || i == imgBasis[1]) continue;
         Point2f bc = basisCoords(basis, imgPoints[i]);
         point pt = point(bc.x, bc.y);
-        
+
         // Check for matches in each table
         for (int j = 0; j < tables.size(); j++) {
             vector<point> points = tables[j].table.points_in_bin(pt);

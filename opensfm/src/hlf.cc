@@ -27,20 +27,20 @@ using namespace cv;
 // actual floor scale factor
 //#define ACTUAL_SCALE_FACTOR 0.02        // for Moinian/2_Wash, test data sets 1 & 2
 //#define ACTUAL_SCALE_FACTOR 0.0399      // for Moinian/123_Linden, test data sets 3 & 4
-float actual_scale_factor = 0.02;
+float actual_scale_factor;
 
 // threshold for detection (other than 2 basis points). this threshold needs
 // to be adjusted based on how many input image points we have, because the
 // more we have, the more likely it is to have random erroneous result. it
 // should be between 6-10
-static float detThresh = 8.0;
+float detThresh = 8.0;
 
 // threshold for correspondance after applying estimated similarity transform
 // to sfm coordinates. needs to adjust based on floor plan scale factor
-static float distThresh = 100.0 / (actual_scale_factor/NOMINAL_SCALE_FACTOR);
+float distThresh;
 
 // std dev of sfm error in pixels. needs to adjust based on floor plan scale factor
-static float sigma = 50.0 / (actual_scale_factor/NOMINAL_SCALE_FACTOR);
+float sigma;
 
 // number of detections to use from all detections. set to -1 to use all
 static int subsetSize = -1;
@@ -260,6 +260,12 @@ int runAlgo() {
 
 py::dict RunHlfMatcher(const py::list &hlf_list, const py::list &det_list,
     const py::list &gt_list, float scale_factor) {
+
+    planCoords.clear();
+    sfmCoords.clear();
+    groundTruth.clear();
+    final_map.clear();
+
     for (int i = 0; i < py::len(hlf_list); ++i) {
         pyarray_f hlf_array = hlf_list[i].cast<pyarray_f>();
         const float *h = hlf_array.data();
@@ -276,17 +282,17 @@ py::dict RunHlfMatcher(const py::list &hlf_list, const py::list &det_list,
     }
 
     actual_scale_factor = scale_factor;
+    distThresh = 100.0 / (actual_scale_factor/NOMINAL_SCALE_FACTOR);
+    sigma = 50.0 / (actual_scale_factor/NOMINAL_SCALE_FACTOR);
 
     runAlgo();
 
 #if 0
-	py::dict retVal;
-    map<int, int>::iterator iter;
-    for (iter = final_map.begin(); iter != final_map.end(); ++iter) {
-		retVal[to_string(iter->first).c_str()] = to_string(iter->second);
+    for (auto iter = final_map.begin(); iter != final_map.end(); ++iter) {
+		cout << "final map " << to_string(iter->first) << "=>" << to_string(iter->second) << endl;
 	}
-    return retVal;
 #endif
+
     return py::cast(final_map);
 }
 

@@ -484,7 +484,7 @@ def align_reconstruction_to_pdr(reconstruction, data):
 def align_reconstructions_to_hlf(reconstructions, data):
     # 1. load list of hlf coordinates on floor plan
     hlf_list = data.load_hlf_list()
-    logger.debug("hlf_list has {} entries {}".format(len(hlf_list), hlf_list))
+    logger.debug("hlf_list has {} entries".format(len(hlf_list)))
 
     # 2. load list of images detected with hlf
     hlf_det_list = data.load_hlf_det_list()
@@ -492,6 +492,8 @@ def align_reconstructions_to_hlf(reconstructions, data):
 
     # 3. for each reconstruction, attempt to auto discover gps
     for recon in reconstructions:
+        logger.debug("recon has {} shots".format(len(recon.shots)))
+
         det_list = []
         img_list = []
         gt_list = []
@@ -506,8 +508,12 @@ def align_reconstructions_to_hlf(reconstructions, data):
                 det_list.append([o[0], o[1]])
                 img_list.append(shot_id)
 
-        logger.debug("det_list has {} entries {}".format(len(det_list), det_list))
-        logger.debug("img_list {}".format(img_list))
+        if len(det_list) < 8:
+            logger.debug("recon has {} door detections, too few to perform alignment".format(len(det_list)))
+            continue
+
+        logger.debug("det_list has {} entries".format(len(det_list)))
+        #logger.debug("img_list {}".format(img_list))
 
         for i in range(len(det_list)):
             # change this if we add ground truth manually
@@ -516,7 +522,8 @@ def align_reconstructions_to_hlf(reconstructions, data):
         matches = csfm.run_hlf_matcher(hlf_list, det_list, gt_list,
                                        data.config['reconstruction_scale_factor'])
 
-        logger.debug("matches = {}".format(matches))
+        for i in matches.keys():
+            logger.debug("{} => {}".format(img_list[i], hlf_list[matches[i]]))
 
 
 def align_reconstructions_to_pdr_old(reconstructions, data):
