@@ -46,7 +46,7 @@ int IsBandingPresent(char *filename)
         float medianVal = medianMat(testRegion);
         float ratio = imgPSD.at<float>(imgPSD.rows/2-testFreqs[i], imgPSD.cols/2) / medianVal;
 
-        if(ratio > 20.0f)
+        if(ratio > 15.0f)
         {
             return testFreqs[i];
         }

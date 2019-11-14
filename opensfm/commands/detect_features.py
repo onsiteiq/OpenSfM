@@ -20,29 +20,58 @@ class Command:
     name = 'detect_features'
     help = 'Compute features for all images'
 
+    def __init__(self):
+        self.checkpoint_callback = None
+
     def add_arguments(self, parser):
         parser.add_argument('dataset', help='dataset to process')
 
     def run(self, args):
-        data = dataset.DataSet(args.dataset)
+    
+        data = dataset.DataSet( args.dataset )
         images = data.images()
 
-        arguments = [(image, data) for image in images]
-
-        start = timer()
+        # Group processing inputs into 150 images at a time.
+        
+        arg_groups = [ [] ]
+        
+        ag_ind = 0
+        for ind,img in enumerate(images):
+            cur_arg_group = arg_groups[ ag_ind ]
+            if not data.feature_index_exists( img ):
+                cur_arg_group.append( (img, data) )
+            if len(cur_arg_group) == 150:
+                arg_groups.append( [] )
+                ag_ind += 1
+        
         processes = data.config['feature_processes']
-        parallel_map(detect, arguments, processes)
 
-        # generate 'super point' features if flag is on
-        if data.config['feature_use_superpoint']:
-            size_w = data.config['feature_process_size_superpoint']
-            superpoint.gen_ss(size_w, processes)
+        run_time = 0
 
-        end = timer()
+        for pargs in arg_groups:
+            
+            start = timer()
+            parallel_map( detect, pargs, processes )
+        
+            # generate 'super point' features if flag is on
+            if data.config['feature_use_superpoint']:
+                size_w = data.config['feature_process_size_superpoint']
+                superpoint.gen_ss(size_w, processes)
+                
+            end = timer()
+        
+            run_time += end - start
+            
+            self.write_report( data, run_time )
+            
+            if self.checkpoint_callback is not None:
+                self.checkpoint_callback( args.dataset )
+            
         with open(data.profile_log(), 'a') as fout:
-            fout.write('detect_features: {0}\n'.format(end - start))
+                fout.write( 'detect_features: {0}\n'.format( run_time ) )
 
-        self.write_report(data, end - start)
+    def set_checkpoint_callback( self, callback ):
+        self.checkpoint_callback = callback
 
     def write_report(self, data, wall_time):
         image_reports = []

@@ -21,8 +21,9 @@ def align_reconstruction(reconstruction, gcp, config):
     reconstruction.alignment.aligned = False
     if res:
         s, A, b = res
-        apply_similarity(reconstruction, s, A, b)
-        reconstruction.alignment.aligned = True
+        if np.isfinite(s):
+            apply_similarity(reconstruction, s, A, b)
+            reconstruction.alignment.aligned = True
 
 
 def align_reconstruction_segments(reconstruction, gcp, config, stride_len=6):

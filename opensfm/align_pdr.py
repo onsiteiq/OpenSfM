@@ -18,11 +18,12 @@ from opensfm.debug_plot import debug_plot_pdr
 logger = logging.getLogger(__name__)
 
 
-def init_pdr_predictions(data):
+def init_pdr_predictions(data, use_2d=False):
     """
     globally align pdr path to gps points
 
     :param data:
+    :param use_2d:
     """
     if not data.gps_points_exist():
         return
@@ -43,11 +44,14 @@ def init_pdr_predictions(data):
             reflla['latitude'], reflla['longitude'], reflla['altitude'])
         topocentric_gps_points_dict[key] = [x, y, z]
 
-    pdr_predictions_dict = update_pdr_global(topocentric_gps_points_dict, pdr_shots_dict, scale_factor)
-    if len(pdr_predictions_dict) != len(pdr_shots_dict):
-        # under degenerate configurations, update_pdr_global can fail to produce pdr predictions for
-        # every shot. in that case, we revert to 2-point alignment below
+    if use_2d:
         pdr_predictions_dict = update_pdr_global_2d(topocentric_gps_points_dict, pdr_shots_dict, scale_factor, False)
+    else:
+        pdr_predictions_dict = update_pdr_global(topocentric_gps_points_dict, pdr_shots_dict, scale_factor)
+        if len(pdr_predictions_dict) != len(pdr_shots_dict):
+            # under degenerate configurations, update_pdr_global can fail to produce pdr predictions for
+            # every shot. in that case, we revert to 2-point alignment below
+            pdr_predictions_dict = update_pdr_global_2d(topocentric_gps_points_dict, pdr_shots_dict, scale_factor, False)
 
     data.save_topocentric_gps_points(topocentric_gps_points_dict)
     data.save_pdr_predictions(pdr_predictions_dict)
@@ -58,16 +62,19 @@ def init_pdr_predictions(data):
     return pdr_predictions_dict
 
 
-def direct_align_pdr(data):
+def direct_align_pdr(data, target_images=None):
     """
     directly form a reconstruction based on pdr data
     :param data:
+    :param target_images:
     :return: reconstruction
     """
-    pdr_predictions_dict = init_pdr_predictions(data)
+    pdr_predictions_dict = init_pdr_predictions(data, True)
     pdr_shots_dict = data.load_pdr_shots()
 
-    target_images = data.config.get('target_images', [])
+    if not target_images:
+        target_images = data.config.get('target_images', [])
+
     cameras = data.load_camera_models()
 
     reconstruction = types.Reconstruction()
@@ -168,6 +175,8 @@ def direct_align_pdr(data):
 
 def update_gps_picker(curr_gps_points_dict, pdr_shots_dict, scale_factor, num_extrapolation):
     """
+    this routine is intended to be ported and used in gps picker
+
     globally align pdr path to current set of gps shots. return pdr predictions for
     the first x + num_extrapolation shots, where x is the largest sequence number in
     current gps shots.
@@ -401,6 +410,20 @@ def scale_reconstruction_to_pdr(reconstruction, data):
 
 def align_reconstructions_to_pdr(reconstructions, data):
     """
+    for any reconstruction that's not aligned with gps, use pdr predictions to align them
+    """
+    reconstructions[:] = [align_reconstruction_to_pdr(recon, data) for recon in reconstructions]
+
+
+def align_reconstruction_to_pdr(reconstruction, data):
+    if not reconstruction.alignment.aligned:
+        reconstruction = direct_align_pdr(data, reconstruction.shots.keys())
+
+    return reconstruction
+
+
+def align_reconstructions_to_pdr_old(reconstructions, data):
+    """
     attempt to align un-anchored reconstructions
     """
     if not data.gps_points_exist():
@@ -426,10 +449,10 @@ def align_reconstructions_to_pdr(reconstructions, data):
     for reconstruction in reconstructions:
         if not reconstruction.alignment.aligned:
             reconstruction.alignment.aligned = \
-                align_reconstruction_to_pdr(reconstruction, walkthrough_dict, gps_points_dict, scale_factor)
+                align_reconstruction_to_pdr_old(reconstruction, walkthrough_dict, gps_points_dict, scale_factor)
 
 
-def align_reconstruction_to_pdr(reconstruction, walkthrough_dict, gps_points_dict, scale_factor):
+def align_reconstruction_to_pdr_old(reconstruction, walkthrough_dict, gps_points_dict, scale_factor):
     """
     align one partial reconstruction to 'best' pdr predictions
     """
@@ -749,14 +772,15 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad
             gps_coords.append(gps_points_dict[shot_id])
             pdr_coords.append([pdr_shots_dict[shot_id][0], pdr_shots_dict[shot_id][1], 0])
 
-        s, A, b = get_affine_transform_2d(gps_coords, pdr_coords)
+        #s, A, b = get_affine_transform_2d(gps_coords, pdr_coords)
+        s, A, b = get_affine_transform_2d_no_numpy(gps_coords, pdr_coords)
 
         # the closer s is to expected_scale, the better the fit, and the less the deviation
         deviation = math.fabs(1.0 - s/expected_scale)
 
         # debugging
-        [x, y, z] = _rotation_matrix_to_euler_angles(A)
-        logger.debug("update_pdr_global_2d: deviation=%f, rotation=%f, %f, %f", deviation, np.degrees(x), np.degrees(y), np.degrees(z))
+        #[x, y, z] = _rotation_matrix_to_euler_angles(A)
+        #logger.debug("update_pdr_global_2d: deviation=%f, rotation=%f, %f, %f", deviation, np.degrees(x), np.degrees(y), np.degrees(z))
 
         if skip_bad and not ((0.50 * expected_scale) < s < (2.0 * expected_scale)):
             logger.debug("s/expected_scale={}, discard".format(s/expected_scale))
@@ -773,7 +797,10 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad
         if i == len(gps_points_dict)-2:
             end_shot_id = _int_to_shot_id(len(pdr_shots_dict)-1)
 
-        new_dict = apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id,
+        #new_dict = apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id,
+                                          #s, A, b,
+                                          #deviation, [all_gps_shot_ids[i], all_gps_shot_ids[i+1]])
+        new_dict = apply_affine_transform_no_numpy(pdr_shots_dict, start_shot_id, end_shot_id,
                                           s, A, b,
                                           deviation, [all_gps_shot_ids[i], all_gps_shot_ids[i+1]])
         pdr_predictions_dict.update(new_dict)
@@ -1001,6 +1028,43 @@ def apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id, s, A, b, 
     return new_dict
 
 
+def apply_affine_transform_no_numpy(pdr_shots_dict, start_shot_id, end_shot_id, s, A, b, deviation, gps_shot_ids=[]):
+    """Apply a similarity (y = s A x + b) to a reconstruction.
+
+    we avoid all numpy calls, to make it easier to port to Javascript for use in gps picker
+
+    :param pdr_shots_dict: all original pdr predictions
+    :param start_shot_id: start shot id to perform transform
+    :param end_shot_id: end shot id to perform transform
+    :param s: The scale (a scalar)
+    :param A: The rotation matrix (3x3)
+    :param b: The translation vector (3)
+    :param gps_shot_ids: gps shot ids the affine transform is based on
+    :param deviation: a measure of how closely pdr predictions match gps points
+    :return: pdr shots between start and end shot id transformed by s, A, b
+    """
+    new_dict = {}
+
+    start_index = _shot_id_to_int(start_shot_id)
+    end_index = _shot_id_to_int(end_shot_id)
+
+    # transform pdr shots
+    for i in range(start_index, end_index + 1):
+        shot_id = _int_to_shot_id(i)
+        dop = get_dop(shot_id, deviation, gps_shot_ids)
+
+        if shot_id in pdr_shots_dict:
+            X = pdr_shots_dict[shot_id]
+            A_dot_X = [A[0][0]*X[0] + A[0][1]*X[1] + A[0][2]*X[2],
+                          A[1][0]*X[0] + A[1][1]*X[1] + A[1][2]*X[2],
+                          A[2][0]*X[0] + A[2][1]*X[1] + A[2][2]*X[2]]
+            Xp = [i*s + j for i, j in zip(A_dot_X, b)]
+            new_dict[shot_id] = [Xp[0], Xp[1], Xp[2], dop]
+            #logger.info("new_dict {} = {} {} {} {}".format(shot_id, new_dict[shot_id][0], new_dict[shot_id][1], new_dict[shot_id][2], new_dict[shot_id][3]))
+
+    return new_dict
+
+
 def get_affine_transform_2d(gps_coords, pdr_coords):
     """
     get affine transform between pdr an GPS coordinates (dim 2)
@@ -1019,6 +1083,34 @@ def get_affine_transform_2d(gps_coords, pdr_coords):
         T[1, 2],
         Xp[:, 2].mean() - s * X[:, 2].mean()  # vertical alignment
     ])
+
+    return s, A, b
+
+
+def get_affine_transform_2d_no_numpy(gps_coords, pdr_coords):
+    """
+    get affine transform between 2 pdr points and 2 GPS coordinates.
+    this simplification applies when we have 2 pdr points to be aligned with 2 gps points. we will avoid
+    numpy functions, so as to make the porting to Javascript easier.
+    """
+    diff_x = [i - j for i, j in zip(pdr_coords[1], pdr_coords[0])]
+    diff_xp = [i - j for i, j in zip(gps_coords[1], gps_coords[0])]
+
+    dot = diff_x[0] * diff_xp[0] + diff_x[1] * diff_xp[1]  # dot product
+    det = diff_x[0] * diff_xp[1] - diff_x[1] * diff_xp[0]  # determinant
+    theta = math.atan2(det, dot)  # atan2(y, x) or atan2(sin, cos)
+
+    A = [[math.cos(theta), -math.sin(theta), 0],
+         [math.sin(theta), math.cos(theta), 0],
+         [0, 0, 1]]
+    s = math.sqrt((diff_xp[0]*diff_xp[0]+diff_xp[1]*diff_xp[1]+diff_xp[2]*diff_xp[2])/
+                  (diff_x[0]*diff_x[0]+diff_x[1]*diff_x[1]+diff_x[2]*diff_x[2]))
+
+    x1 = pdr_coords[1]
+    a_dot_x1 = [A[0][0]*x1[0] + A[0][1]*x1[1] + A[0][2]*x1[2],
+                  A[1][0]*x1[0] + A[1][1]*x1[1] + A[1][2]*x1[2],
+                  A[2][0]*x1[0] + A[2][1]*x1[1] + A[2][2]*x1[2]]
+    b = [i - j*s for i, j in zip(gps_coords[1], a_dot_x1)]
 
     return s, A, b
 

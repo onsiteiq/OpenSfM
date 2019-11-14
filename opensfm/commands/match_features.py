@@ -22,15 +22,41 @@ logger = logging.getLogger(__name__)
 class Command:
     name = 'match_features'
     help = 'Match features between image pairs'
+    
+    def __init__(self):
+        self.checkpoint_callback = None
 
     def add_arguments(self, parser):
         parser.add_argument('dataset', help='dataset to process')
 
     def run(self, args):
-        data = dataset.DataSet(args.dataset)
+        data = dataset.DataSet( args.dataset )
         images = data.images()
         exifs = {im: data.load_exif(im) for im in images}
-        pairs, preport = match_candidates_from_metadata(images, exifs, data)
+        
+        preport = {}
+        
+        try:
+            # Attempt to load the report from any previous runs
+            report_str = data.load_report('matches.json' )
+            preport = io.json_loads( report_str )
+        except:
+            pass
+            
+        use_report_pairs = True
+        if 'parameters' in preport:
+            params = preport['parameters']
+            use_report_pairs = matching_config_unchanged( data.config, params )
+            
+        if 'pairs' in preport and use_report_pairs:
+            pairs = preport['pairs']
+        else:
+            pairs, preport = match_candidates_from_metadata(images, exifs, data)
+            
+            # Append a field for indicating processing status (processed or not processed)
+            for img in pairs:
+                candidates = pairs[img]
+                pairs[img] = [ candidates, False ]
 
         num_pairs = sum(len(c) for c in pairs.values())
         logger.info('Matching {} image pairs'.format(num_pairs))
@@ -40,26 +66,92 @@ class Command:
         ctx.cameras = ctx.data.load_camera_models()
         ctx.exifs = exifs
         ctx.p_pre, ctx.f_pre = load_preemptive_features(data)
-        args = list(match_arguments(pairs, ctx))
-
-        start = timer()
+        
+        # Group processing inputs into 150 images at a time.
+        
+        pairs_groups = [ {} ]
+        
+        pg_ind = 0
+        for ind,img in enumerate(pairs):
+            cur_pair_group = pairs_groups[ pg_ind ]
+            cur_pair_group[img] = pairs[img]
+            if len(cur_pair_group) == 150:
+                pairs_groups.append( {} )
+                pg_ind += 1
+        
         processes = ctx.data.config['processes']
-        parallel_map(match, args, processes)
-        end = timer()
-        with open(ctx.data.profile_log(), 'a') as fout:
-            fout.write('match_features: {0}\n'.format(end - start))
-        self.write_report(data, preport, pairs, end - start)
+        
+        run_time = 0
+        for pg in pairs_groups:
+        
+            pargs = list(match_arguments(pg, ctx))
+        
+            if len(pargs) > 0:
+        
+                start = timer()
+            
+                parallel_map(match, pargs, processes)
+                
+                end = timer()
+            
+                run_time += end - start
+                
+                # Mark processing as complete for these pairs.
+                
+                for img in pg:
+                    pairs[img][1] = True
+                    
+                with open(ctx.data.profile_log(), 'a') as fout:
+                    fout.write('match_features: {0}\n'.format(run_time))
+                self.write_report(data, preport, pairs, run_time)
+    
+                if self.checkpoint_callback is not None:
+                    self.checkpoint_callback( args.dataset )
+                    
+    
+    def set_checkpoint_callback( self, callback ):
+        self.checkpoint_callback = callback
 
     def write_report(self, data, preport, pairs, wall_time):
         pair_list = []
         for im1, others in pairs.items():
             for im2 in others:
                 pair_list.append((im1, im2))
-
+                
+        proc_params = {}
+        
+        g_match = proc_params['general_matching'] = {}
+        
+        g_match['lowes_ratio'] = data.config['lowes_ratio']
+        g_match['preemptive_lowes_ratio'] = data.config['preemptive_lowes_ratio']
+        g_match['matcher_type'] = data.config['matcher_type']
+        
+        flann = proc_params['flann'] = {}
+        
+        flann['flann_branching'] = data.config['flann_branching']
+        flann['flann_iterations'] = data.config['flann_iterations']
+        flann['flann_checks'] = data.config['flann_checks']
+        
+        preemptive_match = proc_params['preemptive_matching'] = {}
+        
+        preemptive_match['matching_gps_distance'] = data.config['matching_gps_distance']
+        preemptive_match['matching_gps_neighbors'] = data.config['matching_gps_neighbors']
+        preemptive_match['matching_time_neighbors'] = data.config['matching_time_neighbors']
+        preemptive_match['matching_order_neighbors'] = data.config['matching_order_neighbors']
+        preemptive_match['matching_pdr_distance'] = data.config['matching_pdr_distance']
+        preemptive_match['preemptive_max'] = data.config['preemptive_max']
+        preemptive_match['preemptive_threshold'] = data.config['preemptive_threshold']
+        
+        geom_est = proc_params['geometric_estimation'] = {}
+        
+        geom_est['robust_matching_threshold'] = data.config['robust_matching_threshold']
+        geom_est['robust_matching_calib_threshold'] = data.config['robust_matching_calib_threshold']
+        
         report = {
             "wall_time": wall_time,
             "num_pairs": len(pair_list),
-            "pairs": pair_list,
+            "parameters": proc_params,
+            "pairs": pairs,
         }
         report.update(preport)
         data.save_report(io.json_dumps(report), 'matches.json')
@@ -67,6 +159,30 @@ class Command:
 
 class Context:
     pass
+
+
+def matching_config_unchanged( config, match_params ):
+
+    g_match = match_params['general_matching']
+    flann = match_params['flann']
+    preemptive_match = match_params['preemptive_matching']
+    geom_est = match_params['geometric_estimation']
+    
+    return ( g_match['lowes_ratio'] == config['lowes_ratio'] and
+           g_match['preemptive_lowes_ratio'] == config['preemptive_lowes_ratio'] and
+           g_match['matcher_type'] == config['matcher_type'] and
+           flann['flann_branching'] == config['flann_branching']  and
+           flann['flann_iterations'] == config['flann_iterations']  and
+           flann['flann_checks'] == config['flann_checks']  and
+           preemptive_match['matching_gps_distance'] == config['matching_gps_distance']  and
+           preemptive_match['matching_gps_neighbors'] == config['matching_gps_neighbors']  and
+           preemptive_match['matching_time_neighbors'] == config['matching_time_neighbors']  and
+           preemptive_match['matching_order_neighbors'] == config['matching_order_neighbors']  and
+           preemptive_match['matching_pdr_distance'] == config['matching_pdr_distance']  and
+           preemptive_match['preemptive_max'] == config['preemptive_max']  and
+           preemptive_match['preemptive_threshold'] == config['preemptive_threshold']  and
+           geom_est['robust_matching_threshold'] == config['robust_matching_threshold']  and
+           geom_est['robust_matching_calib_threshold'] == config['robust_matching_calib_threshold'] )
 
 
 def load_preemptive_features(data):
@@ -292,8 +408,9 @@ def match_candidates_from_metadata(images, exifs, data):
 
 
 def match_arguments(pairs, ctx):
-    for i, (im, candidates) in enumerate(pairs.items()):
-        yield im, candidates, i, len(pairs), ctx
+    for i, (im, ( candidates, processed )) in enumerate(pairs.items()):
+        if not processed:
+            yield im, candidates, i, len(pairs), ctx
 
 
 def match(args):
