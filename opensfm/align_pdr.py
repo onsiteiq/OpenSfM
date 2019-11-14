@@ -492,7 +492,7 @@ def align_reconstructions_to_hlf(reconstructions, data):
 
     # 3. for each reconstruction, attempt to auto discover gps
     for recon in reconstructions:
-        logger.debug("recon has {} shots".format(len(recon.shots)))
+        logger.debug("recon has {} shots {}".format(len(recon.shots), sorted(recon.shots)))
 
         det_list = []
         img_list = []
