@@ -1,4 +1,5 @@
 import logging
+import numpy as np
 from timeit import default_timer as timer
 
 from networkx.algorithms import bipartite
@@ -6,6 +7,7 @@ from networkx.algorithms import bipartite
 from opensfm import dataset
 from opensfm import io
 from opensfm import matching
+from opensfm.commands import superpoint
 
 logger = logging.getLogger(__name__)
 
@@ -46,13 +48,19 @@ class Command:
         colors = {}
         for im in data.images():
             p, f, c = data.load_features(im)
-            if p is not None:
-                features[im] = p[:, :2]
-                colors[im] = c
-            else:
+
+            if p is None:
                 features[im] = []
                 colors[im] = []
-                
+                continue
+
+            p_s, f_s, c_s = superpoint.load_features(im)
+            if p_s is not None:
+                p = np.concatenate((p, p_s), axis=0)
+                c = np.concatenate((c, c_s), axis=0)
+
+            features[im] = p[:, :2]
+            colors[im] = c
 
         return features, colors
 

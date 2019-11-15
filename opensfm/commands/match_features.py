@@ -10,8 +10,10 @@ from opensfm import geo
 from opensfm import io
 from opensfm import log
 from opensfm import matching
+from opensfm import features
 from opensfm.context import parallel_map
 from opensfm.align_pdr import init_pdr_predictions
+from opensfm.commands import superpoint
 
 
 logger = logging.getLogger(__name__)
@@ -452,9 +454,18 @@ def match(args):
             im1_matches[im2] = []
             continue
 
+        p1_s, f1_s, c1_s = superpoint.load_features(im1)
+        p2_s, f2_s, c2_s = superpoint.load_features(im2)
+
+        if p1_s is not None and p2_s is not None:
+            p1 = np.concatenate((p1, p1_s), axis=0)
+            f1 = np.concatenate((f1, f1_s), axis=0)
+            p2 = np.concatenate((p2, p2_s), axis=0)
+            f2 = np.concatenate((f2, f2_s), axis=0)
+
         if config['matcher_type'] == 'FLANN':
-            i1 = ctx.data.load_feature_index(im1, f1)
-            i2 = ctx.data.load_feature_index(im2, f2)
+            i1 = features.build_flann_index(f1, config)
+            i2 = features.build_flann_index(f2, config)
         else:
             i1 = None
             i2 = None
@@ -481,8 +492,8 @@ def match(args):
         logger.debug('Robust matching time : {0}s'.format(
             timer() - t_robust_matching))
 
-        logger.debug("Full matching {0} / {1}, time: {2}s".format(
-            len(rmatches), len(matches), timer() - t))
+        logger.debug("{} - {} Full matching {} / {}, time: {}s".format(
+            im1, im2, len(rmatches), len(matches), timer() - t))
     ctx.data.save_matches(im1, im1_matches)
 
 
