@@ -72,6 +72,32 @@ def debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict):
     #fig.savefig('./aligned_pdr_path.png', dpi=200)
 
 
+def debug_plot_reconstruction(reconstruction):
+    '''
+    draw an individual reconstruction
+
+    :param reconstruction:
+    :return:
+    '''
+    if not debug:
+        return
+
+    fig, ax = plt.subplots(nrows=1, ncols=1)
+
+    X = []
+    Y = []
+    for shot in reconstruction.shots.values():
+        p = shot.pose.get_origin()
+
+        X.append(p[0])
+        Y.append(p[1])
+
+        ax.text(p[0], p[1], str(_shot_id_to_int(shot.id)), fontsize=6)
+
+    plt.plot(X, Y, linestyle='-', color='green', linewidth=3)
+    plt.show()
+
+
 def debug_plot_reconstructions(reconstructions):
     """
     draw floor plan and aligned pdr shot positions on top of it
@@ -189,12 +215,17 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
     import matplotlib.image as mpimg
 
-    if len(sys.argv) > 1:
-        filename = str(sys.argv[1])
-    else:
-        filename = "reconstruction.json"
+    show_num = -1
 
-    with open(filename) as fin:
+    if len(sys.argv) > 1:
+        show_num = int(sys.argv[1])
+
+    with open('reconstruction.json') as fin:
         reconstructions = io.reconstructions_from_json(json.load(fin))
 
-    debug_plot_reconstructions(reconstructions)
+    reconstructions = sorted(reconstructions,
+                             key=lambda x: -len(x.shots))
+    if show_num == -1:
+        debug_plot_reconstructions(reconstructions)
+    else:
+        debug_plot_reconstruction(reconstructions[show_num])

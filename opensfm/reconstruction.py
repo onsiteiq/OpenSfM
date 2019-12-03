@@ -580,6 +580,7 @@ def run_absolute_pose_ransac(bs, Xs, method, threshold,
             bs, Xs, method, threshold,
             iterations=iterations,
             probabilty=probabilty)
+        #return pyopengv.absolute_pose_optimize_nonlinear(bs, Xs)
     except:
         # Older versions of pyopengv do not accept the probability argument.
         return pyopengv.absolute_pose_ransac(
@@ -854,7 +855,7 @@ def resect(data, graph, reconstruction, shot_id):
     threshold = data.config['resection_threshold']
 
     T = run_absolute_pose_ransac(
-        bs, Xs, "KNEIP", 1 - np.cos(threshold), 1000, 0.999)
+        bs, Xs, "EPNP", 1 - np.cos(threshold), 1000, 0.999)
 
     R = T[:, :3]
     t = T[:, 3]
@@ -988,8 +989,7 @@ class TrackTriangulator:
         
         return np.median( index_dists )*20.0
 
-    def triangulate(self, track, reproj_threshold, min_ray_angle_degrees,
-                    min_distance=0, max_distance=999999, max_z_diff=999999):
+    def triangulate(self, track, reproj_threshold, min_ray_angle_degrees):
         """Triangulate track and add point to reconstruction."""
         os, bs = [], []
         for shot_id in self.graph[track]:
@@ -1005,30 +1005,13 @@ class TrackTriangulator:
             thresholds = len(os) * [reproj_threshold]
             e, X = csfm.triangulate_bearings_midpoint(
                 os, bs, thresholds, np.radians(min_ray_angle_degrees))
+
             if X is not None:
-                within_range = True
-                if self.reconstruction.alignment.aligned:
-                    for shot_origin in os:
-                        v = X - np.array(shot_origin)
-                        distance = np.linalg.norm(v)
+                point = types.Point()
+                point.id = track
+                point.coordinates = X.tolist()
 
-                        if distance < min_distance or distance > max_distance:
-                            within_range = False
-                            break
-
-                        if np.fabs(v[2]) > max_z_diff:
-                            within_range = False
-                            break
-
-                if within_range:
-                    point = types.Point()
-                    point.id = track
-                    point.coordinates = X.tolist()
-
-                    self.reconstruction.add_point(point)
-                else:
-                    if track in self.reconstruction.points:
-                        del self.reconstruction.points[track]
+                self.reconstruction.add_point(point)
 
     def triangulate_dlt(self, track, reproj_threshold, min_ray_angle_degrees):
         """Triangulate track using DLT and add point to reconstruction."""
@@ -1042,6 +1025,9 @@ class TrackTriangulator:
                 bs.append(b)
 
         if len(Rts) >= 2:
+            if len(Rts) >= 3:
+                min_ray_angle_degrees /= 2.0
+
             e, X = csfm.triangulate_bearings_dlt(
                 Rts, bs, reproj_threshold, np.radians(min_ray_angle_degrees))
             if X is not None:
@@ -1082,13 +1068,9 @@ def triangulate_shot_features(graph, reconstruction, shot_id, config):
 
     triangulator = TrackTriangulator(graph, reconstruction)
 
-    max_distance = config['max_triangulation_distance']/config['reconstruction_scale_factor']
-    min_distance = config['min_triangulation_distance']/config['reconstruction_scale_factor']
-    max_z_diff = config['max_triangulation_height_diff']/config['reconstruction_scale_factor']
-
     for track in graph[shot_id]:
         if track not in reconstruction.points:
-            triangulator.triangulate(track, reproj_threshold, min_ray_angle, min_distance, max_distance, max_z_diff)
+            triangulator.triangulate_dlt(track, reproj_threshold, min_ray_angle)
 
 
 def retriangulate(graph, reconstruction, config):
@@ -1100,13 +1082,9 @@ def retriangulate(graph, reconstruction, config):
     min_ray_angle = config['triangulation_min_ray_angle']
     triangulator = TrackTriangulator(graph, reconstruction)
 
-    max_distance = config['max_triangulation_distance']/config['reconstruction_scale_factor']
-    min_distance = config['min_triangulation_distance']/config['reconstruction_scale_factor']
-    max_z_diff = config['max_triangulation_height_diff']/config['reconstruction_scale_factor']
-
     tracks, images = matching.tracks_and_images(graph)
     for track in tracks:
-        triangulator.triangulate(track, threshold, min_ray_angle, min_distance, max_distance, max_z_diff)
+        triangulator.triangulate_dlt(track, threshold, min_ray_angle)
     report['num_points_after'] = len(reconstruction.points)
     chrono.lap('retriangulate')
     report['wall_time'] = chrono.total_time()
