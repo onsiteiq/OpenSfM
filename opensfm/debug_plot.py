@@ -87,9 +87,9 @@ def debug_plot_reconstruction(reconstruction):
     if not debug:
         return
 
-    if not reconstruction.alignment.aligned:
-        flatten_reconstruction(reconstruction)
-        debug_print_origin(reconstruction, 0, 3000)
+    #if not reconstruction.alignment.aligned:
+        #flatten_reconstruction(reconstruction)
+        #debug_print_origin(reconstruction, 0, 3000)
 
     fig, ax = plt.subplots(nrows=1, ncols=1)
 

@@ -1067,7 +1067,8 @@ class TrackTriangulator:
                     if optimal_iter <= ransac_tries:
                         break
 
-        if len(best_inliers) > 1:
+        # the following line reads "if len(best_inliers) > 1:", which appears to be a bug. change to 'sum'
+        if sum(best_inliers) > 1:
             self.reconstruction.add_point(best_point)
             for i, succeed in enumerate(best_inliers):
                 if succeed:
