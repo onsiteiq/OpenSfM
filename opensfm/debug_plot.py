@@ -5,11 +5,16 @@ import glob
 import logging
 import six
 import cv2
+import numpy as np
 
 from six import iteritems
 
 from opensfm import io
+from opensfm import csfm
 from opensfm import geo
+from opensfm import multiview
+from opensfm import types
+from opensfm import transformations as tf
 
 debug = False
 
@@ -81,6 +86,10 @@ def debug_plot_reconstruction(reconstruction):
     '''
     if not debug:
         return
+
+    if not reconstruction.alignment.aligned:
+        flatten_reconstruction(reconstruction)
+        debug_print_origin(reconstruction, 0, 3000)
 
     fig, ax = plt.subplots(nrows=1, ncols=1)
 
@@ -162,6 +171,7 @@ def debug_print_origin(reconstruction, start_shot_idx, end_shot_idx):
         if id in reconstruction.shots:
             o = reconstruction.shots[id].pose.get_origin()
             logger.debug("debug_print_origin: id={}, pos={} {} {}".format(i, o[0], o[1], o[2]))
+            print(i, o[0], o[1], o[2])
 
 
 def debug_save_reconstruction(data, graph, reconstruction, curr_shot_idx, start_shot_idx, end_shot_idx):
@@ -174,6 +184,71 @@ def debug_save_reconstruction(data, graph, reconstruction, curr_shot_idx, start_
             point.color = six.next(six.itervalues(graph[k]))['feature_color']
         data.save_reconstruction(
             [reconstruction], 'reconstruction.{}.json'.format(curr_shot_idx))
+
+
+def transform_reconstruction(reconstruction, ref_shots_dict):
+    """
+    transform recon based on two reference positions
+    :param reconstruction:
+    :param ref_shots_dict:
+    :return:
+    """
+    X, Xp = [], []
+    onplane, verticals = [], []
+    for shot_id in ref_shots_dict:
+        X.append(reconstruction.shots[shot_id].pose.get_origin())
+        Xp.append(ref_shots_dict[shot_id])
+        R = reconstruction.shots[shot_id].pose.get_rotation_matrix()
+        onplane.append(R[0,:])
+        onplane.append(R[2,:])
+        verticals.append(R[1,:])
+
+    X = np.array(X)
+    Xp = np.array(Xp)
+
+    # Estimate ground plane.
+    p = multiview.fit_plane(X - X.mean(axis=0), onplane, verticals)
+    Rplane = multiview.plane_horizontalling_rotation(p)
+    X = Rplane.dot(X.T).T
+
+    # Estimate 2d similarity to align to pdr predictions
+    T = tf.affine_matrix_from_points(X.T[:2], Xp.T[:2], shear=False)
+    s = np.linalg.det(T[:2, :2]) ** 0.5
+    A = np.eye(3)
+    A[:2, :2] = T[:2, :2] / s
+    A = A.dot(Rplane)
+    b = np.array([
+        T[0, 2],
+        T[1, 2],
+        Xp[:, 2].mean() - s * X[:, 2].mean()  # vertical alignment
+    ])
+
+    # Align points.
+    for point in reconstruction.points.values():
+        p = s * A.dot(point.coordinates) + b
+        point.coordinates = p.tolist()
+
+    # Align cameras.
+    for shot in reconstruction.shots.values():
+        R = shot.pose.get_rotation_matrix()
+        t = np.array(shot.pose.translation)
+        Rp = R.dot(A.T)
+        tp = -Rp.dot(b) + s * t
+        try:
+            shot.pose.set_rotation_matrix(Rp)
+            shot.pose.translation = list(tp)
+        except:
+            logger.debug("unable to transform reconstruction!")
+
+
+def flatten_reconstruction(reconstruction):
+    shot_ids = sorted(reconstruction.shots)
+
+    ref_shots_dict = {}
+    ref_shots_dict[shot_ids[0]] = (0, 0, 0)
+    ref_shots_dict[shot_ids[-1]] = (1, 1, 0)
+
+    transform_reconstruction(reconstruction, ref_shots_dict)
 
 
 def _shot_id_to_int(shot_id):
