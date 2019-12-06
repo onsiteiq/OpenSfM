@@ -139,23 +139,18 @@ def bundle(graph, reconstruction, gcp, config):
     for shot in reconstruction.shots.values():
         r = shot.pose.rotation
         t = shot.pose.translation
-        ba.add_shot(
-            str(shot.id), str(shot.camera.id),
-            r[0], r[1], r[2],
-            t[0], t[1], t[2],
-            False
-        )
+        ba.add_shot(shot.id, shot.camera.id, r, t, False)
 
     for point in reconstruction.points.values():
-        x = point.coordinates
-        ba.add_point(str(point.id), x[0], x[1], x[2], False)
+        ba.add_point(point.id, point.coordinates, False)
 
     for shot_id in reconstruction.shots:
         if shot_id in graph:
             for track in graph[shot_id]:
                 if track in reconstruction.points:
-                    ba.add_observation(str(shot_id), str(track),
-                                       *graph[shot_id][track]['feature'])
+                    point = graph[shot_id][track]['feature']
+                    ba.add_point_projection_observation(
+                            shot_id, track, point[0], point[1], 0.004)
 
     if config['bundle_use_gps']:
         for shot in reconstruction.shots.values():
@@ -174,9 +169,9 @@ def bundle(graph, reconstruction, gcp, config):
                     observation.shot_coordinates[0],
                     observation.shot_coordinates[1])
 
-    ba.set_loss_function(config['loss_function'],
-                         config['loss_function_threshold'])
-    ba.set_reprojection_error_sd(config['reprojection_error_sd'])
+    ba.set_point_projection_loss_function(config['loss_function'], 
+            config['loss_function_threshold'])
+
     ba.set_internal_parameters_prior_sd(
         config['exif_focal_sd'],
         config['principal_point_sd'],
@@ -198,12 +193,12 @@ def bundle(graph, reconstruction, gcp, config):
 
     for shot in reconstruction.shots.values():
         s = ba.get_shot(str(shot.id))
-        shot.pose.rotation = [s.rx, s.ry, s.rz]
-        shot.pose.translation = [s.tx, s.ty, s.tz]
+        shot.pose.rotation = [s.r[0], s.r[1], s.r[2]]
+        shot.pose.translation = [s.t[0], s.t[1], s.t[2]]
 
     for point in reconstruction.points.values():
         p = ba.get_point(str(point.id))
-        point.coordinates = [p.x, p.y, p.z]
+        point.coordinates = [p.p[0], p.p[1], p.p[2]]
         point.reprojection_error = p.reprojection_error
 
     chrono.lap('teardown')
@@ -216,29 +211,26 @@ def bundle(graph, reconstruction, gcp, config):
     return report
 
 
-def bundle_single_view(graph, reconstruction, shot, data):
+def bundle_single_view(graph, reconstruction, shot_id, data):
     """Bundle adjust a single camera."""
     config = data.config
     ba = csfm.BundleAdjuster()
+    shot = reconstruction.shots[shot_id]
     camera = shot.camera
 
     _add_camera_to_bundle(ba, camera, constant=True)
 
     r = shot.pose.rotation
     t = shot.pose.translation
-    ba.add_shot(
-        str(shot.id), str(camera.id),
-        r[0], r[1], r[2],
-        t[0], t[1], t[2],
-        False
-    )
+    ba.add_shot(shot.id, camera.id, r, t, False)
 
-    for track_id in graph[shot.id]:
-        track = reconstruction.points[track_id]
-        x = track.coordinates
-        ba.add_point(str(track_id), x[0], x[1], x[2], True)
-        ba.add_observation(str(shot.id), str(track_id),
-                           *graph[shot.id][track_id]['feature'])
+    for track_id in graph[shot_id]:
+        if track_id in reconstruction.points:
+            track = reconstruction.points[track_id]
+            ba.add_point(track_id, track.coordinates, True)
+            point = graph[shot_id][track_id]['feature']
+            ba.add_point_projection_observation(
+                shot_id, track_id, point[0], point[1], 0.004)
 
     if config['bundle_use_gps']:
         g = shot.metadata.gps_position
@@ -268,9 +260,9 @@ def bundle_single_view(graph, reconstruction, shot, data):
                 #logger.debug("pdr prior for {} angular displacement {} dop={}".
                              #format(shot.id, tf.quaternion_distance(q_0, q_1), stddev2))
 
-    ba.set_loss_function(config['loss_function'],
-                         config['loss_function_threshold'])
-    ba.set_reprojection_error_sd(config['reprojection_error_sd'])
+    ba.set_point_projection_loss_function(config['loss_function'], 
+            config['loss_function_threshold'])
+
     ba.set_internal_parameters_prior_sd(
         config['exif_focal_sd'],
         config['principal_point_sd'],
@@ -288,8 +280,8 @@ def bundle_single_view(graph, reconstruction, shot, data):
     logger.debug(ba.brief_report())
 
     s = ba.get_shot(str(shot.id))
-    shot.pose.rotation = [s.rx, s.ry, s.rz]
-    shot.pose.translation = [s.tx, s.ty, s.tz]
+    shot.pose.rotation = [s.r[0], s.r[1], s.r[2]]
+    shot.pose.translation = [s.t[0], s.t[1], s.t[2]]
 
 
 def bundle_local(graph, reconstruction, gcp, central_shot_id, data):
@@ -324,24 +316,19 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, data):
         shot = reconstruction.shots[shot_id]
         r = shot.pose.rotation
         t = shot.pose.translation
-        ba.add_shot(
-            str(shot.id), str(shot.camera.id),
-            r[0], r[1], r[2],
-            t[0], t[1], t[2],
-            shot.id in boundary
-        )
+        ba.add_shot(shot.id, shot.camera.id, r, t, shot.id in boundary)
 
     for point_id in point_ids:
         point = reconstruction.points[point_id]
-        x = point.coordinates
-        ba.add_point(str(point.id), x[0], x[1], x[2], False)
+        ba.add_point(point.id, point.coordinates, False)
 
     for shot_id in interior | boundary:
         if shot_id in graph:
             for track in graph[shot_id]:
                 if track in point_ids:
-                    ba.add_observation(str(shot_id), str(track),
-                                       *graph[shot_id][track]['feature'])
+                    point = graph[shot_id][track]['feature']
+                    ba.add_point_projection_observation(
+                            shot_id, track, point[0], point[1], 0.004)
 
     if config['bundle_use_gps']:
         for shot_id in interior:
@@ -370,9 +357,8 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, data):
                     observation.shot_coordinates[0],
                     observation.shot_coordinates[1])
 
-    ba.set_loss_function(config['loss_function'],
-                         config['loss_function_threshold'])
-    ba.set_reprojection_error_sd(config['reprojection_error_sd'])
+    ba.set_point_projection_loss_function(config['loss_function'], 
+            config['loss_function_threshold'])
     ba.set_internal_parameters_prior_sd(
         config['exif_focal_sd'],
         config['principal_point_sd'],
@@ -392,13 +378,13 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, data):
     for shot_id in interior:
         shot = reconstruction.shots[shot_id]
         s = ba.get_shot(str(shot.id))
-        shot.pose.rotation = [s.rx, s.ry, s.rz]
-        shot.pose.translation = [s.tx, s.ty, s.tz]
+        shot.pose.rotation = [s.r[0], s.r[1], s.r[2]]
+        shot.pose.translation = [s.t[0], s.t[1], s.t[2]]
 
     for point in point_ids:
         point = reconstruction.points[point]
         p = ba.get_point(str(point.id))
-        point.coordinates = [p.x, p.y, p.z]
+        point.coordinates = [p.p[0], p.p[1], p.p[2]]
         point.reprojection_error = p.reprojection_error
 
     chrono.lap('teardown')
@@ -799,13 +785,13 @@ def bootstrap_reconstruction(data, graph, im1, im2, p1, p2):
         logger.info(report['decision'])
         return None, None, report
 
-    bundle_single_view(graph_inliers, reconstruction, shot2, data)
+    bundle_single_view(graph_inliers, reconstruction, im2, data)
     retriangulate(graph, graph_inliers, reconstruction, data.config)
     if len(reconstruction.points) < min_inliers:
          report['decision'] = "Re-triangulation after initial motion did not generate enough points"
          logger.info(report['decision'])
          return None, None, report
-    bundle_single_view(graph_inliers, reconstruction, shot2, data)
+    bundle_single_view(graph_inliers, reconstruction, im2, data)
 
     report['decision'] = 'Success'
     report['memory_usage'] = current_memory_usage()
@@ -899,7 +885,7 @@ def resect(data, graph, graph_inliers, reconstruction, shot_id):
         for i, succeed in enumerate(inliers):
              if succeed:
                  copy_graph_data(graph, graph_inliers, shot_id, ids[i])
-        bundle_single_view(graph_inliers, reconstruction, shot, data)
+        bundle_single_view(graph_inliers, reconstruction, shot_id, data)
         return True, report
 
         # check if rotation of this shot after bundle adjustment is close to what we are expecting
