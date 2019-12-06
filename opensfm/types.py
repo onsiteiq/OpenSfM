@@ -779,7 +779,7 @@ class Point(object):
         id (int): identification number.
         color (list(int)): list containing the RGB values.
         coordinates (list(real)): list containing the 3D position.
-        reprojection_error (real): the reprojection error.
+        reprojection_errors (dict(real)): the reprojection error per shot.
     """
 
     def __init__(self):
@@ -787,7 +787,7 @@ class Point(object):
         self.id = None
         self.color = None
         self.coordinates = None
-        self.reprojection_error = None
+        self.reprojection_errors = {}
 
 
 class GroundControlPointObservation(object):

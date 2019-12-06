@@ -199,7 +199,7 @@ def bundle(graph, reconstruction, gcp, config):
     for point in reconstruction.points.values():
         p = ba.get_point(str(point.id))
         point.coordinates = [p.p[0], p.p[1], p.p[2]]
-        point.reprojection_error = p.reprojection_error
+        point.reprojection_errors = p.reprojection_errors
 
     chrono.lap('teardown')
 
@@ -385,7 +385,7 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, data):
         point = reconstruction.points[point]
         p = ba.get_point(str(point.id))
         point.coordinates = [p.p[0], p.p[1], p.p[2]]
-        point.reprojection_error = p.reprojection_error
+        point.reprojection_errors = p.reprojection_errors
 
     chrono.lap('teardown')
 
@@ -825,9 +825,7 @@ def resect(data, graph, graph_inliers, reconstruction, shot_id):
     exif = data.load_exif(shot_id)
     camera = reconstruction.cameras[exif['camera']]
 
-    bs = []
-    Xs = []
-    ids = []
+    bs, Xs, ids = [], [], []
     for track in graph[shot_id]:
         if track in reconstruction.points:
             x = graph[track][shot_id]['feature']
@@ -1159,7 +1157,7 @@ def triangulate_shot_features(graph, graph_inliers, reconstruction, shot_id, con
 
     for track in graph[shot_id]:
         if track not in reconstruction.points:
-            triangulator.triangulate_robust(track, reproj_threshold, min_ray_angle)
+            triangulator.triangulate_dlt(track, reproj_threshold, min_ray_angle)
 
 
 def retriangulate(graph, graph_inliers, reconstruction, config):
@@ -1177,26 +1175,56 @@ def retriangulate(graph, graph_inliers, reconstruction, config):
 
     tracks, images = matching.tracks_and_images(graph)
     for track in tracks:
-        triangulator.triangulate_robust(track, threshold, min_ray_angle)
+        if config['triangulation_type'] == 'ROBUST':
+            triangulator.triangulate_robust(track, threshold, min_ray_angle)
+        elif config['triangulation_type'] == 'FULL':
+            triangulator.triangulate(track, threshold, min_ray_angle)
     report['num_points_after'] = len(reconstruction.points)
     chrono.lap('retriangulate')
     report['wall_time'] = chrono.total_time()
     return report
 
 
+def get_error_distribution(points):
+    all_errors = []
+    for track in points.values():
+        all_errors += track.reprojection_errors.values()
+    robust_mean = np.median(all_errors, axis=0)
+    robust_std = 1.486*np.median(np.linalg.norm(all_errors-robust_mean, axis=1))
+    return robust_mean, robust_std
+
+
+def get_actual_threshold(config, points):
+    filter_type = config['bundle_outlier_filtering_type']
+    if filter_type == 'FIXED':
+        return config['bundle_outlier_fixed_threshold']
+    elif filter_type == 'AUTO':
+        mean, std = get_error_distribution(points)
+        return config['bundle_outlier_auto_ratio']*np.linalg.norm(mean+std)
+    else:
+        return 1.0
+
+
 def remove_outliers(graph, reconstruction, config):
     """Remove points with large reprojection error."""
-    threshold = config['bundle_outlier_threshold']
-    if threshold > 0:
-        outliers = []
-        for track in reconstruction.points:
-            error = reconstruction.points[track].reprojection_error
-            if error and error > threshold:
-                outliers.append(track)
-        for track in outliers:
-            graph.remove_node(track)
+    threshold = get_actual_threshold(config, reconstruction.points)
+    outliers = []
+    for track in reconstruction.points:
+        for shot_id, error in reconstruction.points[track].reprojection_errors.items():
+            if np.linalg.norm(error) > threshold:
+                outliers.append((track, shot_id))
+
+    for track, shot_id in outliers:
+        del reconstruction.points[track].reprojection_errors[shot_id]
+        graph.remove_edge(track, shot_id)
+    for track, _ in outliers:
+        if track not in reconstruction.points:
+            continue
+        if len(graph[track]) < 2:
             del reconstruction.points[track]
-        logger.info("Removed outliers: {}".format(len(outliers)))
+            graph.remove_node(track)
+    logger.info("Removed outliers: {}".format(len(outliers)))
+    return len(outliers)
 
 
 def shot_lla_and_compass(shot, reference):
@@ -1571,6 +1599,29 @@ def direct_align_reconstruction( data ):
     return report
 
 
+def _length_histogram(points, graph):
+     hist = defaultdict(int)
+     for p in points:
+         hist[len(graph[p])] += 1
+     return np.array(list(hist.keys())), np.array(list(hist.values()))
+
+
+def compute_statistics(reconstruction, graph):
+     stats = {}
+     stats['points_count'] = len(reconstruction.points)
+     stats['cameras_count'] = len(reconstruction.shots)
+
+     hist, values = _length_histogram(reconstruction.points, graph)
+     stats['observations_count'] = int(sum(hist * values))
+     stats['average_track_length'] = float(stats['observations_count'])/len(reconstruction.points)
+     tracks_notwo = sum([1 if len(graph[p]) > 2 else 0 for p in reconstruction.points])
+     if tracks_notwo > 0:
+         stats['average_track_length_notwo'] = float(sum(hist[1:]*values[1:]))/tracks_notwo
+     else:
+         stats['average_track_length_notwo'] = -1
+     return stats
+
+
 def incremental_reconstruction(data):
     """Run the entire incremental reconstruction pipeline."""
     logger.info("Starting incremental reconstruction")
@@ -1641,6 +1692,8 @@ def incremental_reconstruction(data):
                     reconstructions.append(reconstruction)
                     reconstructions = sorted(reconstructions,
                                              key=lambda x: -len(x.shots))
+                    rec_report['stats'] = compute_statistics(reconstruction, graph_inliers)
+                    logger.info(rec_report['stats'])
                     data.save_reconstruction(reconstructions)
 
     for k, r in enumerate(reconstructions):
@@ -1775,9 +1828,8 @@ def incremental_reconstruction_sequential(data):
                 reconstruction, rec_report['grow'] = grow_reconstruction_sequential(
                     data, graph, graph_inliers, reconstruction, remaining_images, gcp)
                 reconstructions.append(reconstruction)
-
-                #debug_rotation_prior(reconstruction, data)
-
+                rec_report['stats'] = compute_statistics(reconstruction, graph_inliers)
+                logger.info(rec_report['stats'])
                 curr_idx = 0
             else:
                 # bootstrap didn't work, try the next pair
