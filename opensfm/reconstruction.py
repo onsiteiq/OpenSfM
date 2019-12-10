@@ -1433,10 +1433,15 @@ def grow_reconstruction_sequential(data, graph, graph_inliers, reconstruction, i
 
             if should_retriangulate.should():
                 logger.info("Re-triangulating")
-                b1rep = bundle(graph_inliers, reconstruction, None, config)
-                rrep = retriangulate(graph, graph_inliers, reconstruction, config)
-                b2rep = bundle(graph_inliers, reconstruction, None, config)
-                remove_outliers(graph_inliers, reconstruction, config)
+                for iteration in range(3):
+                    logger.info("grow_reconstruction_sequential: iteration refinement #{}".format(iteration))
+                    b1rep = bundle(graph_inliers, reconstruction, None, config)
+                    rrep = retriangulate(graph, graph_inliers, reconstruction, config)
+                    b2rep = bundle(graph_inliers, reconstruction, None, config)
+                    remove_outliers(graph_inliers, reconstruction, config)
+                    if 'Termination: CONVERGENCE' in b2rep['brief_report']:
+                        logger.info("grow_reconstruction_sequential: iteration refinement done")
+                        break
                 align_reconstruction(reconstruction, gcp, config)
                 step['bundle'] = b1rep
                 step['retriangulation'] = rrep
