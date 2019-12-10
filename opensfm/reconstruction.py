@@ -337,15 +337,6 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, data):
             ba.add_position_prior(str(shot.id), g[0], g[1], g[2],
                                   shot.metadata.gps_dop)
 
-    #if config['bundle_use_pdr']:
-        #for shot_id in interior | boundary:
-            #if reconstruction.shots[shot_id].metadata.gps_dop == 999999.0:
-                #p, stddev1 = update_pdr_prediction_position(shot_id, reconstruction, data)
-                #ba.add_position_prior(shot_id, p[0], p[1], p[2], stddev1)
-
-                #r, stddev2 = update_pdr_prediction_rotation(shot_id, reconstruction, data)
-                #ba.add_rotation_prior(shot_id, r[0], r[1], r[2], stddev2)
-
     if config['bundle_use_gcp'] and gcp:
         for observation in gcp:
             if observation.shot_id in interior:
@@ -398,7 +389,7 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, data):
         'num_other_images': (len(reconstruction.shots)
                              - len(interior) - len(boundary)),
     }
-    return report
+    return point_ids, report
 
 
 def shot_neighborhood(graph, reconstruction, central_shot_id, radius,
@@ -1238,14 +1229,18 @@ def get_actual_threshold(config, points):
         return 1.0
 
 
-def remove_outliers(graph, reconstruction, config):
-    """Remove points with large reprojection error."""
+def remove_outliers(graph, reconstruction, config, points=None):
+    """Remove points with large reprojection error.
+    A list of point ids to be processed can be given in ``points``.
+    """
+    if points is None:
+         points = reconstruction.points
     threshold = get_actual_threshold(config, reconstruction.points)
     outliers = []
-    for track in reconstruction.points:
-        for shot_id, error in reconstruction.points[track].reprojection_errors.items():
+    for point_id in points:
+        for shot_id, error in reconstruction.points[point_id].reprojection_errors.items():
             if np.linalg.norm(error) > threshold:
-                outliers.append((track, shot_id))
+                outliers.append((point_id, shot_id))
 
     for track, shot_id in outliers:
         del reconstruction.points[track].reprojection_errors[shot_id]
@@ -1456,8 +1451,9 @@ def grow_reconstruction_sequential(data, graph, graph_inliers, reconstruction, i
                 step['bundle'] = brep
                 should_bundle.done()
             elif config['local_bundle_radius'] > 0:
-                brep = bundle_local(graph_inliers, reconstruction, None, image, data)
-                remove_outliers(graph_inliers, reconstruction, config)
+                bundled_points, brep = bundle_local(
+                    graph_inliers, reconstruction, None, image, data)
+                remove_outliers(graph_inliers, reconstruction, config, bundled_points)
                 step['local_bundle'] = brep
 
             if not reconstruction.alignment.scaled:
@@ -1554,8 +1550,9 @@ def grow_reconstruction(data, graph, graph_inliers, reconstruction, images, gcp)
                 step['bundle'] = brep
                 should_bundle.done()
             elif config['local_bundle_radius'] > 0:
-                brep = bundle_local(graph_inliers, reconstruction, None, image, data)
-                remove_outliers(graph_inliers, reconstruction, config)
+                bundled_points, brep = bundle_local(
+                    graph_inliers, reconstruction, None, image, data)
+                remove_outliers(graph_inliers, reconstruction, config, bundled_points)
                 step['local_bundle'] = brep
 
             break
