@@ -193,17 +193,6 @@ def get_sab_3d(reconstruction, filtered_shots, gcp, config):
     s = np.linalg.det(A)**(1. / 3)
     A /= s
 
-    # we use pdr input to guide the reconstruction (see align_reconstruction_to_pdr), so s should
-    # be ideally close to 1; x/y rotation should be close to 0. if x/y rotation is instead close
-    # to +/- 180 degrees, it's 'flipped' which could happen when the 3 points are close a degenerate
-    # configuration. if it is otherwise significant, say above +/- 10 degrees, it's likely the gps
-    # points are not accurate. so we check for these and revert to 2-point method for alignment
-    # (orientation prior) if necessary
-    [x, y, z] = _rotation_matrix_to_euler_angles(A)
-    if math.fabs(x) > 10.0 or math.fabs(y) > 10.0:
-        logger.debug('Similarity alignment result s={}, rot xyz={} {} {} looks suspicious. Discard'.format(s, x, y, z))
-        return
-
     return s, A, b
 
 
@@ -284,9 +273,6 @@ def get_sab_2d(filtered_shots, config):
         T[1, 2],
         Xp[:, 2].mean() - s * X[:, 2].mean()  # vertical alignment
     ])
-
-    if s > 1.1 or s < 0.9:
-        logger.debug('Orientation alignment result looks suspicious')
 
     return s, A, b
 
@@ -400,27 +386,6 @@ def get_filtered_shots(gps_shots, config):
             break
 
     return gps_shots
-
-
-def _rotation_matrix_to_euler_angles(R):
-    """
-    # The result is the same as MATLAB except the order
-    # of the euler angles ( x and z are swapped ).
-    """
-    sy = math.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0])
-
-    singular = sy < 1e-6
-
-    if not singular:
-        x = math.atan2(R[2, 1], R[2, 2])
-        y = math.atan2(-R[2, 0], sy)
-        z = math.atan2(R[1, 0], R[0, 0])
-    else:
-        x = math.atan2(-R[1, 2], R[1, 1])
-        y = math.atan2(-R[2, 0], sy)
-        z = 0
-
-    return np.array(np.degrees([x, y, z]))
 
 
 def _shot_id_to_int(shot_id):

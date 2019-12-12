@@ -44,6 +44,11 @@ setup(
     packages=['opensfm', 'opensfm.commands', 'opensfm.large'],
     scripts=['bin/opensfm_run_all', 'bin/opensfm'],
     package_data={
-        'opensfm': ['csfm.*', 'data/sensor_data.json', 'data/superpoint.pth']
+        'opensfm': [
+            'csfm.*',
+            'data/sensor_data.json',
+            'data/bow/bow_hahog_root_uchar.npz',
+            'data/superpoint.pth'
+        ]
     },
 )

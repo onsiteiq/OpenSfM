@@ -1181,7 +1181,7 @@ def triangulate_shot_features(graph, graph_inliers, reconstruction, shot_id, con
 
     for track in graph[shot_id]:
         if track not in reconstruction.points:
-            triangulator.triangulate_dlt(track, reproj_threshold, min_ray_angle)
+            triangulator.triangulate(track, reproj_threshold, min_ray_angle)
 
 
 def retriangulate(graph, graph_inliers, reconstruction, config):

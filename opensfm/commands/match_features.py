@@ -1,18 +1,14 @@
 import logging
-from itertools import combinations
 from timeit import default_timer as timer
 
 import numpy as np
-import scipy.spatial as spatial
 
 from opensfm import dataset
-from opensfm import geo
 from opensfm import io
 from opensfm import log
 from opensfm import matching
-from opensfm import features
+from opensfm import pairs_selection
 from opensfm.context import parallel_map
-from opensfm.align_pdr import init_pdr_predictions
 from opensfm.commands import superpoint
 
 
@@ -51,7 +47,7 @@ class Command:
         if 'pairs' in preport and use_report_pairs:
             pairs = preport['pairs']
         else:
-            pairs, preport = match_candidates_from_metadata(images, exifs, data)
+            pairs, preport = pairs_selection.match_candidates_from_metadata(images, exifs, data)
             
             # Append a field for indicating processing status (processed or not processed)
             for img in pairs:
@@ -65,8 +61,7 @@ class Command:
         ctx.data = data
         ctx.cameras = ctx.data.load_camera_models()
         ctx.exifs = exifs
-        ctx.p_pre, ctx.f_pre = load_preemptive_features(data)
-        
+
         # Group processing inputs into 150 images at a time.
         
         pairs_groups = [ {} ]
@@ -122,31 +117,25 @@ class Command:
         
         g_match = proc_params['general_matching'] = {}
         
-        g_match['lowes_ratio'] = data.config['lowes_ratio']
-        g_match['preemptive_lowes_ratio'] = data.config['preemptive_lowes_ratio']
         g_match['matcher_type'] = data.config['matcher_type']
-        
+        g_match['matching_gps_distance'] = data.config['matching_gps_distance']
+        g_match['matching_gps_neighbors'] = data.config['matching_gps_neighbors']
+        g_match['matching_time_neighbors'] = data.config['matching_time_neighbors']
+        g_match['matching_order_neighbors'] = data.config['matching_order_neighbors']
+        g_match['matching_pdr_distance'] = data.config['matching_pdr_distance']
+        g_match['robust_matching_threshold'] = data.config['robust_matching_threshold']
+        g_match['robust_matching_calib_threshold'] = data.config['robust_matching_calib_threshold']
+
         flann = proc_params['flann'] = {}
         
         flann['flann_branching'] = data.config['flann_branching']
         flann['flann_iterations'] = data.config['flann_iterations']
         flann['flann_checks'] = data.config['flann_checks']
-        
-        preemptive_match = proc_params['preemptive_matching'] = {}
-        
-        preemptive_match['matching_gps_distance'] = data.config['matching_gps_distance']
-        preemptive_match['matching_gps_neighbors'] = data.config['matching_gps_neighbors']
-        preemptive_match['matching_time_neighbors'] = data.config['matching_time_neighbors']
-        preemptive_match['matching_order_neighbors'] = data.config['matching_order_neighbors']
-        preemptive_match['matching_pdr_distance'] = data.config['matching_pdr_distance']
-        preemptive_match['preemptive_max'] = data.config['preemptive_max']
-        preemptive_match['preemptive_threshold'] = data.config['preemptive_threshold']
-        
-        geom_est = proc_params['geometric_estimation'] = {}
-        
-        geom_est['robust_matching_threshold'] = data.config['robust_matching_threshold']
-        geom_est['robust_matching_calib_threshold'] = data.config['robust_matching_calib_threshold']
-        
+
+        bow = proc_params['bow'] = {}
+
+        bow['bow_num_checks'] = data.config['bow_num_checks']
+
         report = {
             "wall_time": wall_time,
             "num_pairs": len(pair_list),
@@ -165,195 +154,21 @@ def matching_config_unchanged( config, match_params ):
 
     g_match = match_params['general_matching']
     flann = match_params['flann']
-    preemptive_match = match_params['preemptive_matching']
-    geom_est = match_params['geometric_estimation']
+    bow = match_params['bow']
     
-    return ( g_match['lowes_ratio'] == config['lowes_ratio'] and
-           g_match['preemptive_lowes_ratio'] == config['preemptive_lowes_ratio'] and
+    return (
            g_match['matcher_type'] == config['matcher_type'] and
+           g_match['matching_gps_distance'] == config['matching_gps_distance']  and
+           g_match['matching_gps_neighbors'] == config['matching_gps_neighbors']  and
+           g_match['matching_time_neighbors'] == config['matching_time_neighbors']  and
+           g_match['matching_order_neighbors'] == config['matching_order_neighbors']  and
+           g_match['matching_pdr_distance'] == config['matching_pdr_distance']  and
+           g_match['robust_matching_threshold'] == config['robust_matching_threshold']  and
+           g_match['robust_matching_calib_threshold'] == config['robust_matching_calib_threshold']  and
            flann['flann_branching'] == config['flann_branching']  and
            flann['flann_iterations'] == config['flann_iterations']  and
            flann['flann_checks'] == config['flann_checks']  and
-           preemptive_match['matching_gps_distance'] == config['matching_gps_distance']  and
-           preemptive_match['matching_gps_neighbors'] == config['matching_gps_neighbors']  and
-           preemptive_match['matching_time_neighbors'] == config['matching_time_neighbors']  and
-           preemptive_match['matching_order_neighbors'] == config['matching_order_neighbors']  and
-           preemptive_match['matching_pdr_distance'] == config['matching_pdr_distance']  and
-           preemptive_match['preemptive_max'] == config['preemptive_max']  and
-           preemptive_match['preemptive_threshold'] == config['preemptive_threshold']  and
-           geom_est['robust_matching_threshold'] == config['robust_matching_threshold']  and
-           geom_est['robust_matching_calib_threshold'] == config['robust_matching_calib_threshold'] )
-
-
-def load_preemptive_features(data):
-    p, f = {}, {}
-    if data.config['preemptive_threshold'] > 0:
-        logger.debug('Loading preemptive data')
-        for image in data.images():
-            try:
-                p[image], f[image] = \
-                    data.load_preemtive_features(image)
-            except IOError:
-                p, f, c = data.load_features(image)
-                p[image], f[image] = p, f
-            preemptive_max = min(data.config['preemptive_max'],
-                                 p[image].shape[0])
-            p[image] = p[image][:preemptive_max, :]
-            f[image] = f[image][:preemptive_max, :]
-    return p, f
-
-
-def has_gps_info(exif):
-    return (exif and
-            'gps' in exif and
-            'latitude' in exif['gps'] and
-            'longitude' in exif['gps'])
-
-
-def match_candidates_by_distance(images, exifs, reference, max_neighbors, max_distance):
-    """Find candidate matching pairs by GPS distance."""
-    if max_neighbors <= 0 and max_distance <= 0:
-        return set()
-    max_neighbors = max_neighbors or 99999999
-    max_distance = max_distance or 99999999.
-    k = min(len(images), max_neighbors + 1)
-
-    points = np.zeros((len(images), 3))
-    for i, image in enumerate(images):
-        gps = exifs[image]['gps']
-        alt = gps.get('altitude', 2.0)
-        points[i] = geo.topocentric_from_lla(
-            gps['latitude'], gps['longitude'], alt,
-            reference['latitude'], reference['longitude'], reference['altitude'])
-
-    tree = spatial.cKDTree(points)
-
-    pairs = set()
-    for i, image in enumerate(images):
-        distances, neighbors = tree.query(
-            points[i], k=k, distance_upper_bound=max_distance)
-        for j in neighbors:
-            if i != j and j < len(images):
-                pairs.add(tuple(sorted((images[i], images[j]))))
-    return pairs
-
-
-def match_candidates_by_time(images, exifs, max_neighbors):
-    """Find candidate matching pairs by time difference."""
-    if max_neighbors <= 0:
-        return set()
-    k = min(len(images), max_neighbors + 1)
-
-    times = np.zeros((len(images), 1))
-    for i, image in enumerate(images):
-        times[i] = exifs[image]['capture_time']
-
-    tree = spatial.cKDTree(times)
-
-    pairs = set()
-    for i, image in enumerate(images):
-        distances, neighbors = tree.query(times[i], k=k)
-        for j in neighbors:
-            if i != j and j < len(images):
-                pairs.add(tuple(sorted((images[i], images[j]))))
-    return pairs
-
-
-def match_candidates_by_order(images, max_neighbors, data):
-    """Find candidate matching pairs by sequence order."""
-
-    if max_neighbors <= 0:
-        return set()
-    
-    gps_points_dict = {}
-    if data.gps_points_exist():
-        gps_points_dict = data.load_gps_points()
-
-    n = (max_neighbors + 1) // 2
-
-    len_images = len(images)
-
-    if n > len_images:
-        n = len_images
-
-    pairs = set()
-    for i, image in enumerate(images):
-
-        a = i - n
-        b = i + n + 1
-        
-        if not data.config['matching_order_loop']:        
-            a = max(0, a)
-            b = min(len_images, b)
-        
-        ith_pairs = []
-        highestLHIndex = 0
-        lowestUHIndex = 100000
-        ipind = 0
-
-        for j in range(a, b):
-            if i != j:
-                if j >= len_images:
-                    j -= len_images
-                
-                if gps_points_dict:
-                    
-                    llaf = gps_points_dict.get( images[j] )
-                    gps_exists = llaf is not None
-                    
-                    if gps_exists:
-                        if j < i and llaf[3]:
-                            if ipind > highestLHIndex:
-                                highestLHIndex = ipind
-                        if j > i and llaf[3]:
-                            if ipind < lowestUHIndex:
-                                lowestUHIndex = ipind
-
-                ith_pairs.append( tuple( sorted( (images[i], images[j]) ) ) )
-                ipind = ipind + 1
-        
-        # Make the feature fences leaky +/- 5 images otherwise the reconstruction can become inaccurate.
-        
-        highestLHIndex -= 0
-        lowestUHIndex += 0
-        
-        if lowestUHIndex > len(ith_pairs)-1:
-            lowestUHIndex = len(ith_pairs)-1
-            
-        if highestLHIndex < 0:
-            highestLHIndex = 0
-        
-        for ip in ith_pairs[ highestLHIndex : lowestUHIndex + 1 ]:
-            pairs.add( ip )
-                
-    return pairs
-
-
-def match_candidates_by_pdr(images, pdr_max_distance, data):
-    """Find candidate matching pairs by glocally aligned pdr input."""
-    if pdr_max_distance <= 0:
-        return set()
-
-    if data.pdr_shots_exist():
-        scale_factor = data.config['reconstruction_scale_factor']
-        max_distance_pixels = pdr_max_distance / scale_factor
-
-        # load pdr data and globally align with gps points
-        pdr_predictions_dict = init_pdr_predictions(data)
-
-        pairs = set()
-        for (i, j) in combinations(images, 2):
-            if i in pdr_predictions_dict and j in pdr_predictions_dict:
-                pos_i = pdr_predictions_dict[i][:3]
-                pos_j = pdr_predictions_dict[j][:3]
-                distance = np.linalg.norm(np.array(pos_i) - np.array(pos_j))
-
-                if distance < max_distance_pixels:
-                    pairs.add(tuple(sorted((i, j))))
-
-        return pairs
-    else:
-        return set()
+           bow['bow_num_checks'] == bow['bow_num_checks'] )
 
 
 def match_candidates_from_metadata(images, exifs, data):
@@ -421,30 +236,12 @@ def match(args):
     logger.info('Matching {}  -  {} / {}'.format(im1, i + 1, n))
 
     config = ctx.data.config
-    preemptive_threshold = config['preemptive_threshold']
-    lowes_ratio = config['lowes_ratio']
-    preemptive_lowes_ratio = config['preemptive_lowes_ratio']
+    matcher_type = config['matcher_type']
+    robust_matching_min_match = config['robust_matching_min_match']
 
     im1_matches = {}
 
     for im2 in candidates:
-        min_match_threshold = _get_min_match_threshold(im1, im2, config)
-
-        # preemptive matching
-        if preemptive_threshold > 0:
-            t = timer()
-            config['lowes_ratio'] = preemptive_lowes_ratio
-            matches_pre = matching.match_lowe_bf(
-                ctx.f_pre[im1], ctx.f_pre[im2], config)
-            config['lowes_ratio'] = lowes_ratio
-            logger.debug("Preemptive matching {0}, time: {1}s".format(
-                len(matches_pre), timer() - t))
-            if len(matches_pre) < preemptive_threshold:
-                logger.debug(
-                    "Discarding based of preemptive matches {0} < {1}".format(
-                        len(matches_pre), preemptive_threshold))
-                continue
-
         # symmetric matching
         t = timer()
         p1, f1, c1 = ctx.data.load_features(im1)
@@ -463,17 +260,22 @@ def match(args):
             p2 = np.concatenate((p2, p2_s), axis=0)
             f2 = np.concatenate((f2, f2_s), axis=0)
 
-        if config['matcher_type'] == 'FLANN':
-            i1 = features.build_flann_index(f1, config)
-            i2 = features.build_flann_index(f2, config)
+        if matcher_type == 'WORDS':
+            w1 = ctx.data.load_words(im1)
+            w2 = ctx.data.load_words(im2)
+            matches = matching.match_words_symmetric(f1, w1, f2, w2, config)
+        elif matcher_type == 'FLANN':
+            i1 = ctx.data.load_feature_index(im1, f1)
+            i2 = ctx.data.load_feature_index(im2, f2)
+            matches = matching.match_flann_symmetric(f1, i1, f2, i2, config)
+        elif matcher_type == 'BRUTEFORCE':
+            matches = matching.match_brute_force_symmetric(f1, f2, config)
         else:
-            i1 = None
-            i2 = None
+            raise ValueError("Invalid matcher_type: {}".format(matcher_type))
 
-        matches = matching.match_symmetric(f1, i1, f2, i2, config)
         logger.debug('{} - {} has {} candidate matches'.format(
             im1, im2, len(matches)))
-        if len(matches) < min_match_threshold:
+        if len(matches) < robust_matching_min_match:
             im1_matches[im2] = []
             continue
 
@@ -485,7 +287,7 @@ def match(args):
         rmatches = matching.robust_match(p1, p2, camera1, camera2, matches,
                                          config)
 
-        if len(rmatches) < min_match_threshold:
+        if len(rmatches) < robust_matching_min_match:
             im1_matches[im2] = []
             continue
         im1_matches[im2] = rmatches
@@ -495,19 +297,3 @@ def match(args):
         logger.debug("{} - {} Full matching {} / {}, time: {}s".format(
             im1, im2, len(rmatches), len(matches), timer() - t))
     ctx.data.save_matches(im1, im1_matches)
-
-
-def _get_min_match_threshold(im1, im2, config):
-    if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) < 5:
-        return config['robust_matching_min_match']
-    else:
-        return config['robust_matching_min_match_large']
-
-
-def _shot_id_to_int(shot_id):
-    """
-    Returns: shot id to integer
-    """
-    tokens = shot_id.split(".")
-    return int(tokens[0])
-

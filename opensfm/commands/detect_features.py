@@ -135,170 +135,182 @@ def detect(args):
     log.setup()
 
     image, data = args
+
+    need_words = data.config['matcher_type'] == 'WORDS' or data.config['matching_bow_neighbors'] > 0
+    has_words = not need_words or data.words_exist(image)
+    has_features = data.feature_index_exists(image)
+
+    if has_features and has_words:
+        logger.info('Skip recomputing {} features for image {}'.format(
+            data.feature_type().upper(), image))
+        return
+
     logger.info('Extracting {} features for image {}'.format(
         data.feature_type().upper(), image))
 
-    if not data.feature_index_exists(image):
-        start = timer()
+    start = timer()
 
-        exif = data.load_exif( image )
-        camera_models = data.load_camera_models()
-        image_camera_model = camera_models[ exif[ 'camera' ] ]
+    exif = data.load_exif( image )
+    camera_models = data.load_camera_models()
+    image_camera_model = camera_models[ exif[ 'camera' ] ]
 
-        if image_camera_model.projection_type in ['equirectangular', 'spherical'] and data.config['matching_unfolded_cube']:
+    if image_camera_model.projection_type in ['equirectangular', 'spherical'] and data.config['matching_unfolded_cube']:
             
-            logger.info('Features unfolded cube.')
+        logger.info('Features unfolded cube.')
 
-            # For spherical cameras create an undistorted image for the purposes of
-            # feature finding (and later matching).
+        # For spherical cameras create an undistorted image for the purposes of
+        # feature finding (and later matching).
             
-            max_size = data.config.get('feature_process_size', -1)
-            if max_size == -1:
-                max_size = img.shape[1]
+        max_size = data.config.get('feature_process_size', -1)
+        if max_size == -1:
+            max_size = img.shape[1]
             
-            img = data.load_image( image )
+        img = data.load_image( image )
             
-            undist_tile_size = max_size//4
+        undist_tile_size = max_size//4
             
-            undist_img = np.zeros( (max_size//2, max_size, 3 ), np.uint8 )
-            undist_mask = np.full( (max_size//2, max_size, 1 ), 255, np.uint8 )
-            
-            undist_mask[ undist_tile_size:2*undist_tile_size, 2*undist_tile_size:3*undist_tile_size ] = 0
-            undist_mask[ undist_tile_size:2*undist_tile_size, undist_tile_size:2*undist_tile_size ] = 0
-            
-            # The bottom mask to remove the influence of the camera person should be configurable. It depends on the forward
-            # direction of the camera and where the camera person positions themselves in relation to this direction. It'save_feature_index
-            # probably worth it to take care with this because the floor could help hold the reconstructions together.
-            #undist_mask[ 5*undist_tile_size//4:7*undist_tile_size//4, undist_tile_size//3:undist_tile_size ] = 0
-            #undist_mask[ 3*undist_tile_size//2:2*undist_tile_size, undist_tile_size//2:undist_tile_size ] = 0
-            
-            spherical_shot = types.Shot()
-            spherical_shot.pose = types.Pose()
-            spherical_shot.id = image
-            spherical_shot.camera = image_camera_model
-            
-            perspective_shots = undistort.perspective_views_of_a_panorama( spherical_shot, undist_tile_size )
-            
-            for subshot in perspective_shots:
-                
-                undistorted = undistort.render_perspective_view_of_a_panorama( img, spherical_shot, subshot )
-                
-                subshot_id_prefix = '{}_perspective_view_'.format( spherical_shot.id )
-                
-                subshot_name = subshot.id[ len(subshot_id_prefix): ] if subshot.id.startswith( subshot_id_prefix ) else subshot.id
-                ( subshot_name, ext ) = os.path.splitext( subshot_name )
-                
-                if subshot_name == 'front':
-                    undist_img[ :undist_tile_size, :undist_tile_size ] = undistorted
-                    #print( 'front')
-                elif subshot_name == 'left':
-                    undist_img[ :undist_tile_size, undist_tile_size:2*undist_tile_size ] = undistorted
-                    #print( 'left')
-                elif subshot_name == 'back':
-                    undist_img[ :undist_tile_size, 2*undist_tile_size:3*undist_tile_size ] = undistorted
-                    #print( 'back')
-                elif subshot_name == 'right':
-                    undist_img[ :undist_tile_size, 3*undist_tile_size:4*undist_tile_size ] = undistorted
-                    #print( 'right')
-                elif subshot_name == 'top':
-                    undist_img[ undist_tile_size:2*undist_tile_size, 3*undist_tile_size:4*undist_tile_size ] = undistorted
-                    #print( 'top')
-                elif subshot_name == 'bottom':
-                    undist_img[ undist_tile_size:2*undist_tile_size, :undist_tile_size ] = undistorted
-                    #print( 'bottom')
-                
-                #data.save_undistorted_image(subshot.id, undistorted)
-                
-            #data.save_undistorted_image(subshot.id, undist_img)
+        undist_img = np.zeros( (max_size//2, max_size, 3 ), np.uint8 )
+        undist_mask = np.full( (max_size//2, max_size, 1 ), 255, np.uint8 )
 
-            # We might consider combining a user supplied mask here as well
-            
-            p_unsorted, f_unsorted, c_unsorted = features.extract_features( undist_img, data.config, undist_mask )
-            
-            # Visualize the features on the unfolded cube
-            # --------------------------------------------------------------
-            
-            if False:
+        undist_mask[ undist_tile_size:2*undist_tile_size, 2*undist_tile_size:3*undist_tile_size ] = 0
+        undist_mask[ undist_tile_size:2*undist_tile_size, undist_tile_size:2*undist_tile_size ] = 0
 
-                h_ud, w_ud, _ = undist_img.shape
-                denorm_ud = denormalized_image_coordinates( p_unsorted[:, :2], w_ud, h_ud )
-                
-                print( p_unsorted.shape )
-                print( denorm_ud.shape )
+        # The bottom mask to remove the influence of the camera person should be configurable. It depends on the forward
+        # direction of the camera and where the camera person positions themselves in relation to this direction. It'save_feature_index
+        # probably worth it to take care with this because the floor could help hold the reconstructions together.
+        #undist_mask[ 5*undist_tile_size//4:7*undist_tile_size//4, undist_tile_size//3:undist_tile_size ] = 0
+        #undist_mask[ 3*undist_tile_size//2:2*undist_tile_size, undist_tile_size//2:undist_tile_size ] = 0
 
-                rcolors = []
-                
-                for point in denorm_ud:
-                    color = np.random.randint(0,255,(3)).tolist()
-                    cv2.circle( undist_img, (int(point[0]),int(point[1])), 1, color, -1 )
-                    rcolors.append( color )
-                
-                data.save_undistorted_image( image + '_unfolded_cube.jpg', undist_img)
+        spherical_shot = types.Shot()
+        spherical_shot.pose = types.Pose()
+        spherical_shot.id = image
+        spherical_shot.camera = image_camera_model
 
-            # --------------------------------------------------------------
-            
-            if len(p_unsorted) > 0:
-            
-                # Mask pixels that are out of valid image bounds before converting to equirectangular image coordinates
+        perspective_shots = undistort.perspective_views_of_a_panorama( spherical_shot, undist_tile_size )
 
-                bearings = image_camera_model.unfolded_pixel_bearings( p_unsorted[:, :2] )
+        for subshot in perspective_shots:
 
-                p_mask = np.array([ point is not None for point in bearings ])
-                
-                p_unsorted = p_unsorted[ p_mask ]
-                f_unsorted = f_unsorted[ p_mask ]
-                c_unsorted = c_unsorted[ p_mask ]
-                
-                p_unsorted[:, :2] = unfolded_cube_to_equi_normalized_image_coordinates( p_unsorted[:, :2], image_camera_model )
-            
-            # Visualize the same features converted back to equirectangular image coordinates
-            # -----------------------------------------------------------------------------------------
-            
-            if False:
+            undistorted = undistort.render_perspective_view_of_a_panorama( img, spherical_shot, subshot )
 
-                timg = resized_image( img, data.config )
-                
-                h, w, _ = timg.shape
-                
-                denorm = denormalized_image_coordinates( p_unsorted[:, :2], w, h )
-                
-                for ind, point in enumerate( denorm ):
-                    cv2.circle( timg, (int(point[0]),int(point[1])), 1, rcolors[ind], -1 )
-                
-                data.save_undistorted_image('original.jpg', timg)
+            subshot_id_prefix = '{}_perspective_view_'.format( spherical_shot.id )
 
-            #------------------------------------------------------------------------------------------
-        else:
-            mask = data.load_combined_mask(image)
-            if mask is not None:
-                logger.info('Found mask to apply for image {}'.format(image))
-            
-            p_unsorted, f_unsorted, c_unsorted = features.extract_features(
-                data.load_image(image), data.config, mask)
-        
-        if len(p_unsorted) == 0:
-            return
+            subshot_name = subshot.id[ len(subshot_id_prefix): ] if subshot.id.startswith( subshot_id_prefix ) else subshot.id
+            ( subshot_name, ext ) = os.path.splitext( subshot_name )
 
-        preemptive_max = data.config['preemptive_max']
-        size = p_unsorted[:, 2]
-        order = np.argsort(size)
-        p_sorted = p_unsorted[order, :]
-        f_sorted = f_unsorted[order, :]
-        c_sorted = c_unsorted[order, :]
-        p_pre = p_sorted[-preemptive_max:]
-        f_pre = f_sorted[-preemptive_max:]
-        data.save_features(image, p_sorted, f_sorted, c_sorted)
-        data.save_preemptive_features(image, p_pre, f_pre)
+            if subshot_name == 'front':
+                undist_img[ :undist_tile_size, :undist_tile_size ] = undistorted
+                #print( 'front')
+            elif subshot_name == 'left':
+                undist_img[ :undist_tile_size, undist_tile_size:2*undist_tile_size ] = undistorted
+                #print( 'left')
+            elif subshot_name == 'back':
+                undist_img[ :undist_tile_size, 2*undist_tile_size:3*undist_tile_size ] = undistorted
+                #print( 'back')
+            elif subshot_name == 'right':
+                undist_img[ :undist_tile_size, 3*undist_tile_size:4*undist_tile_size ] = undistorted
+                #print( 'right')
+            elif subshot_name == 'top':
+                undist_img[ undist_tile_size:2*undist_tile_size, 3*undist_tile_size:4*undist_tile_size ] = undistorted
+                #print( 'top')
+            elif subshot_name == 'bottom':
+                undist_img[ undist_tile_size:2*undist_tile_size, :undist_tile_size ] = undistorted
+                #print( 'bottom')
 
-        if data.config['matcher_type'] == 'FLANN':
-            index = features.build_flann_index(f_sorted, data.config)
-            data.save_feature_index(image, index)
+            #data.save_undistorted_image(subshot.id, undistorted)
 
-        end = timer()
-        report = {
-            "image": image,
-            "num_features": len(p_sorted),
-            "wall_time": end - start,
-        }
-        data.save_report(io.json_dumps(report),
-                         'features/{}.json'.format(image))
+        #data.save_undistorted_image(subshot.id, undist_img)
+
+        # We might consider combining a user supplied mask here as well
+
+        p_unsorted, f_unsorted, c_unsorted = features.extract_features( undist_img, data.config, undist_mask )
+
+        # Visualize the features on the unfolded cube
+        # --------------------------------------------------------------
+
+        if False:
+
+            h_ud, w_ud, _ = undist_img.shape
+            denorm_ud = denormalized_image_coordinates( p_unsorted[:, :2], w_ud, h_ud )
+
+            print( p_unsorted.shape )
+            print( denorm_ud.shape )
+
+            rcolors = []
+
+            for point in denorm_ud:
+                color = np.random.randint(0,255,(3)).tolist()
+                cv2.circle( undist_img, (int(point[0]),int(point[1])), 1, color, -1 )
+                rcolors.append( color )
+
+            data.save_undistorted_image( image + '_unfolded_cube.jpg', undist_img)
+
+        # --------------------------------------------------------------
+
+        if len(p_unsorted) > 0:
+
+            # Mask pixels that are out of valid image bounds before converting to equirectangular image coordinates
+
+            bearings = image_camera_model.unfolded_pixel_bearings( p_unsorted[:, :2] )
+
+            p_mask = np.array([ point is not None for point in bearings ])
+
+            p_unsorted = p_unsorted[ p_mask ]
+            f_unsorted = f_unsorted[ p_mask ]
+            c_unsorted = c_unsorted[ p_mask ]
+
+            p_unsorted[:, :2] = unfolded_cube_to_equi_normalized_image_coordinates( p_unsorted[:, :2], image_camera_model )
+
+        # Visualize the same features converted back to equirectangular image coordinates
+        # -----------------------------------------------------------------------------------------
+
+        if False:
+
+            timg = resized_image( img, data.config )
+
+            h, w, _ = timg.shape
+
+            denorm = denormalized_image_coordinates( p_unsorted[:, :2], w, h )
+
+            for ind, point in enumerate( denorm ):
+                cv2.circle( timg, (int(point[0]),int(point[1])), 1, rcolors[ind], -1 )
+
+            data.save_undistorted_image('original.jpg', timg)
+
+        #------------------------------------------------------------------------------------------
+    else:
+        mask = data.load_combined_mask(image)
+        if mask is not None:
+            logger.info('Found mask to apply for image {}'.format(image))
+
+        p_unsorted, f_unsorted, c_unsorted = features.extract_features(
+            data.load_image(image), data.config, mask)
+
+    if len(p_unsorted) == 0:
+        logger.warning('No features found in image {}'.format(image))
+        return
+
+    size = p_unsorted[:, 2]
+    order = np.argsort(size)
+    p_sorted = p_unsorted[order, :]
+    f_sorted = f_unsorted[order, :]
+    c_sorted = c_unsorted[order, :]
+    data.save_features(image, p_sorted, f_sorted, c_sorted)
+
+    if data.config['matcher_type'] == 'FLANN':
+        index = features.build_flann_index(f_sorted, data.config)
+        data.save_feature_index(image, index)
+    if need_words:
+        bows = bow.load_bows(data.config)
+        n_closest = data.config['bow_words_to_match']
+        closest_words = bows.map_to_words(
+            f_sorted, n_closest, data.config['bow_matcher_type'])
+        closest_words = closest_words[order, :]
+        data.save_words(image, closest_words)
+
+    end = timer()
+    report = {
+        "image": image,
+        "num_features": len(p_sorted),
+        "wall_time": end - start,
+    }
+    data.save_report(io.json_dumps(report), 'features/{}.json'.format(image))

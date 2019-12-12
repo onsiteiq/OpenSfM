@@ -1,24 +1,53 @@
 import numpy as np
 import cv2
 import pyopengv
-import networkx as nx
 import logging
-from collections import defaultdict
-from itertools import combinations
 
-from six import iteritems
-
+from opensfm import csfm
 from opensfm import context
 from opensfm import multiview
-from opensfm.unionfind import UnionFind
 
 
 logger = logging.getLogger(__name__)
 
 
-# pairwise matches
-def match_lowe(index, f2, config):
-    """Match features and apply Lowe's ratio filter.
+def match_words(f1, words1, f2, words2, config):
+    """Match using words and apply Lowe's ratio filter.
+
+    Args:
+        f1: feature descriptors of the first image
+        w1: the nth closest words for each feature in the first image
+        f2: feature descriptors of the second image
+        w2: the nth closest words for each feature in the second image
+        config: config parameters
+    """
+    ratio = config['lowes_ratio']
+    num_checks = config['bow_num_checks']
+    return csfm.match_using_words(f1, words1, f2, words2[:, 0],
+                                  ratio, num_checks)
+
+
+def match_words_symmetric(f1, words1, f2, words2, config):
+    """Match using words in both directions and keep consistent matches.
+
+    Args:
+        f1: feature descriptors of the first image
+        w1: the nth closest words for each feature in the first image
+        f2: feature descriptors of the second image
+        w2: the nth closest words for each feature in the second image
+        config: config parameters
+    """
+    matches_ij = match_words(f1, words1, f2, words2, config)
+    matches_ji = match_words(f2, words2, f1, words1, config)
+    matches_ij = [(a, b) for a, b in matches_ij]
+    matches_ji = [(b, a) for a, b in matches_ji]
+
+    matches = set(matches_ij).intersection(set(matches_ji))
+    return np.array(list(matches), dtype=int)
+
+
+def match_flann(index, f2, config):
+    """Match using FLANN and apply Lowe's ratio filter.
 
     Args:
         index: flann index if the first image
@@ -33,8 +62,8 @@ def match_lowe(index, f2, config):
     return np.array(matches, dtype=int)
 
 
-def match_symmetric(fi, indexi, fj, indexj, config):
-    """Match in both directions and keep consistent matches.
+def match_flann_symmetric(fi, indexi, fj, indexj, config):
+    """Match using FLANN in both directions and keep consistent matches.
 
     Args:
         fi: feature descriptors of the first image
@@ -43,30 +72,15 @@ def match_symmetric(fi, indexi, fj, indexj, config):
         indexj: flann index of the second image
         config: config parameters
     """
-    if config['matcher_type'] == 'FLANN':
-        matches_ij = [(a, b) for a, b in match_lowe(indexi, fj, config)]
-        matches_ji = [(b, a) for a, b in match_lowe(indexj, fi, config)]
-    else:
-        matches_ij = [(a, b) for a, b in match_lowe_bf(fi, fj, config)]
-        matches_ji = [(b, a) for a, b in match_lowe_bf(fj, fi, config)]
+    matches_ij = [(a, b) for a, b in match_flann(indexi, fj, config)]
+    matches_ji = [(b, a) for a, b in match_flann(indexj, fi, config)]
 
     matches = set(matches_ij).intersection(set(matches_ji))
     return np.array(list(matches), dtype=int)
 
 
-def _convert_matches_to_vector(matches):
-    """Convert Dmatch object to matrix form."""
-    matches_vector = np.zeros((len(matches), 2), dtype=np.int)
-    k = 0
-    for mm in matches:
-        matches_vector[k, 0] = mm.queryIdx
-        matches_vector[k, 1] = mm.trainIdx
-        k = k+1
-    return matches_vector
-
-
-def match_lowe_bf(f1, f2, config):
-    """Bruteforce matching and Lowe's ratio filtering.
+def match_brute_force(f1, f2, config):
+    """Brute force matching and Lowe's ratio filtering.
 
     Args:
         f1: feature descriptors of the first image
@@ -92,10 +106,36 @@ def match_lowe_bf(f1, f2, config):
     return np.array(good_matches, dtype=int)
 
 
+def _convert_matches_to_vector(matches):
+    """Convert Dmatch object to matrix form."""
+    matches_vector = np.zeros((len(matches), 2), dtype=np.int)
+    k = 0
+    for mm in matches:
+        matches_vector[k, 0] = mm.queryIdx
+        matches_vector[k, 1] = mm.trainIdx
+        k = k + 1
+    return matches_vector
+
+
+def match_brute_force_symmetric(fi, fj, config):
+    """Match with brute force in both directions and keep consistent matches.
+
+    Args:
+        fi: feature descriptors of the first image
+        fj: feature descriptors of the second image
+        config: config parameters
+    """
+    matches_ij = [(a, b) for a, b in match_brute_force(fi, fj, config)]
+    matches_ji = [(b, a) for a, b in match_brute_force(fj, fi, config)]
+
+    matches = set(matches_ij).intersection(set(matches_ji))
+    return np.array(list(matches), dtype=int)
+
+
 def robust_match_fundamental(p1, p2, matches, config):
     """Filter matches by estimating the Fundamental matrix via RANSAC."""
     if len(matches) < 8:
-        return np.array([])
+        return None, np.array([])
 
     p1 = p1[matches[:, 0]][:, :2].copy()
     p2 = p2[matches[:, 1]][:, :2].copy()
@@ -106,9 +146,9 @@ def robust_match_fundamental(p1, p2, matches, config):
     inliers = mask.ravel().nonzero()
 
     if F is None or F[2, 2] == 0.0:
-        return []
+        return F, []
 
-    return matches[inliers]
+    return F, matches[inliers]
 
 
 def _compute_inliers_bearings(b1, b2, T, threshold=0.01):
@@ -139,7 +179,15 @@ def robust_match_calibrated(p1, p2, camera1, camera2, matches, config):
     b2 = camera2.pixel_bearing_many(p2)
 
     threshold = config['robust_matching_calib_threshold']
-    T = pyopengv.relative_pose_ransac(b1, b2, "STEWENIUS", 1 - np.cos(threshold), 1000)
+    T = multiview.relative_pose_ransac(
+        b1, b2, b"STEWENIUS", 1 - np.cos(threshold), 1000, 0.999)
+
+    for relax in [4, 2, 1]:
+        inliers = _compute_inliers_bearings(b1, b2, T, relax * threshold)
+        if sum(inliers) < 8:
+            return np.array([])
+        T = pyopengv.relative_pose_optimize_nonlinear(
+            b1[inliers], b2[inliers], T[:3, 3], T[:3, :3])
 
     inliers = _compute_inliers_bearings(b1, b2, T, threshold)
 
@@ -156,120 +204,6 @@ def robust_match(p1, p2, camera1, camera2, matches, config):
             and camera1.k1 == 0.0 and camera1.k2 == 0.0
             and camera2.projection_type == 'perspective'
             and camera2.k1 == 0.0 and camera2.k2 == 0.0):
-        return robust_match_fundamental(p1, p2, matches, config)
+        return robust_match_fundamental(p1, p2, matches, config)[1]
     else:
         return robust_match_calibrated(p1, p2, camera1, camera2, matches, config)
-
-
-def _good_track(track, min_length):
-    if len(track) < min_length:
-        return False
-    images = [f[0] for f in track]
-    if len(images) != len(set(images)):
-        return False
-    return True
-
-
-def create_tracks_graph(features, colors, matches, config):
-    """Link matches into tracks."""
-    logger.debug('Merging features onto tracks')
-    uf = UnionFind()
-    for im1, im2 in matches:
-        for f1, f2 in matches[im1, im2]:
-            uf.union((im1, f1), (im2, f2))
-
-    sets = {}
-    for i in uf:
-        p = uf[i]
-        if p in sets:
-            sets[p].append(i)
-        else:
-            sets[p] = [i]
-
-    tracks = [t for t in sets.values() if _good_track(t, config['min_track_length'])]
-    logger.debug('Good tracks: {}'.format(len(tracks)))
-
-    tracks_graph = nx.Graph()
-    for track_id, track in enumerate(tracks):
-        for image, featureid in track:
-            if image not in features:
-                continue
-            x, y = features[image][featureid]
-            r, g, b = colors[image][featureid]
-            tracks_graph.add_node(image, bipartite=0)
-            tracks_graph.add_node(str(track_id), bipartite=1)
-            tracks_graph.add_edge(image,
-                                  str(track_id),
-                                  feature=(x, y),
-                                  feature_id=featureid,
-                                  feature_color=(float(r), float(g), float(b)))
-
-    return tracks_graph
-
-
-def tracks_and_images(graph):
-    """List of tracks and images in the graph."""
-    tracks, images = [], []
-    for n in graph.nodes(data=True):
-        if n[1]['bipartite'] == 0:
-            images.append(n[0])
-        else:
-            tracks.append(n[0])
-    return tracks, images
-
-
-def common_tracks(graph, im1, im2):
-    """List of tracks observed in both images.
-
-    Args:
-        graph: tracks graph
-        im1: name of the first image
-        im2: name of the second image
-
-    Returns:
-        tuple: tracks, feature from first image, feature from second image
-    """
-    t1, t2 = graph[im1], graph[im2]
-    tracks, p1, p2 = [], [], []
-    for track in t1:
-        if track in t2:
-            p1.append(t1[track]['feature'])
-            p2.append(t2[track]['feature'])
-            tracks.append(track)
-    p1 = np.array(p1)
-    p2 = np.array(p2)
-    return tracks, p1, p2
-
-
-def all_common_tracks(graph, tracks, include_features=True, min_common=50):
-    """List of tracks observed by each image pair.
-
-    Args:
-        graph: tracks graph
-        tracks: list of track identifiers
-        include_features: whether to include the features from the images
-        min_common: the minimum number of tracks the two images need to have
-            in common
-
-    Returns:
-        tuple: im1, im2 -> tuple: tracks, features from first image, features
-        from second image
-    """
-    track_dict = defaultdict(list)
-    for track in tracks:
-        track_images = sorted(graph[track].keys())
-        for im1, im2 in combinations(track_images, 2):
-            track_dict[im1, im2].append(track)
-
-    common_tracks = {}
-    for k, v in iteritems(track_dict):
-        if len(v) < min_common:
-            continue
-        im1, im2 = k
-        if include_features:
-            p1 = np.array([graph[im1][tr]['feature'] for tr in v])
-            p2 = np.array([graph[im2][tr]['feature'] for tr in v])
-            common_tracks[im1, im2] = (v, p1, p2)
-        else:
-            common_tracks[im1, im2] = v
-    return common_tracks
