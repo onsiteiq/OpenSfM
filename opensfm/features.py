@@ -3,8 +3,8 @@
 import time
 import logging
 import numpy as np
+import sys
 import cv2
-from random import sample
 
 from opensfm import context
 from opensfm import csfm
@@ -74,15 +74,13 @@ def mask_and_normalize_features(points, desc, colors, width, height, mask=None):
     """Remove features outside the mask and normalize image coordinates."""
 
     if mask is not None:
-
-        if len(points) > 0:
-
-            ids = np.array([_in_mask(point, width, height, mask) for point in points])
-            points = points[ids]
-            desc = desc[ids]
-            colors = colors[ids]
+        ids = np.array([_in_mask(point, width, height, mask) for point in points])
+        points = points[ids]
+        desc = desc[ids]
+        colors = colors[ids]
 
     points[:, :2] = normalized_image_coordinates(points[:, :2], width, height)
+    points[:, 2:3] /= max(width, height)
     return points, desc, colors
 
 
@@ -90,20 +88,19 @@ def _in_mask(point, width, height, mask):
     """Check if a point is inside a binary mask."""
     u = mask.shape[1] * (point[0] + 0.5) / width
     v = mask.shape[0] * (point[1] + 0.5) / height
-    return mask[int(v), int(u)][0] != 0
+    return mask[int(v), int(u)] != 0
 
 
 def extract_features_sift(image, config):
     sift_edge_threshold = config['sift_edge_threshold']
     sift_peak_threshold = float(config['sift_peak_threshold'])
-
     if context.OPENCV3:
         try:
             detector = cv2.xfeatures2d.SIFT_create(
                 edgeThreshold=sift_edge_threshold,
                 contrastThreshold=sift_peak_threshold)
         except AttributeError as ae:
-            if "no attribute 'xfeatures2d'" in ae.__str__():
+            if "no attribute 'xfeatures2d'" in ae.message:
                 logger.error('OpenCV Contrib modules are required to extract SIFT features')
             raise
         descriptor = detector
@@ -128,7 +125,6 @@ def extract_features_sift(image, config):
         else:
             logger.debug('done')
             break
-
     points, desc = descriptor.compute(image, points)
     if config['feature_root']:
         desc = root_feature(desc)
@@ -197,7 +193,6 @@ def extract_features_akaze(image, config):
     options.descriptor = akaze_descriptor_type(akaze_descriptor_name)
     options.descriptor_size = config['akaze_descriptor_size']
     options.descriptor_channels = config['akaze_descriptor_channels']
-    #options.process_size = config['feature_process_size']
     options.dthreshold = config['akaze_dthreshold']
     options.kcontrast_percentile = config['akaze_kcontrast_percentile']
     options.use_isotropic_diffusion = config['akaze_use_isotropic_diffusion']
@@ -275,7 +270,6 @@ def extract_features(color_image, config, mask=None):
         - colors: the color of the center of each feature
     """
     assert len(color_image.shape) == 3
-
     color_image = resized_image(color_image, config)
     image = cv2.cvtColor(color_image, cv2.COLOR_RGB2GRAY)
 
@@ -293,13 +287,6 @@ def extract_features(color_image, config, mask=None):
     else:
         raise ValueError('Unknown feature type '
                          '(must be SURF, SIFT, AKAZE, HAHOG or ORB)')
-
-    feat_max = config.get( 'feature_max_frames', 60000 )
-    if len(points) > feat_max:
-        idx = np.random.choice( np.arange( len(points) ), feat_max, replace=False)
-        points = points[idx]
-        desc = desc[idx]
-        logger.debug('Sampling only {0} points.'.format( len(points) ))
 
     xs = points[:, 0].round().astype(int)
     ys = points[:, 1].round().astype(int)
@@ -328,3 +315,65 @@ def build_flann_index(features, config):
                         iterations=config['flann_iterations'])
 
     return context.flann_Index(features, flann_params)
+
+
+FEATURES_VERSION = 1
+FEATURES_HEADER = 'OPENSFM_FEATURES_VERSION'
+
+
+def load_features(filepath, config):
+    """ Load features from filename """
+    s = np.load(filepath)
+    version = _features_file_version(s)
+    return getattr(sys.modules[__name__], '_load_features_v%d' % version)(s, config)
+
+
+def _features_file_version(obj):
+    """ Retrieve features file version. Return 0 if none """
+    if FEATURES_HEADER in obj:
+        return obj[FEATURES_HEADER]
+    else:
+        return 0
+
+
+def _load_features_v0(s, config):
+    """ Base version of features file
+
+    Scale (desc[2]) set to reprojection_error_sd by default (legacy behaviour)
+    """
+    feature_type = config['feature_type']
+    if feature_type == 'HAHOG' and config['hahog_normalize_to_uchar']:
+        descriptors = s['descriptors'].astype(np.float32)
+    else:
+        descriptors = s['descriptors']
+    points = s['points']
+    points[:, 2:3] = config['reprojection_error_sd']
+    return points, descriptors, s['colors'].astype(float)
+
+
+def _load_features_v1(s, config):
+    """ Version 1 of features file
+
+    Scale is not properly set higher in the pipeline, default is gone.
+    """
+    feature_type = config['feature_type']
+    if feature_type == 'HAHOG' and config['hahog_normalize_to_uchar']:
+        descriptors = s['descriptors'].astype(np.float32)
+    else:
+        descriptors = s['descriptors']
+    return s['points'], descriptors, s['colors'].astype(float)
+
+
+def save_features(filepath, points, desc, colors, config):
+    feature_type = config['feature_type']
+    if ((feature_type == 'AKAZE' and config['akaze_descriptor'] in ['MLDB_UPRIGHT', 'MLDB'])
+            or (feature_type == 'HAHOG' and config['hahog_normalize_to_uchar'])
+            or (feature_type == 'ORB')):
+        feature_data_type = np.uint8
+    else:
+        feature_data_type = np.float32
+    np.savez_compressed(filepath,
+                        points=points.astype(np.float32),
+                        descriptors=desc.astype(feature_data_type),
+                        colors=colors,
+                        OPENSFM_FEATURES_VERSION=FEATURES_VERSION)

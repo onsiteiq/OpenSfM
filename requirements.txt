@@ -10,6 +10,7 @@ six
 scipy
 xmltodict==0.10.2
 cloudpickle==0.4.0
+joblib==0.13.2
 loky==1.2.1
 PyWavelets
 ffmpeg-python

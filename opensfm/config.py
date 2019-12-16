@@ -27,7 +27,7 @@ surf_upright: 0               # See OpenCV doc
 
 # Params for AKAZE (See details in lib/src/third_party/akaze/AKAZEConfig.h)
 akaze_omax: 4                      # Maximum octave evolution of the image 2^sigma (coarsest scale sigma units)
-akaze_dthreshold: 0.00005            # Detector response threshold to accept point
+akaze_dthreshold: 0.001            # Detector response threshold to accept point
 akaze_descriptor: MSURF            # Feature type
 akaze_descriptor_size: 0           # Size of the descriptor in bits. 0->Full size
 akaze_descriptor_channels: 3       # Number of feature channels (1,2,3)
@@ -41,7 +41,7 @@ hahog_normalize_to_uchar: yes
 
 # Params for general matching
 lowes_ratio: 0.8              # Ratio test for matches
-matcher_type: FLANN           # FLANN or BRUTEFORCE or WORDS
+matcher_type: FLANN           # FLANN(symmetric) or BRUTEFORCE(symmetric), WORDS(one-way) or WORDS_SYMMETRIC(symmetric)
 
 # Params for FLANN matching
 flann_branching: 16           # See OpenCV doc
@@ -50,24 +50,27 @@ flann_checks: 200             # Smaller -> Faster (but might lose good matches)
 
 # Params for BoW matching
 bow_file: bow_hahog_root_uchar.npz
-bow_images_to_match: 15       # Number of images to do detailed matching.
 bow_words_to_match: 50        # Number of words to explore per feature.
 bow_num_checks: 20            # Number of matching features to check.
 bow_matcher_type: FLANN       # Matcher type to assign words to features
  
-# Params for preemptive matching
+# Params for matching
 matching_gps_distance: 150            # Maximum gps distance between two images for matching
 matching_gps_neighbors: 0             # Number of images to match selected by GPS distance. Set to 0 to use no limit (or disable if matching_gps_distance is also 0)
 matching_time_neighbors: 0            # Number of images to match selected by time taken. Set to 0 to disable
-matching_order_neighbors: 0           # Number of images to match selected by image name. Set to 0 to disable
+matching_order_neighbors: 10          # Number of images to match selected by image name. Set to 0 to disable
 matching_pdr_distance: 0              # Maximum pdr distance in feet between two images for matching. Set to 0 to disable
-matching_bow_neighbors: 0             # Number of images to match selected by BoW distance. Set to 0 to disable
+matching_bow_neighbors: 5             # Number of images to match selected by BoW distance. Set to 0 to disable
+matching_bow_gps_distance: 0          # Maximum GPS distance for preempting images before using selection by BoW distance. Set to 0 to disable
+matching_bow_gps_neighbors: 0         # Number of images (selected by GPS distance) to preempt before using selection by BoW distance. Set to 0 to use no limit (or disable if matching_bow_gps_distance is also 0)
+matching_bow_other_cameras: False     # If True, BoW image selection will use N neighbors from the same camera + N neighbors from any different camera.
+matching_use_filters: False           # If True, removes static matches using ad-hoc heuristics
 
 # Params for geometric estimation
 robust_matching_threshold: 0.004        # Outlier threshold for fundamental matrix estimation as portion of image width
 robust_matching_calib_threshold: 0.004  # Outlier threshold for essential matrix estimation during matching in radians
-robust_matching_min_match: 8            # Minimum number of matches to accept matches between two nearby images
-robust_matching_min_match_large: 20     # Minimum number of matches to accept matches between two images
+robust_matching_min_match: 20           # Minimum number of matches to accept matches between two nearby images
+robust_matching_min_match_large: 50     # Minimum number of matches to accept matches between two images
 five_point_algo_threshold: 0.004        # Outlier threshold for essential matrix estimation during incremental reconstruction in radians
 five_point_algo_min_inliers: 20         # Minimum number of inliers for considering a two view reconstruction valid
 triangulation_threshold: 0.006          # Outlier threshold for accepting a triangulated point in radians

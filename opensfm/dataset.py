@@ -9,18 +9,20 @@ import glob
 
 import cv2
 import numpy as np
-import networkx as nx
 import six
 
 from opensfm import io
 from opensfm import config
 from opensfm import context
+from opensfm import tracking
+from opensfm import features
+from opensfm import upright
 
 
 logger = logging.getLogger(__name__)
 
 
-class DataSet:
+class DataSet(object):
     """Accessors to the main input and output data.
 
     Data include input images, masks, and segmentation as well
@@ -118,6 +120,35 @@ class DataSet:
         else:
             mask = None
         return mask
+
+    def load_features_mask(self, image, feat):
+         """Load a feature-wise mask if it exists, otherwise return None.
+
+         This mask is used when performing features matching.
+         """
+         if feat is None or len(feat) == 0:
+             return np.array([], dtype=bool)
+
+         mask_image = self.load_combined_mask(image)
+         if mask_image is None:
+             logger.debug('No segmentation for {}, no features masked.'.format(image))
+             return np.ones((feat.shape[0],), dtype=bool)
+
+         exif = self.load_exif(image)
+         width = exif["width"]
+         height = exif["height"]
+         orientation = exif["orientation"]
+
+         new_height, new_width = mask_image.shape
+         ps = upright.opensfm_to_upright(feat, width, height, orientation,
+                                         new_width=new_width, new_height=new_height).astype(int)
+         mask = mask_image[ps[:, 1], ps[:, 0]]
+
+         n_removed = len(mask) - np.sum(mask)
+         logger.debug('Masking {} / {} ({:.2f}) features for {}'.format(
+             n_removed, len(mask), n_removed / len(mask), image))
+
+         return np.array(mask, dtype=bool)
 
     def _undistorted_mask_path(self):
         return os.path.join(self.data_path, 'undistorted_masks')
@@ -421,37 +452,28 @@ class DataSet:
         """
         return os.path.join(self._feature_path(), image + '.features.npz')
 
-    def _save_features(self, filepath, image, points, descriptors, colors=None):
+    def _feature_file_legacy(self, image):
+         """
+         Return path of a legacy feature file for specified image
+         :param image: Image name, with extension (i.e. 123.jpg)
+         """
+         return os.path.join(self._feature_path(), image + '.npz')
+
+    def _save_features(self, filepath, points, descriptors, colors=None):
         io.mkdir_p(self._feature_path())
-        feature_type = self.config['feature_type']
-        if ((feature_type == 'AKAZE' and self.config['akaze_descriptor'] in ['MLDB_UPRIGHT', 'MLDB'])
-                or (feature_type == 'HAHOG' and self.config['hahog_normalize_to_uchar'])
-                or (feature_type == 'ORB')):
-            feature_data_type = np.uint8
-        else:
-            feature_data_type = np.float32
-        np.savez_compressed(filepath,
-                            points=points.astype(np.float32),
-                            descriptors=descriptors.astype(feature_data_type),
-                            colors=colors)
+        features.save_features(filepath, points, descriptors, colors, self.config)
 
     def features_exist(self, image):
-        return os.path.isfile(self._feature_file(image))
+        return os.path.isfile(self._feature_file(image)) or\
+             os.path.isfile(self._feature_file_legacy(image))
 
     def load_features(self, image):
-        try:
-            feature_type = self.config['feature_type']
-            s = np.load(self._feature_file(image))
-            if feature_type == 'HAHOG' and self.config['hahog_normalize_to_uchar']:
-                descriptors = s['descriptors'].astype(np.float32)
-            else:
-                descriptors = s['descriptors']
-            return s['points'], descriptors, s['colors'].astype(float)
-        except FileNotFoundError:
-            return None, None, None
+        if os.path.isfile(self._feature_file_legacy(image)):
+             return features.load_features(self._feature_file_legacy(image), self.config)
+        return features.load_features(self._feature_file(image), self.config)
 
     def save_features(self, image, points, descriptors, colors):
-        self._save_features(self._feature_file(image), image, points, descriptors, colors)
+        self._save_features(self._feature_file(image), points, descriptors, colors)
 
     def feature_index_exists(self, image):
         return os.path.isfile(self._feature_index_file(image))
@@ -464,6 +486,8 @@ class DataSet:
         return os.path.join(self._feature_path(), image + '.flann')
 
     def load_feature_index(self, image, features):
+        if not self.feature_index_exists(image):
+             raise IOError("FLANN index file for {} doesn't exists.".format(image))
         index = context.flann_Index()
         index.load(features, self._feature_index_file(image))
         return index
@@ -524,11 +548,11 @@ class DataSet:
     def load_tracks_graph(self, filename=None):
         """Return graph (networkx data structure) of tracks"""
         with open(self._tracks_graph_file(filename)) as fin:
-            return load_tracks_graph(fin)
+            return tracking.load_tracks_graph(fin)
 
     def save_tracks_graph(self, graph, filename=None):
         with io.open_wt(self._tracks_graph_file(filename)) as fout:
-            save_tracks_graph(fout, graph)
+            tracking.save_tracks_graph(fout, graph)
 
     def load_undistorted_tracks_graph(self):
         return self.load_tracks_graph('undistorted_tracks.csv')
@@ -811,29 +835,3 @@ class DataSet:
     def mask_as_array(self, image):
         logger.warning("mask_as_array() is deprecated. Use load_mask() instead.")
         return self.load_mask(image)
-
-
-def load_tracks_graph(fileobj):
-    g = nx.Graph()
-    for line in fileobj:
-        image, track, observation, x, y, R, G, B = line.split('\t')
-        g.add_node(image, bipartite=0)
-        g.add_node(track, bipartite=1)
-        g.add_edge(
-            image, track,
-            feature=(float(x), float(y)),
-            feature_id=int(observation),
-            feature_color=(float(R), float(G), float(B)))
-    return g
-
-
-def save_tracks_graph(fileobj, graph):
-    for node, data in graph.nodes(data=True):
-        if data['bipartite'] == 0:
-            image = node
-            for track, data in graph[image].items():
-                x, y = data['feature']
-                fid = data['feature_id']
-                r, g, b = data['feature_color']
-                fileobj.write(u'%s\t%s\t%d\t%g\t%g\t%g\t%g\t%g\n' % (
-                    str(image), str(track), fid, x, y, r, g, b))

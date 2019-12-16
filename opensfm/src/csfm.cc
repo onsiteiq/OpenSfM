@@ -6,12 +6,12 @@
 
 #include "types.h"
 #include "hahog.cc"
+#include "matching.h"
 #include "multiview.cc"
 #include "banding_filter.cc"
 #include "hlf.cc"
 #include "geo_hash.cc"
 #include "akaze.cc"
-#include "matching.h"
 #include "bundle/bundle_adjuster.h"
 #include "openmvs_exporter.h"
 #include "depthmap_wrapper.cc"

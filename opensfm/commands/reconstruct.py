@@ -126,11 +126,14 @@ class Command:
                 align_reconstructions_to_hlf(reconstructions, data)
 
         else:
+            graph = data.load_tracks_graph()
             if data.pdr_shots_exist():
-                report = reconstruction.incremental_reconstruction_sequential( data )
+                report, reconstructions = reconstruction. \
+                    incremental_reconstruction_sequential(data, graph)
             else:
-                report = reconstruction.incremental_reconstruction( data )
-        
+                report, reconstructions = reconstruction. \
+                    incremental_reconstruction(data, graph)
+
         # If we are re-processing partial reconstructions only then merge the
         # new results with the original reconstruction. 
         

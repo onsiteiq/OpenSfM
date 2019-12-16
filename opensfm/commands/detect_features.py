@@ -4,13 +4,13 @@ import os
 import cv2
 import numpy as np
 
+from opensfm import bow
 from opensfm import dataset
 from opensfm import features
 from opensfm import io
 from opensfm import log
 from opensfm import types
 from opensfm.commands import undistort
-from opensfm.commands import superpoint
 from opensfm.context import parallel_map
 
 logger = logging.getLogger(__name__)
@@ -20,9 +20,6 @@ class Command:
     name = 'detect_features'
     help = 'Compute features for all images'
 
-    def __init__(self):
-        self.checkpoint_callback = None
-
     def add_arguments(self, parser):
         parser.add_argument('dataset', help='dataset to process')
 
@@ -31,47 +28,17 @@ class Command:
         data = dataset.DataSet( args.dataset )
         images = data.images()
 
-        # Group processing inputs into 150 images at a time.
-        
-        arg_groups = [ [] ]
-        
-        ag_ind = 0
-        for ind,img in enumerate(images):
-            cur_arg_group = arg_groups[ ag_ind ]
-            if not data.feature_index_exists( img ):
-                cur_arg_group.append( (img, data) )
-            if len(cur_arg_group) == 150:
-                arg_groups.append( [] )
-                ag_ind += 1
-        
-        processes = data.config['feature_processes']
+        arguments = [(image, data) for image in images]
 
-        run_time = 0
-
-        for pargs in arg_groups:
-            
-            start = timer()
-            parallel_map( detect, pargs, processes )
-        
-            # generate 'super point' features if flag is on
-            if data.config['feature_use_superpoint']:
-                size_w = data.config['feature_process_size_superpoint']
-                superpoint.gen_ss(size_w, processes)
-                
-            end = timer()
-        
-            run_time += end - start
-            
-            self.write_report( data, run_time )
-            
-            if self.checkpoint_callback is not None:
-                self.checkpoint_callback( args.dataset )
-            
+        start = timer()
+        processes = data.config['processes']
+        parallel_map(detect, arguments, processes, 1)
+        end = timer()
         with open(data.profile_log(), 'a') as fout:
-                fout.write( 'detect_features: {0}\n'.format( run_time ) )
+            fout.write('detect_features: {0}\n'.format(end - start))
 
-    def set_checkpoint_callback( self, callback ):
-        self.checkpoint_callback = callback
+        self.write_report(data, end - start)
+
 
     def write_report(self, data, wall_time):
         image_reports = []
@@ -137,10 +104,12 @@ def detect(args):
     image, data = args
 
     need_words = data.config['matcher_type'] == 'WORDS' or data.config['matching_bow_neighbors'] > 0
+    need_flann = data.config['matcher_type'] == 'FLANN'
     has_words = not need_words or data.words_exist(image)
-    has_features = data.feature_index_exists(image)
+    has_flann = not need_flann or data.feature_index_exists(image)
+    has_features = data.features_exist(image)
 
-    if has_features and has_words:
+    if has_features and has_flann and has_words:
         logger.info('Skip recomputing {} features for image {}'.format(
             data.feature_type().upper(), image))
         return
@@ -222,7 +191,8 @@ def detect(args):
 
         # We might consider combining a user supplied mask here as well
 
-        p_unsorted, f_unsorted, c_unsorted = features.extract_features( undist_img, data.config, undist_mask )
+        # TODO fix mask
+        p_unsorted, f_unsorted, c_unsorted = features.extract_features(undist_img, data.config, None)
 
         # Visualize the features on the unfolded cube
         # --------------------------------------------------------------
@@ -296,7 +266,7 @@ def detect(args):
     c_sorted = c_unsorted[order, :]
     data.save_features(image, p_sorted, f_sorted, c_sorted)
 
-    if data.config['matcher_type'] == 'FLANN':
+    if need_flann:
         index = features.build_flann_index(f_sorted, data.config)
         data.save_feature_index(image, index)
     if need_words:
@@ -304,7 +274,6 @@ def detect(args):
         n_closest = data.config['bow_words_to_match']
         closest_words = bows.map_to_words(
             f_sorted, n_closest, data.config['bow_matcher_type'])
-        closest_words = closest_words[order, :]
         data.save_words(image, closest_words)
 
     end = timer()

@@ -5,7 +5,7 @@ import resource
 import sys
 
 import cv2
-from loky import get_reusable_executor
+from joblib import Parallel, parallel_backend, delayed
 
 
 logger = logging.getLogger(__name__)
@@ -29,14 +29,16 @@ else:
 
 
 # Parallel processes
-def parallel_map(func, args, num_proc):
+def parallel_map(func, args, num_proc, max_batch_size=1):
     """Run function for all arguments using multiple processes."""
     num_proc = min(num_proc, len(args))
     if num_proc <= 1:
         return list(map(func, args))
     else:
-        with get_reusable_executor(max_workers=num_proc, timeout=None) as e:
-            return list(e.map(func, args))
+        with parallel_backend('loky', n_jobs=num_proc):
+            batch_size = max(1, len(args)/(num_proc*2))
+            batch_size = min(batch_size, max_batch_size) if max_batch_size else batch_size
+            return Parallel(batch_size=batch_size)(delayed(func)(arg) for arg in args)
 
 
 # Memory usage
@@ -44,6 +46,28 @@ if sys.platform == 'darwin':
     rusage_unit = 1
 else:
     rusage_unit = 1024
+
+
+def memory_available():
+    """Available memory in MB.
+
+    Only works on linux and returns None otherwise.
+    """
+    lines = os.popen('free -t -m').readlines()
+    if not lines:
+        return None
+    available_mem = int(lines[1].split()[6])
+    return available_mem
+
+
+def processes_that_fit_in_memory(desired, per_process):
+    """Amount of parallel BoW process that fit in memory."""
+    available_mem = memory_available()
+    if available_mem is not None:
+        fittable = max(1, int(available_mem / per_process))
+        return min(desired, fittable)
+    else:
+        return desired
 
 
 def current_memory_usage():

@@ -18,7 +18,7 @@ from six import iteritems
 from opensfm import csfm
 from opensfm import geo
 from opensfm import log
-from opensfm import matching
+from opensfm import tracking
 from opensfm import multiview
 from opensfm import types
 from opensfm.align import align_reconstruction, align_reconstruction_segments, apply_similarity
@@ -149,8 +149,9 @@ def bundle(graph, reconstruction, gcp, config):
             for track in graph[shot_id]:
                 if track in reconstruction.points:
                     point = graph[shot_id][track]['feature']
+                    scale = graph[shot_id][track]['feature_scale']
                     ba.add_point_projection_observation(
-                            shot_id, track, point[0], point[1], 0.004)
+                            shot_id, track, point[0], point[1], scale)
 
     if config['bundle_use_gps']:
         for shot in reconstruction.shots.values():
@@ -229,8 +230,9 @@ def bundle_single_view(graph, reconstruction, shot_id, data):
             track = reconstruction.points[track_id]
             ba.add_point(track_id, track.coordinates, True)
             point = graph[shot_id][track_id]['feature']
+            scale = graph[shot_id][track_id]['feature_scale']
             ba.add_point_projection_observation(
-                shot_id, track_id, point[0], point[1], 0.004)
+                shot_id, track_id, point[0], point[1], scale)
 
     if config['bundle_use_gps']:
         g = shot.metadata.gps_position
@@ -327,8 +329,9 @@ def bundle_local(graph, reconstruction, gcp, central_shot_id, data):
             for track in graph[shot_id]:
                 if track in point_ids:
                     point = graph[shot_id][track]['feature']
+                    scale = graph[shot_id][track]['feature_scale']
                     ba.add_point_projection_observation(
-                            shot_id, track, point[0], point[1], 0.004)
+                            shot_id, track, point[0], point[1], scale)
 
     if config['bundle_use_gps']:
         for shot_id in interior:
@@ -551,49 +554,6 @@ def _two_view_reconstruction_inliers(b1, b2, R, t, threshold):
     return np.nonzero(ok1 * ok2)[0]
 
 
-def run_absolute_pose_ransac(bs, Xs, method, threshold,
-                             iterations, probabilty):
-    try:
-        return pyopengv.absolute_pose_ransac(
-            bs, Xs, method, threshold,
-            iterations=iterations,
-            probabilty=probabilty)
-        #return pyopengv.absolute_pose_optimize_nonlinear(bs, Xs)
-    except:
-        # Older versions of pyopengv do not accept the probability argument.
-        return pyopengv.absolute_pose_ransac(
-            bs, Xs, method, threshold, iterations)
-
-
-def run_relative_pose_ransac(b1, b2, method, threshold,
-                             iterations, probability):
-    try:
-        return pyopengv.relative_pose_ransac(b1, b2, method, threshold,
-                                             iterations=iterations,
-                                             probability=probability)
-    except:
-        # Older versions of pyopengv do not accept the probability argument.
-        return pyopengv.relative_pose_ransac(b1, b2, method, threshold,
-                                             iterations)
-
-
-def run_relative_pose_ransac_rotation_only(b1, b2, threshold,
-                                           iterations, probability):
-    try:
-        return pyopengv.relative_pose_ransac_rotation_only(
-            b1, b2, threshold,
-            iterations=iterations,
-            probability=probability)
-    except:
-        # Older versions of pyopengv do not accept the probability argument.
-        return pyopengv.relative_pose_ransac_rotation_only(
-            b1, b2, threshold, iterations)
-
-
-def run_relative_pose_optimize_nonlinear(b1, b2, t, R):
-    return pyopengv.relative_pose_optimize_nonlinear(b1, b2, t, R)
-
-
 def two_view_reconstruction_plane_based(p1, p2, camera1, camera2, threshold):
     """Reconstruct two views from point correspondences lying on a plane.
 
@@ -648,14 +608,14 @@ def two_view_reconstruction(p1, p2, camera1, camera2, threshold):
     # Here we arbitrarily assume that the threshold is given for a camera of
     # focal length 1.  Also, arctan(threshold) \approx threshold since
     # threshold is small
-    T = run_relative_pose_ransac(
+    T = multiview.relative_pose_ransac(
         b1, b2, "STEWENIUS", 1 - np.cos(threshold), 1000, 0.999)
     R = T[:, :3]
     t = T[:, 3]
     inliers = _two_view_reconstruction_inliers(b1, b2, R, t, threshold)
 
     if inliers.sum() > 5:
-        T = run_relative_pose_optimize_nonlinear(b1[inliers], b2[inliers], t, R)
+        T = multiview.relative_pose_optimize_nonlinear(b1[inliers], b2[inliers], t, R)
         R = T[:, :3]
         t = T[:, 3]
         inliers = _two_view_reconstruction_inliers(b1, b2, R, t, threshold)
@@ -683,7 +643,7 @@ def two_view_reconstruction_rotation_only(p1, p2, camera1, camera2, threshold):
     b1 = camera1.pixel_bearing_many(p1)
     b2 = camera2.pixel_bearing_many(p2)
 
-    R = run_relative_pose_ransac_rotation_only(
+    R = multiview.relative_pose_ransac_rotation_only(
         b1, b2, 1 - np.cos(threshold), 1000, 0.999)
     inliers = _two_view_rotation_inliers(b1, b2, R, threshold)
 
@@ -831,7 +791,7 @@ def resect(data, graph, graph_inliers, reconstruction, shot_id,
     # remove features that are obviously wrong, according to pdr
     #bs, Xs, ids = cull_resection_pdr(shot_id, reconstruction, data, bs, Xs, ids)
 
-    T = run_absolute_pose_ransac(
+    T = multiview.absolute_pose_ransac(
         bs, Xs, "EPNP", 1 - np.cos(threshold), 1000, 0.999)
 
     R = T[:, :3]
@@ -950,6 +910,7 @@ def copy_graph_data(graph_from, graph_to, shot_id, track_id):
     edge_data = graph_from.get_edge_data(shot_id, track_id)
     graph_to.add_edge(shot_id, track_id,
                       feature=edge_data['feature'],
+                      feature_scale=edge_data['feature_scale'],
                       feature_id=edge_data['feature_id'],
                       feature_color=edge_data['feature_color'])
 
@@ -1181,7 +1142,7 @@ def triangulate_shot_features(graph, graph_inliers, reconstruction, shot_id, con
 
     for track in graph[shot_id]:
         if track not in reconstruction.points:
-            triangulator.triangulate(track, reproj_threshold, min_ray_angle)
+            triangulator.triangulate_dlt(track, reproj_threshold, min_ray_angle)
 
 
 def retriangulate(graph, graph_inliers, reconstruction, config):
@@ -1197,7 +1158,7 @@ def retriangulate(graph, graph_inliers, reconstruction, config):
 
     triangulator = TrackTriangulator(graph, graph_inliers, reconstruction)
 
-    tracks, images = matching.tracks_and_images(graph)
+    tracks, images = tracking.tracks_and_images(graph)
     for track in tracks:
         if config['triangulation_type'] == 'ROBUST':
             triangulator.triangulate_robust(track, threshold, min_ray_angle)
@@ -1678,28 +1639,27 @@ def compute_statistics(reconstruction, graph):
      return stats
 
 
-def incremental_reconstruction(data):
+def incremental_reconstruction(data, graph):
     """Run the entire incremental reconstruction pipeline."""
     logger.info("Starting incremental reconstruction")
     report = {}
     chrono = Chronometer()
+
+    tracks, images = tracking.tracks_and_images(graph)
+    chrono.lap('load_tracks_graph')
+
     if not data.reference_lla_exists() and not data.config['use_provided_reference_lla']:
         data.invent_reference_lla()
-
-    graph = data.load_tracks_graph()
-    tracks, images = matching.tracks_and_images(graph)
 
     target_images = data.config.get('target_images', [] )
     
     if target_images:
         images = target_images
 
-    chrono.lap('load_tracks_graph')
-    
     gcp = None
     if data.ground_control_points_exist():
         gcp = data.load_ground_control_points()
-    common_tracks = matching.all_common_tracks(graph, tracks)
+    common_tracks = tracking.all_common_tracks(graph, tracks)
     reconstructions = []
     pairs = compute_image_pairs(common_tracks, data)
     chrono.lap('compute_image_pairs')
@@ -1760,7 +1720,7 @@ def incremental_reconstruction(data):
     chrono.lap('compute_reconstructions')
     report['wall_times'] = dict(chrono.lap_times())
     report['not_reconstructed_images'] = list(remaining_images)
-    return report
+    return report, reconstructions
 
 
 def remove_sky_features(data, graph):
@@ -1801,33 +1761,31 @@ def remove_sky_features(data, graph):
                 break
 
 
-def incremental_reconstruction_sequential(data):
+def incremental_reconstruction_sequential(data, graph):
     """Run the entire incremental reconstruction pipeline."""
     logger.info("Starting incremental reconstruction sequentially")
     report = {}
     chrono = Chronometer()
+
+    tracks, images = tracking.tracks_and_images(graph)
+    chrono.lap('load_tracks_graph')
+
     if not data.reference_lla_exists() and not data.config['use_provided_reference_lla']:
         data.invent_reference_lla()
 
-    graph = data.load_tracks_graph()
-
     if 'remove_sky_features' in data.config and data.config['remove_sky_features']:
         remove_sky_features(data, graph)
-
-    tracks, images = matching.tracks_and_images(graph)
 
     target_images = data.config.get('target_images', [] )
     
     if target_images:
         images = target_images
 
-    chrono.lap('load_tracks_graph')
-    
     gcp = None
     if data.ground_control_points_exist():
         gcp = data.load_ground_control_points()
 
-    common_tracks = matching.all_common_tracks(graph, tracks)
+    common_tracks = tracking.all_common_tracks(graph, tracks)
 
     # debug - print # of common tracks between adjacent images
     for (im1, im2), (tracks, p1, p2) in iteritems(common_tracks):
@@ -1923,7 +1881,7 @@ def incremental_reconstruction_sequential(data):
     chrono.lap('compute_reconstructions')
     report['wall_times'] = dict(chrono.lap_times())
     report['not_reconstructed_images'] = list(remaining_images)
-    return report
+    return report, reconstructions
 
 
 def breakup_reconstruction(graph, reconstruction):
