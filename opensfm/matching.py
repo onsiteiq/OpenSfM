@@ -208,14 +208,10 @@ def match(im1, im2, camera1, camera2,
     logger.debug(
         'Matching {} and {}.  Matcher: {} '
         'T-desc: {:1.3f} T-robust: {:1.3f} T-total: {:1.3f} '
-        'Matches: {} Robust: {}'.format(
+        'Matches: {} Robust: {} Thresh: {}'.format(
             im1, im2, matcher_type,
             time_2d_matching, time_robust_matching, time_total,
-            len(matches), len(rmatches)))
-
-    #debug
-    if robust_matching_min_match == config['robust_matching_min_match_large']:
-        logger.debug('loop closure candidate')
+            len(matches), len(rmatches), robust_matching_min_match))
 
     return np.array(rmatches, dtype=int)
 
