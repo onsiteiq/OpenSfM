@@ -760,6 +760,8 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad
     # expected scale
     expected_scale = 1.0 / (scale_factor * 0.3048)
 
+    end_shot_id = _int_to_shot_id(len(pdr_shots_dict) - 1)
+
     pdr_predictions_dict = {}
 
     all_gps_shot_ids = sorted(gps_points_dict.keys())
@@ -767,10 +769,16 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad
         gps_coords = []
         pdr_coords = []
 
-        for j in range(2):
-            shot_id = all_gps_shot_ids[i+j]
-            gps_coords.append(gps_points_dict[shot_id])
-            pdr_coords.append([pdr_shots_dict[shot_id][0], pdr_shots_dict[shot_id][1], 0])
+        shot_id_1 = all_gps_shot_ids[i]
+        shot_id_2 = all_gps_shot_ids[i+1]
+        if (pdr_shots_dict[shot_id_1][0] == pdr_shots_dict[shot_id_2][0]) and \
+           (pdr_shots_dict[shot_id_1][1] == pdr_shots_dict[shot_id_2][1]):
+            continue
+        else:
+            gps_coords.append(gps_points_dict[shot_id_1])
+            gps_coords.append(gps_points_dict[shot_id_2])
+            pdr_coords.append([pdr_shots_dict[shot_id_1][0], pdr_shots_dict[shot_id_1][1], 0])
+            pdr_coords.append([pdr_shots_dict[shot_id_2][0], pdr_shots_dict[shot_id_2][1], 0])
 
         #s, A, b = get_affine_transform_2d(gps_coords, pdr_coords)
         s, A, b = get_affine_transform_2d_no_numpy(gps_coords, pdr_coords)
@@ -778,24 +786,15 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad
         # the closer s is to expected_scale, the better the fit, and the less the deviation
         deviation = math.fabs(1.0 - s/expected_scale)
 
-        # debugging
-        #[x, y, z] = _rotation_matrix_to_euler_angles(A)
-        #logger.debug("update_pdr_global_2d: deviation=%f, rotation=%f, %f, %f", deviation, np.degrees(x), np.degrees(y), np.degrees(z))
-
         if skip_bad and not ((0.50 * expected_scale) < s < (2.0 * expected_scale)):
             logger.debug("s/expected_scale={}, discard".format(s/expected_scale))
             continue
 
-        start_shot_id = all_gps_shot_ids[i]
-        end_shot_id = all_gps_shot_ids[i+1]
-
         # in first iteration, we transform pdr from first shot
-        # in last iteration, we transform pdr until last shot
         if i == 0:
             start_shot_id = _int_to_shot_id(0)
-
-        if i == len(gps_points_dict)-2:
-            end_shot_id = _int_to_shot_id(len(pdr_shots_dict)-1)
+        else:
+            start_shot_id = all_gps_shot_ids[i]
 
         #new_dict = apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id,
                                           #s, A, b,
