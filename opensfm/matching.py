@@ -1,5 +1,6 @@
 import numpy as np
 import cv2
+import math
 import pyopengv
 import logging
 
@@ -50,6 +51,7 @@ def match_images(data, ref_images, cand_images):
     ctx.data = data
     ctx.cameras = ctx.data.load_camera_models()
     ctx.exifs = exifs
+    ctx.pdr_shots_dict = ctx.data.load_pdr_shots()
     args = list(match_arguments(per_image, ctx))
 
     # Perform all pair matchings in parallel
@@ -113,7 +115,7 @@ def match_unwrap_args(args):
 
         im1_matches[im2] = match(im1, im2, camera1, camera2,
                                  p1, p2, f1, f2, w1, w2,
-                                 i1, i2, m1, m2, ctx.data)
+                                 i1, i2, m1, m2, ctx.data, ctx.pdr_shots_dict)
 
     num_matches = sum(1 for m in im1_matches.values() if len(m) > 0)
     logger.debug('Image {} matches: {} out of {}'.format(
@@ -124,7 +126,7 @@ def match_unwrap_args(args):
 
 def match(im1, im2, camera1, camera2,
           p1, p2, f1, f2, w1, w2,
-          i1, i2, m1, m2, data):
+          i1, i2, m1, m2, data, pdr_shots_dict):
     """ Perform matching for a pair of images
 
     Given a pair of images (1,2) and their :
@@ -190,7 +192,7 @@ def match(im1, im2, camera1, camera2,
         return []
 
     # robust matching
-    rmatches = robust_match(p1, p2, camera1, camera2, matches, config)
+    T, rmatches = robust_match(p1, p2, camera1, camera2, matches, config)
     rmatches = np.array([[a, b] for a, b in rmatches])
     time_robust_matching = timer() - t
     time_total = timer() - time_start
@@ -205,6 +207,16 @@ def match(im1, im2, camera1, camera2,
                 len(matches)))
         return []
 
+    if T.any() and not rotation_close_to_preint(im1, im2, T, pdr_shots_dict):
+        logger.debug(
+            'Matching {} and {}.  Matcher: {} '
+            'T-desc: {:1.3f} T-robust: {:1.3f} T-total: {:1.3f} '
+            'Matches: {} Robust: {} Preint check: FAILED'.format(
+                im1, im2, matcher_type,
+                time_2d_matching, time_robust_matching, time_total,
+                len(matches), len(rmatches)))
+        return []
+
     logger.debug(
         'Matching {} and {}.  Matcher: {} '
         'T-desc: {:1.3f} T-robust: {:1.3f} T-total: {:1.3f} '
@@ -214,6 +226,45 @@ def match(im1, im2, camera1, camera2,
             len(matches), len(rmatches), robust_matching_min_match))
 
     return np.array(rmatches, dtype=int)
+
+
+def rotation_close_to_preint(im1, im2, T, pdr_shots_dict):
+    """
+    compare relative rotation of robust matching to that of imu gyro preintegration,
+    if they are not close, it is considered to be an erroneous epipoar geometry
+    """
+    # calculate relative rotation from preintegrated gyro input
+    preint_im1_rot = cv2.Rodrigues(np.asarray([pdr_shots_dict[im1][7], pdr_shots_dict[im1][8], pdr_shots_dict[im1][9]]))[0]
+    preint_im2_rot = cv2.Rodrigues(np.asarray([pdr_shots_dict[im2][7], pdr_shots_dict[im2][8], pdr_shots_dict[im2][9]]))[0]
+    preint_rel_rot = np.dot(preint_im2_rot, preint_im1_rot.T)
+
+    # convert this rotation from sensor frame to camera frame
+    b_to_c = np.asarray([1, 0, 0, 0, 0, -1, 0, 1, 0]).reshape(3, 3)
+    preint_rel_rot = cv2.Rodrigues(b_to_c.dot(cv2.Rodrigues(preint_rel_rot)[0].ravel()))[0]
+
+    # get relative rotation from T obtained from robust matching
+    robust_match_rel_rot = T[:, :3]
+
+    # calculate difference between the two relative rotations. this is the geodesic distance
+    # see D. Huynh "Metrics for 3D Rotations: Comparison and Analysis" equation 23
+    diff_rot = np.dot(preint_rel_rot, robust_match_rel_rot.T)
+    geo_diff = np.linalg.norm(cv2.Rodrigues(diff_rot)[0].ravel())
+
+    # TODO - optionize the threshold below
+    if geo_diff < math.pi/8.0:
+        return True
+    else:
+        logger.debug("preint rel rot axis/angle = {}".format(_get_axis_angle(preint_rel_rot)))
+        logger.debug("robust rel rot axis/angle = {}".format(_get_axis_angle(robust_match_rel_rot)))
+        logger.debug("preint/robust geodesic {} exceeds threshold".format(geo_diff))
+        return False
+
+
+def _get_axis_angle(rot_mat):
+    axis_angle = cv2.Rodrigues(rot_mat)[0].ravel()
+    angle = np.linalg.norm(axis_angle)
+    axis = axis_angle / angle
+    return axis, angle
 
 
 def _shot_id_to_int(shot_id):
@@ -386,7 +437,7 @@ def robust_match_calibrated(p1, p2, camera1, camera2, matches, config):
     """Filter matches by estimating the Essential matrix via RANSAC."""
 
     if len(matches) < 8:
-        return np.array([])
+        return None, np.array([])
 
     p1 = p1[matches[:, 0]][:, :2].copy()
     p2 = p2[matches[:, 1]][:, :2].copy()
@@ -400,13 +451,13 @@ def robust_match_calibrated(p1, p2, camera1, camera2, matches, config):
     for relax in [4, 2, 1]:
         inliers = _compute_inliers_bearings(b1, b2, T, relax * threshold)
         if sum(inliers) < 8:
-            return np.array([])
+            return None, np.array([])
         T = pyopengv.relative_pose_optimize_nonlinear(
             b1[inliers], b2[inliers], T[:3, 3], T[:3, :3])
 
     inliers = _compute_inliers_bearings(b1, b2, T, threshold)
 
-    return matches[inliers]
+    return T, matches[inliers]
 
 
 def robust_match(p1, p2, camera1, camera2, matches, config):
@@ -419,7 +470,7 @@ def robust_match(p1, p2, camera1, camera2, matches, config):
             and camera1.k1 == 0.0 and camera1.k2 == 0.0
             and camera2.projection_type == 'perspective'
             and camera2.k1 == 0.0 and camera2.k2 == 0.0):
-        return robust_match_fundamental(p1, p2, matches, config)[1]
+        return robust_match_fundamental(p1, p2, matches, config)
     else:
         return robust_match_calibrated(p1, p2, camera1, camera2, matches, config)
 
