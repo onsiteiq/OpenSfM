@@ -106,9 +106,9 @@ def robust_match_fundamental(p1, p2, matches, config):
     inliers = mask.ravel().nonzero()
 
     if F is None or F[2, 2] == 0.0:
-        return []
+        return [], None
 
-    return matches[inliers]
+    return matches[inliers], None
 
 
 def _compute_inliers_bearings(b1, b2, T, threshold=0.01):
@@ -143,7 +143,7 @@ def robust_match_calibrated(p1, p2, camera1, camera2, matches, config):
 
     inliers = _compute_inliers_bearings(b1, b2, T, threshold)
 
-    return matches[inliers]
+    return matches[inliers], T
 
 
 def robust_match(p1, p2, camera1, camera2, matches, config):

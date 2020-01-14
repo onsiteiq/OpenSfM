@@ -3,6 +3,7 @@ from itertools import combinations
 from timeit import default_timer as timer
 
 import numpy as np
+import cv2
 import scipy.spatial as spatial
 
 from opensfm import dataset
@@ -31,7 +32,7 @@ class Command:
         data = dataset.DataSet( args.dataset )
         images = data.images()
         exifs = {im: data.load_exif(im) for im in images}
-        
+
         preport = {}
         
         try:
@@ -40,7 +41,7 @@ class Command:
             preport = io.json_loads( report_str )
         except:
             pass
-            
+
         use_report_pairs = True
         if 'parameters' in preport:
             params = preport['parameters']
@@ -63,6 +64,7 @@ class Command:
         ctx.data = data
         ctx.cameras = ctx.data.load_camera_models()
         ctx.exifs = exifs
+        ctx.pdr_shots_dict = ctx.data.load_pdr_shots()
         ctx.p_pre, ctx.f_pre = load_preemptive_features(data)
         
         # Group processing inputs into 150 images at a time.
@@ -270,6 +272,7 @@ def match_candidates_by_order(images, max_neighbors, data):
     n = (max_neighbors + 1) // 2
 
     len_images = len(images)
+    logger.info("len_images={}".format(len_images))
 
     if n > len_images:
         n = len_images
@@ -471,12 +474,18 @@ def match(args):
         camera1 = ctx.cameras[ctx.exifs[im1]['camera']]
         camera2 = ctx.cameras[ctx.exifs[im2]['camera']]
 
-        rmatches = matching.robust_match(p1, p2, camera1, camera2, matches,
+        # T will be returned in calibrated case
+        rmatches, T = matching.robust_match(p1, p2, camera1, camera2, matches,
                                          config)
 
         if len(rmatches) < min_match_threshold:
             im1_matches[im2] = []
             continue
+
+        if T is not None and not rotation_close_to_preint(im1, im2, T, ctx.pdr_shots_dict):
+            im1_matches[im2] = []
+            continue
+
         im1_matches[im2] = rmatches
         logger.debug('Robust matching time : {0}s'.format(
             timer() - t_robust_matching))
@@ -484,6 +493,46 @@ def match(args):
         logger.debug("Full matching {0} / {1}, time: {2}s".format(
             len(rmatches), len(matches), timer() - t))
     ctx.data.save_matches(im1, im1_matches)
+
+
+def rotation_close_to_preint(im1, im2, T, pdr_shots_dict):
+    """
+    compare relative rotation of robust matching to that of imu gyro preintegration,
+    if they are not close, it is considered to be an erroneous epipoar geometry
+    """
+    # calculate relative rotation from preintegrated gyro input
+    preint_im1_rot = cv2.Rodrigues(np.asarray([pdr_shots_dict[im1][7], pdr_shots_dict[im1][8], pdr_shots_dict[im1][9]]))[0]
+    preint_im2_rot = cv2.Rodrigues(np.asarray([pdr_shots_dict[im2][7], pdr_shots_dict[im2][8], pdr_shots_dict[im2][9]]))[0]
+    preint_rel_rot = np.dot(preint_im2_rot, preint_im1_rot.T)
+
+    # convert this rotation from sensor frame to camera frame
+    b_to_c = np.asarray([1, 0, 0, 0, 0, -1, 0, 1, 0]).reshape(3, 3)
+    preint_rel_rot = cv2.Rodrigues(b_to_c.dot(cv2.Rodrigues(preint_rel_rot)[0].ravel()))[0]
+    #preint_im1_rot = np.dot(preint_im1_rot, b_to_c.T)
+    #preint_im2_rot = np.dot(preint_im2_rot, b_to_c.T)
+
+    tmp = cv2.Rodrigues(preint_rel_rot)[0].ravel()
+    tmp_angle = np.linalg.norm(tmp)
+    tmp_axis = tmp/tmp_angle
+    logger.debug("preint rel rot angle between {} {} = {} axis={}".format(im1, im2, tmp_angle, tmp_axis))
+
+    # get relative rotation from T obtained from robust matching
+    robust_match_rel_rot = T[:, :3]
+    tmp = cv2.Rodrigues(robust_match_rel_rot)[0].ravel()
+    tmp_angle = np.linalg.norm(tmp)
+    tmp_axis = tmp/tmp_angle
+    logger.debug("robust rel rot angle between {} {} = {} axis={}".format(im1, im2, tmp_angle, tmp_axis))
+
+    # calculate difference between the two relative rotations. this is the geodesic distance
+    # see D. Huynh "Metrics for 3D Rotations: Comparison and Analysis" equation 23
+    diff_rot = np.dot(preint_rel_rot, robust_match_rel_rot.T)
+    geo_diff = np.linalg.norm(cv2.Rodrigues(diff_rot)[0].ravel())
+
+    logger.debug("geodesic between {} {} = {}".format(im1, im2, geo_diff))
+    if geo_diff < 0.2:
+        return True
+    else:
+        return False
 
 
 def _get_min_match_threshold(im1, im2, config):
