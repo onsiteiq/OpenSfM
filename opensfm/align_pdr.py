@@ -423,7 +423,7 @@ def scale_recon_2(reconstruction, data):
     onplane, verticals = [], []
     for shot_id in reconstruction.shots.keys():
         X.append(reconstruction.shots[shot_id].pose.get_origin())
-        Xp.append(pdr_shots_dict[shot_id])
+        Xp.append(pdr_shots_dict[shot_id][0:3])
         R = reconstruction.shots[shot_id].pose.get_rotation_matrix()
         onplane.append(R[0,:])
         onplane.append(R[2,:])

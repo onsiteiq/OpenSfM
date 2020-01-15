@@ -70,7 +70,6 @@ matching_use_filters: False           # If True, removes static matches using ad
 robust_matching_threshold: 0.004        # Outlier threshold for fundamental matrix estimation as portion of image width
 robust_matching_calib_threshold: 0.004  # Outlier threshold for essential matrix estimation during matching in radians
 robust_matching_min_match: 20           # Minimum number of matches to accept matches between two nearby images
-robust_matching_min_match_large: 50     # Minimum number of matches to accept matches between two images
 five_point_algo_threshold: 0.004        # Outlier threshold for essential matrix estimation during incremental reconstruction in radians
 five_point_algo_min_inliers: 20         # Minimum number of inliers for considering a two view reconstruction valid
 triangulation_threshold: 0.006          # Outlier threshold for accepting a triangulated point in radians

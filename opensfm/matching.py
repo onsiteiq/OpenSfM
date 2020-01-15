@@ -184,7 +184,7 @@ def match(im1, im2, camera1, camera2,
     time_2d_matching = timer() - time_start
     t = timer()
 
-    robust_matching_min_match = get_min_thresh(config, im1, im2)
+    robust_matching_min_match = config['robust_matching_min_match']
     if len(matches) < robust_matching_min_match:
         logger.debug(
             'Matching {} and {}.  Matcher: {} T-desc: {:1.3f} '
@@ -250,8 +250,10 @@ def rotation_close_to_preint(im1, im2, T, pdr_shots_dict):
     diff_rot = np.dot(preint_rel_rot, robust_match_rel_rot.T)
     geo_diff = np.linalg.norm(cv2.Rodrigues(diff_rot)[0].ravel())
 
-    # TODO - optionize the threshold below
-    if geo_diff < math.pi/8.0:
+    # TODO - optionize the 30 degree threshold below
+    if geo_diff < math.pi/12.0:
+        if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) > 10:
+            logger.debug("preint/robust geodesic {} - {} = {} within threshold".format(im1, im2, geo_diff))
         return True
     else:
         logger.debug("preint rel rot axis/angle = {}".format(_get_axis_angle(preint_rel_rot)))
@@ -273,13 +275,6 @@ def _shot_id_to_int(shot_id):
     """
     tokens = shot_id.split(".")
     return int(tokens[0])
-
-
-def get_min_thresh(config, im1, im2):
-    if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) < 5:
-        return config['robust_matching_min_match']
-    else:
-        return config['robust_matching_min_match_large']
 
 
 def match_words(f1, words1, f2, words2, config):

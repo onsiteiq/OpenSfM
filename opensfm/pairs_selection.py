@@ -174,6 +174,33 @@ def match_candidates_by_order(images_ref, images_cand, max_neighbors):
     return pairs
 
 
+def match_candidates_by_pdr(images_ref, images_cand, pdr_max_distance, data):
+    """Find candidate matching pairs by glocally aligned pdr input."""
+    if pdr_max_distance <= 0:
+        return set()
+
+    if data.pdr_shots_exist():
+        max_distance_meters = pdr_max_distance * 0.3048
+
+        # load pdr data and globally align with gps points
+        pdr_shots_dict = data.load_pdr_shots()
+
+        pairs = set()
+        for image_ref in images_ref:
+            for image_cand in images_cand:
+                if image_ref != image_cand:
+                    if image_ref in pdr_shots_dict and image_cand in pdr_shots_dict:
+                        pos_ref = pdr_shots_dict[image_ref][:3]
+                        pos_cand = pdr_shots_dict[image_cand][:3]
+                        distance = np.linalg.norm(np.array(pos_ref) - np.array(pos_cand))
+
+                        if distance < max_distance_meters:
+                            pairs.add(tuple(sorted((image_ref, image_cand))))
+        return pairs
+    else:
+        return set()
+
+
 def match_candidates_from_metadata(images_ref, images_cand, exifs, data):
     """Compute candidate matching pairs between between images_ref and images_cand
 
@@ -184,6 +211,7 @@ def match_candidates_from_metadata(images_ref, images_cand, exifs, data):
     gps_neighbors = data.config['matching_gps_neighbors']
     time_neighbors = data.config['matching_time_neighbors']
     order_neighbors = data.config['matching_order_neighbors']
+    pdr_max_distance = data.config['matching_pdr_distance']
     bow_neighbors = data.config['matching_bow_neighbors']
     bow_gps_distance = data.config['matching_bow_gps_distance']
     bow_gps_neighbors = data.config['matching_bow_gps_neighbors']
@@ -192,7 +220,7 @@ def match_candidates_from_metadata(images_ref, images_cand, exifs, data):
     if not data.reference_lla_exists():
         data.invent_reference_lla()
 
-    # TODO: fix this
+    # TODO: cren fix this
     #reference = data.load_reference()
     reference = None
 
@@ -205,11 +233,12 @@ def match_candidates_from_metadata(images_ref, images_cand, exifs, data):
 
     images_ref.sort()
 
-    if max_distance == gps_neighbors == time_neighbors == order_neighbors == bow_neighbors == 0:
+    if max_distance == gps_neighbors == time_neighbors == order_neighbors == pdr_max_distance == bow_neighbors == 0:
         # All pair selection strategies deactivated so we match all pairs
         d = set()
         t = set()
         o = set()
+        p = set()
         b = set()
         pairs = set([tuple(sorted([i, j])) for i in images_ref for j in images_cand])
     else:
@@ -217,11 +246,12 @@ def match_candidates_from_metadata(images_ref, images_cand, exifs, data):
                                          gps_neighbors, max_distance)
         t = match_candidates_by_time(images_ref, images_cand, exifs, time_neighbors)
         o = match_candidates_by_order(images_ref, images_cand, order_neighbors)
+        p = match_candidates_by_pdr(images_ref, images_cand, pdr_max_distance, data)
         b = match_candidates_with_bow(data, images_ref, images_cand,
                                       exifs, reference, bow_neighbors,
                                       bow_gps_distance, bow_gps_neighbors,
                                       bow_other_cameras)
-        pairs = d | t | o | b
+        pairs = d | t | o | p | b
 
     pairs = ordered_pairs(pairs, images_ref)
 
@@ -229,6 +259,7 @@ def match_candidates_from_metadata(images_ref, images_cand, exifs, data):
         "num_pairs_distance": len(d),
         "num_pairs_time": len(t),
         "num_pairs_order": len(o),
+        "num_pairs_pdr": len(p),
         "num_pairs_bow": len(b)
     }
     return pairs, report
