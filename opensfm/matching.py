@@ -70,7 +70,83 @@ def match_images(data, ref_images, cand_images):
         for im2, m in im1_matches.items():
             pairs[im1, im2] = m
 
+    # perform triplet filtering
+    start = timer()
+    logger.info("Filtering matches by triplet constraints")
+    matches = triplet_filter(matches, pairs)
+    logger.debug('Filtering finished in {} seconds.'.format(timer()-start))
+
+    for im1, im1_matches in matches:
+        ctx.data.save_matches(im1, im1_matches)
+
     return pairs, preport
+
+
+def triplet_filter(matches, pairs):
+    """
+    find triplets of the form (i,j,j+k), where i, j, j+k are image sequence numbers, and
+    difference between i and j is larger than some threshold, and k is some small integer.
+    we will check if the pairwise rotations satisfy triplet constraint. if not, the edge
+    (i,j) is removed. if we find an isolated (i,j), with no edges between (i,j+k) then we
+    will remove the edge (i,j) since it is likely an erroneous epiploar geometry
+    :param matches:
+    :return:
+    """
+    #TODO: cren optionize the following parameters
+    thresh = 20
+    k = 3
+
+    filtered_matches = []
+    for im1, im1_matches in matches:
+        im2s = sorted(im1_matches.keys())
+
+        if len(im2s) == 0:
+            continue
+
+        im2s_to_remove = set()
+        last_result_valid = False
+        for j in range(len(im2s)-1):
+            if _shot_id_to_int(im2s[j]) - _shot_id_to_int(im1) > thresh:
+                if _shot_id_to_int(im2s[j+1]) - _shot_id_to_int(im2s[j]) <= k:
+                    logger.debug("triplet {} {} {}".format(im1, im2s[j], im2s[j+1]))
+
+                    if (im2s[j], im2s[j+1]) in pairs:
+                        T0 = pairs[im1, im2s[j]][0]
+                        T1 = pairs[im1, im2s[j+1]][0]
+                        T2 = pairs[im2s[j], im2s[j+1]][0]
+
+                        if is_triplet_valid(T0, T1, T2):
+                            last_result_valid = True
+                            continue
+
+                if not last_result_valid:
+                    im2s_to_remove.add(im2s[j])
+
+                last_result_valid = False
+
+        # handle boundary condition
+        if not last_result_valid and _shot_id_to_int(im2s[-1]) - _shot_id_to_int(im1) > thresh:
+            im2s_to_remove.add(im2s[-1])
+
+        logger.debug("triplet edges of {} removing {}".format(im1, sorted(im2s_to_remove)))
+        for im2 in im2s_to_remove:
+            im1_matches.pop(im2)
+
+        filtered_matches.append((im1, im1_matches))
+
+    return filtered_matches
+
+
+def is_triplet_valid(T0, T1, T2):
+    r0 = T0[:, :3]
+    r1 = T1[:, :3]
+    r2 = T2[:, :3]
+
+    # TODO - cren optionize the degree threshold below
+    if np.linalg.norm(cv2.Rodrigues(r2.dot(r1.T.dot(r0)))[0].ravel()) < math.pi/12:
+        return True
+    else:
+        return False
 
 
 class Context:
@@ -113,14 +189,16 @@ def match_unwrap_args(args):
         f2_filtered = f2 if m2 is None else f2[m2]
         i2 = feature_loader.load_features_index(ctx.data, im2, f2_filtered) if need_index else None
 
-        im1_matches[im2] = match(im1, im2, camera1, camera2,
-                                 p1, p2, f1, f2, w1, w2,
-                                 i1, i2, m1, m2, ctx.data, ctx.pdr_shots_dict)
+        T, rmatches = match(im1, im2, camera1, camera2,
+                           p1, p2, f1, f2, w1, w2,
+                           i1, i2, m1, m2, ctx.data, ctx.pdr_shots_dict)
 
-    num_matches = sum(1 for m in im1_matches.values() if len(m) > 0)
+        if len(rmatches) > 0:
+            im1_matches[im2] = (T, rmatches)
+
+    num_matches = sum(1 for m in im1_matches.values() if len(m[1]) > 0)
     logger.debug('Image {} matches: {} out of {}'.format(
         im1, num_matches, len(candidates)))
-    ctx.data.save_matches(im1, im1_matches)
     return im1, im1_matches
 
 
@@ -139,7 +217,7 @@ def match(im1, im2, camera1, camera2,
     Compute 2D + robust geometric matching (either E or F-matrix)
     """
     if p1 is None or p2 is None:
-        return []
+        return None, np.array([])
 
     # Apply mask to features if any
     time_start = timer()
@@ -189,7 +267,7 @@ def match(im1, im2, camera1, camera2,
         logger.debug(
             'Matching {} and {}.  Matcher: {} T-desc: {:1.3f} '
             'Matches: FAILED'.format(im1, im2, matcher_type, time_2d_matching))
-        return []
+        return None, np.array([])
 
     # robust matching
     T, rmatches = robust_match(p1, p2, camera1, camera2, matches, config)
@@ -205,17 +283,18 @@ def match(im1, im2, camera1, camera2,
                 im1, im2, matcher_type,
                 time_2d_matching, time_robust_matching, time_total,
                 len(matches)))
-        return []
+        return None, np.array([])
 
-    if T.any() and not rotation_close_to_preint(im1, im2, T, pdr_shots_dict):
-        logger.debug(
-            'Matching {} and {}.  Matcher: {} '
-            'T-desc: {:1.3f} T-robust: {:1.3f} T-total: {:1.3f} '
-            'Matches: {} Robust: {} Preint check: FAILED'.format(
-                im1, im2, matcher_type,
-                time_2d_matching, time_robust_matching, time_total,
-                len(matches), len(rmatches)))
-        return []
+    if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) < 20:
+        if not rotation_close_to_preint(im1, im2, T, pdr_shots_dict):
+            logger.debug(
+                'Matching {} and {}.  Matcher: {} '
+                'T-desc: {:1.3f} T-robust: {:1.3f} T-total: {:1.3f} '
+                'Matches: {} Robust: {} Preint check: FAILED'.format(
+                    im1, im2, matcher_type,
+                    time_2d_matching, time_robust_matching, time_total,
+                    len(matches), len(rmatches)))
+            return None, np.array([])
 
     logger.debug(
         'Matching {} and {}.  Matcher: {} '
@@ -225,7 +304,7 @@ def match(im1, im2, camera1, camera2,
             time_2d_matching, time_robust_matching, time_total,
             len(matches), len(rmatches), robust_matching_min_match))
 
-    return np.array(rmatches, dtype=int)
+    return T, np.array(rmatches, dtype=int)
 
 
 def rotation_close_to_preint(im1, im2, T, pdr_shots_dict):
@@ -250,15 +329,14 @@ def rotation_close_to_preint(im1, im2, T, pdr_shots_dict):
     diff_rot = np.dot(preint_rel_rot, robust_match_rel_rot.T)
     geo_diff = np.linalg.norm(cv2.Rodrigues(diff_rot)[0].ravel())
 
-    # TODO - optionize the 30 degree threshold below
-    if geo_diff < math.pi/12.0:
-        if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) > 10:
-            logger.debug("preint/robust geodesic {} - {} = {} within threshold".format(im1, im2, geo_diff))
+    # TODO - cren optionize the degree threshold below
+    if geo_diff < math.pi/8.0:
+        logger.debug("{} {} preint/robust geodesic {} within threshold".format(im1, im2, geo_diff))
         return True
     else:
-        logger.debug("preint rel rot axis/angle = {}".format(_get_axis_angle(preint_rel_rot)))
-        logger.debug("robust rel rot axis/angle = {}".format(_get_axis_angle(robust_match_rel_rot)))
-        logger.debug("preint/robust geodesic {} exceeds threshold".format(geo_diff))
+        #logger.debug("preint rel rot axis/angle = {}".format(_get_axis_angle(preint_rel_rot)))
+        #logger.debug("robust rel rot axis/angle = {}".format(_get_axis_angle(robust_match_rel_rot)))
+        logger.debug("{} {} preint/robust geodesic {} exceeds threshold".format(im1, im2, geo_diff))
         return False
 
 

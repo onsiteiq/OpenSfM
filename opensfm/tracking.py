@@ -39,7 +39,7 @@ def load_matches(dataset, images):
             continue
         for im2 in im1_matches:
             if im2 in images:
-                matches[im1, im2] = im1_matches[im2]
+                matches[im1, im2] = im1_matches[im2][1]
     return matches
 
 
