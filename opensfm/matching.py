@@ -211,7 +211,7 @@ def match(im1, im2, camera1, camera2,
         return None, np.array([])
 
     # TODO: cren optionize pre-integration check
-    preint_check = False
+    preint_check = True
     if preint_check:
         if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) < 5:
             if not rotation_close_to_preint(im1, im2, T, pdr_shots_dict):
@@ -258,7 +258,7 @@ def rotation_close_to_preint(im1, im2, T, pdr_shots_dict):
     geo_diff = np.linalg.norm(cv2.Rodrigues(diff_rot)[0].ravel())
 
     # TODO - cren optionize the degree threshold below
-    if geo_diff < math.pi/3.0:
+    if geo_diff < math.pi/6.0:
         logger.debug("{} {} preint/robust geodesic {} within threshold".format(im1, im2, geo_diff))
         return True
     else:
