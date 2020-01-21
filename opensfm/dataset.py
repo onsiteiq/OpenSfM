@@ -521,13 +521,28 @@ class DataSet(object):
 
     def load_matches(self, image):
         with gzip.open(self._matches_file(image), 'rb') as fin:
-            matches = pickle.load(fin)
+            m = pickle.load(fin)
+
+        matches = {}
+        for image, image_matches in m.items():
+            matches[image] = image_matches[1]
+
         return matches
 
     def save_matches(self, image, matches):
         io.mkdir_p(self._matches_path())
         with gzip.open(self._matches_file(image), 'wb') as fout:
             pickle.dump(matches, fout)
+
+    def load_transforms(self, image):
+        with gzip.open(self._matches_file(image), 'rb') as fin:
+            m = pickle.load(fin)
+
+        transforms = {}
+        for image, image_transforms in m.items():
+            transforms[image] = image_transforms[0]
+
+        return transforms
 
     def find_matches(self, im1, im2):
         if self.matches_exists(im1):

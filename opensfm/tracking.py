@@ -1,5 +1,7 @@
 import logging
 import sys
+import cv2
+import math
 
 import numpy as np
 import networkx as nx
@@ -39,8 +41,201 @@ def load_matches(dataset, images):
             continue
         for im2 in im1_matches:
             if im2 in images:
-                matches[im1, im2] = im1_matches[im2][1]
+                matches[im1, im2] = im1_matches[im2]
+
     return matches
+
+
+def load_pairwise_transforms(dataset, images):
+    pairs = {}
+    for im1 in images:
+        try:
+            im1_transforms = dataset.load_transforms(im1)
+        except IOError:
+            continue
+        for im2 in im1_transforms:
+            if im2 in images:
+                pairs[im1, im2] = im1_transforms[im2]
+
+    return pairs
+
+
+def triplet_filter(data, images, matches, pairs):
+    cnt_good = {}
+    cnt_bad = {}
+
+    for (i, j, k) in combinations(images, 3):
+        if (i, j) in pairs:
+            Rij = pairs[i, j][:, :3]
+        elif (j, i) in pairs:
+            Rij = pairs[j, i][:, :3].T
+        else:
+            continue
+
+        if (j, k) in pairs:
+            Rjk = pairs[j, k][:, :3]
+        elif (k, j) in pairs:
+            Rjk = pairs[k, j][:, :3].T
+        else:
+            continue
+
+        if (k, i) in pairs:
+            Rki = pairs[k, i][:, :3]
+        elif (i, k) in pairs:
+            Rki = pairs[i, k][:, :3].T
+        else:
+            continue
+
+        if is_triplet_valid(Rij, Rjk, Rki):
+            cnt = cnt_good
+        else:
+            cnt = cnt_bad
+
+        incr_cnt(pairs, cnt, i, j)
+        incr_cnt(pairs, cnt, j, k)
+        incr_cnt(pairs, cnt, k, i)
+
+    # TODO: cren optionize the gap threshold below
+    gap = 2
+    edges_to_remove = []
+    for (i, j) in matches:
+        if abs(_shot_id_to_int(i) - _shot_id_to_int(j)) > gap:
+            good = 0
+            bad = 0
+            if (i, j) in cnt_good:
+                good = cnt_good[i, j]
+
+            if (i, j) in cnt_bad:
+                bad = cnt_bad[i, j]
+
+            if (good == 0 and bad == 0) or (bad/(bad+good)) > 0.9:
+                edges_to_remove.append((i, j))
+
+    for edge in edges_to_remove:
+        logger.debug("removing edge {} -{}".format(edge[0], edge[1]))
+        matches.pop(edge)
+
+    # testing
+    testing_edges_to_remove = [
+        ('0000000090.jpg', '0000000170.jpg'),
+        ('0000000090.jpg', '0000000170.jpg'),
+        ('0000000090.jpg', '0000000170.jpg'),
+        ('0000000090.jpg', '0000000170.jpg')]
+    for edge in testing_edges_to_remove:
+        if edge in matches:
+            matches.pop(edge)
+        elif (edge[1], edge[0]) in matches:
+            matches.pop((edge[1], edge[0]))
+
+    # debugging
+    edges = defaultdict(list)
+    for i in images:
+        for (im1, im2) in matches:
+            if i == im1:
+                edges[i].append(im2)
+            elif i == im2:
+                edges[i].append(im1)
+
+    for i in sorted(edges.keys()):
+        logger.debug("{} has edges with {}".format(i, sorted(edges[i])))
+
+    return matches
+
+
+def incr_cnt(pairs, cnt, i, j):
+    if (i, j) in pairs:
+        if (i, j) in cnt:
+            cnt[i, j] = cnt[i, j] + 1
+        else:
+            cnt[i, j] = 1
+    else:
+        if (j, i) in cnt:
+            cnt[j, i] = cnt[j, i] + 1
+        else:
+            cnt[j, i] = 1
+
+
+def is_triplet_valid(R0, R1, R2):
+    # TODO - cren optionize the degree threshold below
+    if np.linalg.norm(cv2.Rodrigues(R2.dot(R1.dot(R0)))[0].ravel()) < math.pi/72:
+        return True
+    else:
+        return False
+
+
+def triplet_filter_2(matches, pairs):
+    """
+    find triplets of the form (i,j,j+k), where i, j, j+k are image sequence numbers, and
+    difference between i and j is larger than some threshold, and k is some small integer.
+    we will check if the pairwise rotations satisfy triplet constraint. if not, the edge
+    (i,j) is removed. if we find an isolated (i,j), with no edges between (i,j+k) then we
+    will remove the edge (i,j) since it is likely an erroneous epiploar geometry
+    :param matches:
+    :return:
+    """
+    #TODO: cren optionize the following parameters
+    thresh = 20
+    k = 3
+
+    filtered_matches = []
+    for im1, im1_matches in matches:
+        im2s = sorted(im1_matches.keys())
+
+        if len(im2s) == 0:
+            continue
+
+        im2s_to_remove = set()
+        last_result_valid = False
+        for j in range(len(im2s)-1):
+            if _shot_id_to_int(im2s[j]) - _shot_id_to_int(im1) > thresh:
+                if _shot_id_to_int(im2s[j+1]) - _shot_id_to_int(im2s[j]) <= k:
+                    logger.debug("triplet {} {} {}".format(im1, im2s[j], im2s[j+1]))
+
+                    if (im2s[j], im2s[j+1]) in pairs:
+                        T0 = pairs[im1, im2s[j]][0]
+                        T1 = pairs[im1, im2s[j+1]][0]
+                        T2 = pairs[im2s[j], im2s[j+1]][0]
+
+                        if is_triplet_valid_2(T0, T1, T2):
+                            last_result_valid = True
+                            continue
+
+                if not last_result_valid:
+                    im2s_to_remove.add(im2s[j])
+
+                last_result_valid = False
+
+        # handle boundary condition
+        if not last_result_valid and _shot_id_to_int(im2s[-1]) - _shot_id_to_int(im1) > thresh:
+            im2s_to_remove.add(im2s[-1])
+
+        logger.debug("triplet edges of {} removing {}".format(im1, sorted(im2s_to_remove)))
+        for im2 in im2s_to_remove:
+            im1_matches.pop(im2)
+
+        filtered_matches.append((im1, im1_matches))
+
+    return filtered_matches
+
+
+def is_triplet_valid_2(T0, T1, T2):
+    r0 = T0[:, :3]
+    r1 = T1[:, :3]
+    r2 = T2[:, :3]
+
+    # TODO - cren optionize the degree threshold below
+    if np.linalg.norm(cv2.Rodrigues(r2.dot(r1.T.dot(r0)))[0].ravel()) < math.pi/12:
+        return True
+    else:
+        return False
+
+
+def _shot_id_to_int(shot_id):
+    """
+    Returns: shot id to integer
+    """
+    tokens = shot_id.split(".")
+    return int(tokens[0])
 
 
 def create_tracks_graph(features, colors, matches, config):

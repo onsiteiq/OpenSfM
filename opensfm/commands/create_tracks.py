@@ -25,6 +25,9 @@ class Command:
         features_end = timer()
         matches = tracking.load_matches(data, data.images())
         matches_end = timer()
+        pairs = tracking.load_pairwise_transforms(data, data.images())
+        matches = tracking.triplet_filter(data, data.images(), matches, pairs)
+        triplet_end = timer()
         graph = tracking.create_tracks_graph(features, colors, matches,
                                              data.config)
         tracks_end = timer()
@@ -38,10 +41,11 @@ class Command:
                           graph,
                           features_end - start,
                           matches_end - features_end,
-                          tracks_end - matches_end)
+                          triplet_end - matches_end,
+                          tracks_end - triplet_end)
 
     def write_report(self, data, graph,
-                     features_time, matches_time, tracks_time):
+                     features_time, matches_time, triplet_time, tracks_time):
         tracks, images = tracking.tracks_and_images(graph)
         image_graph = bipartite.weighted_projected_graph(graph, images)
         view_graph = []
@@ -55,6 +59,7 @@ class Command:
             "wall_times": {
                 "load_features": features_time,
                 "load_matches": matches_time,
+                "filter_matches": triplet_time,
                 "compute_tracks": tracks_time,
             },
             "wall_time": features_time + matches_time + tracks_time,
