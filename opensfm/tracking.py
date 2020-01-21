@@ -115,31 +115,37 @@ def triplet_filter(data, images, matches, pairs):
         logger.debug("removing edge {} -{}".format(edge[0], edge[1]))
         matches.pop(edge)
 
+    '''
     # testing
     testing_edges_to_remove = [
-        ('0000000090.jpg', '0000000170.jpg'),
-        ('0000000090.jpg', '0000000170.jpg'),
-        ('0000000090.jpg', '0000000170.jpg'),
-        ('0000000090.jpg', '0000000170.jpg')]
+        ('0000000090.jpg', '0000000171.jpg'),
+        ('0000000090.jpg', '0000000172.jpg'),
+        ('0000000090.jpg', '0000000173.jpg')]
     for edge in testing_edges_to_remove:
         if edge in matches:
             matches.pop(edge)
         elif (edge[1], edge[0]) in matches:
             matches.pop((edge[1], edge[0]))
-
-    # debugging
-    edges = defaultdict(list)
-    for i in images:
-        for (im1, im2) in matches:
-            if i == im1:
-                edges[i].append(im2)
-            elif i == im2:
-                edges[i].append(im1)
-
-    for i in sorted(edges.keys()):
-        logger.debug("{} has edges with {}".format(i, sorted(edges[i])))
+    '''
 
     return matches
+
+
+def quad_filter(data, images, matches, pairs):
+    """
+    if there’s an edge between (i, j) where i and j are sequence numbers far apart, check that
+    there also exists an edge (i plus/minus k, j plus/minus k), where k is a small integer,
+    and that the loop formed by the four nodes pass the multiplying-to-identity check.
+    :param data:
+    :param images:
+    :param matches:
+    :param pairs:
+    :return:
+    """
+    gap = 20
+    for (i, j) in matches:
+        if abs(_shot_id_to_int(i) - _shot_id_to_int(j)) > gap:
+            return matches
 
 
 def incr_cnt(pairs, cnt, i, j):
