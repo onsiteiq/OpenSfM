@@ -135,7 +135,7 @@ def quad_filter(data, images, matches, pairs):
     # TODO: cren optionize the following thresholds
     gap = 20
     edges_to_remove = []
-    loop_candidates = []
+    valid_quads = []
     for (im1, im2) in matches:
         if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) > gap:
             valid = False
@@ -146,9 +146,8 @@ def quad_filter(data, images, matches, pairs):
                 Rkl = get_transform(k, l, pairs)
                 Rli = get_transform(l, i, pairs)
                 if is_quad_valid(Rij, Rjk, Rkl, Rli):
-                    loop_candidates.append((i, j, k, l))
+                    valid_quads.append((i, j, k, l))
                     valid = True
-                    break
 
             if not valid:
                 edges_to_remove.append((im1, im2))
@@ -157,11 +156,107 @@ def quad_filter(data, images, matches, pairs):
         logger.debug("quad removing edge {} -{}".format(edge[0], edge[1]))
         matches.pop(edge)
 
-    for cand in sorted(loop_candidates):
-        logger.debug("loop candidate {}".format(cand))
+    for quad in sorted(valid_quads):
+        logger.debug("valid quads {}".format(quad))
+
+    loop_candidates = merge_quads(valid_quads)
+    for cand in sorted(loop_candidates, key=lambda cand: cand.get_center_0()):
+        logger.debug("loop candidate center {:4.1f}-{:4.1f}, members {} - {}".format(
+            cand.get_center_0(), cand.get_center_1(),
+            sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
 
     logger.debug("quad filtering end")
     return matches
+
+
+def merge_quads(valid_quads):
+    # merge similar quads into loop candidates
+    loop_candidates = []
+    for quad in valid_quads:
+        added = False
+        for cand in loop_candidates:
+            if cand.belong(quad):
+                cand.add(quad)
+                added = True
+                break
+
+        if not added:
+            new_cand = LoopCandidate()
+            new_cand.add(quad)
+            loop_candidates.append(new_cand)
+
+    # merge loop candidates that are close together
+    while True:
+        can_merge = False
+        for cand1, cand2 in combinations(loop_candidates, 2):
+            if cand1.combine(cand2):
+                loop_candidates.remove(cand2)
+                can_merge = True
+                break
+
+        if not can_merge:
+            break
+
+    return loop_candidates
+
+
+class LoopCandidate(object):
+    """
+    Loop candidate
+    """
+
+    def __init__(self):
+        self.center_0 = -1
+        self.center_1 = -1
+        self.ids_0 = set()
+        self.ids_1 = set()
+
+    def add(self, quad):
+        self.ids_0.add(quad[0])
+        self.ids_0.add(quad[1])
+        self.ids_1.add(quad[2])
+        self.ids_1.add(quad[3])
+
+        # update loop center
+        self.center_0 = self.get_average(self.ids_0)
+        self.center_1 = self.get_average(self.ids_1)
+
+    def get_average(self, ids):
+        total = 0
+        for id in ids:
+            total += _shot_id_to_int(id)
+        return total/len(ids)
+
+    def belong(self, quad):
+        # TODO: cren optionize the threshold below
+        d = 5
+        return abs(self.center_0 - _shot_id_to_int(quad[0])) < d and \
+               abs(self.center_1 - _shot_id_to_int(quad[2])) < d
+
+    def combine(self, another):
+        if abs(self.get_center_0() - another.get_center_0()) < 5 and \
+           abs(self.get_center_1() - another.get_center_1()) < 5:
+            self.ids_0 = self.ids_0 | another.get_ids_0()
+            self.ids_1 = self.ids_1 | another.get_ids_1()
+
+            # update loop center
+            self.center_0 = self.get_average(self.ids_0)
+            self.center_1 = self.get_average(self.ids_1)
+            return True
+        else:
+            return False
+
+    def get_center_0(self):
+        return self.center_0
+
+    def get_center_1(self):
+        return self.center_1
+
+    def get_ids_0(self):
+        return self.ids_0
+
+    def get_ids_1(self):
+        return self.ids_1
 
 
 def get_quads(im1, im2, matches):
@@ -180,8 +275,8 @@ def get_quads(im1, im2, matches):
 
             im1_neighbor = _int_to_shot_id(i)
             im2_neighbor = _int_to_shot_id(j)
-            if all_edge_exists([im1, im2, im1_neighbor, im2_neighbor], matches):
-                quads.append([im1, im2, im1_neighbor, im2_neighbor])
+            if all_edge_exists([im1, im1_neighbor, im2, im2_neighbor], matches):
+                quads.append(sorted((im1, im1_neighbor, im2, im2_neighbor)))
 
     return quads
 
@@ -209,13 +304,13 @@ def get_transform(i, j, pairs):
     return R
 
 
-def is_edge(im1, im2, matches):
+def edge_exists(im1, im2, matches):
     return (im1, im2) in matches or (im2, im1) in matches
 
 
 def all_edge_exists(node_list, matches):
     for im1, im2 in combinations(node_list, 2):
-        if not is_edge(im1, im2, matches):
+        if not edge_exists(im1, im2, matches):
             return False
 
     return True
