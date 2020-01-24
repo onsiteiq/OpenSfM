@@ -63,7 +63,7 @@ def match_candidates_by_distance(images_ref, images_cand, exifs, reference,
 def match_candidates_with_bow(data, images_ref, images_cand,
                               exifs, reference, max_neighbors,
                               max_gps_distance, max_gps_neighbors,
-                              enforce_other_cameras):
+                              enforce_other_cameras, order_neighbors):
     """Find candidate matching pairs using BoW-based distance.
 
     If max_gps_distance > 0, then we use first restrain a set of
@@ -77,6 +77,7 @@ def match_candidates_with_bow(data, images_ref, images_cand,
     if max_neighbors <= 0:
         return set()
 
+    '''
     # preempt candidates images using GPS
     preempted_cand = {im: images_cand for im in images_ref}
     if max_gps_distance > 0 or max_gps_neighbors > 0:
@@ -88,6 +89,21 @@ def match_candidates_with_bow(data, images_ref, images_cand,
         for p in gps_pairs:
             preempted_cand[p[0]].append(p[1])
             preempted_cand[p[1]].append(p[0])
+    '''
+
+    # restrict bow searching to 150 index neighbors
+    preempted_cand = defaultdict(list)
+    order_loop = 200
+    n = (order_loop + 1) // 2
+    m = (order_neighbors + 1) // 2
+
+    for i, image_ref in enumerate(images_ref):
+        a = max(0, i - n)
+        b = min(len(images_cand), i + n)
+        c = max(0, i - m)
+        d = min(len(images_cand), i + m)
+        for j in list(range(a, c)) + list(range(d, b)):
+            preempted_cand[image_ref].append(images_cand[j])
 
     # reduce sets of images from which to load words (RAM saver)
     need_load = set(preempted_cand.keys())
@@ -250,7 +266,7 @@ def match_candidates_from_metadata(images_ref, images_cand, exifs, data):
         b = match_candidates_with_bow(data, images_ref, images_cand,
                                       exifs, reference, bow_neighbors,
                                       bow_gps_distance, bow_gps_neighbors,
-                                      bow_other_cameras)
+                                      bow_other_cameras, order_neighbors)
         pairs = d | t | o | p | b
 
     pairs = ordered_pairs(pairs, images_ref)

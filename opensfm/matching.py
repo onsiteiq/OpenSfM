@@ -47,6 +47,15 @@ def match_images(data, ref_images, cand_images):
     for im1, im2 in pairs:
         per_image[im1].append(im2)
 
+    for im in ref_images:
+        match_against = []
+        for im1, im2 in pairs:
+            if im == im1:
+                match_against.append(im2)
+            elif im == im2:
+                match_against.append(im1)
+        logger.info("Matching {} to: {}".format(im, sorted(match_against)))
+
     ctx = Context()
     ctx.data = data
     ctx.cameras = ctx.data.load_camera_models()
@@ -211,7 +220,7 @@ def match(im1, im2, camera1, camera2,
         return None, np.array([])
 
     # TODO: cren optionize pre-integration check
-    preint_check = True
+    preint_check = False
     if preint_check:
         if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) < 5:
             if not rotation_close_to_preint(im1, im2, T, pdr_shots_dict):

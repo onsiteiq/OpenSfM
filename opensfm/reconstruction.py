@@ -1787,11 +1787,13 @@ def incremental_reconstruction_sequential(data, graph):
 
     common_tracks = tracking.all_common_tracks(graph, tracks)
 
+    '''
     # debug - print # of common tracks between adjacent images
     for (im1, im2), (tracks, p1, p2) in iteritems(common_tracks):
         if _shot_id_to_int(im2) - _shot_id_to_int(im1) == 1:
-            logger.info("({}, {}, #={}".format(im1, im2, len(tracks)))
-
+            logger.info("{}, {}, #={}".format(im1, im2, len(tracks)))
+    '''
+    
     reconstructions = []
     report['reconstructions'] = []
     image_groups = []

@@ -75,22 +75,24 @@ def triplet_filter(data, images, matches, pairs):
     cnt_good = {}
     cnt_bad = {}
 
-    for (i, j, k) in combinations(images, 3):
-        Rij = get_transform(i, j, pairs)
-        Rjk = get_transform(j, k, pairs)
-        Rki = get_transform(k, i, pairs)
+    for (i, j) in pairs:
+        for k in images:
+            if i != k and j != k:
+                Rij = get_transform(i, j, pairs)
+                Rjk = get_transform(j, k, pairs)
+                Rki = get_transform(k, i, pairs)
 
-        if Rij.size == 0 or Rjk.size == 0 or Rki.size == 0:
-            continue
+                if Rij.size == 0 or Rjk.size == 0 or Rki.size == 0:
+                    continue
 
-        if is_triplet_valid(Rij, Rjk, Rki):
-            cnt = cnt_good
-        else:
-            cnt = cnt_bad
+                if is_triplet_valid(Rij, Rjk, Rki):
+                    cnt = cnt_good
+                else:
+                    cnt = cnt_bad
 
-        incr_cnt(pairs, cnt, i, j)
-        incr_cnt(pairs, cnt, j, k)
-        incr_cnt(pairs, cnt, k, i)
+                incr_cnt(pairs, cnt, i, j)
+                incr_cnt(pairs, cnt, j, k)
+                incr_cnt(pairs, cnt, k, i)
 
     # we will not remove any edge with sequence number difference less than gap
     # TODO: cren optionize the gap threshold below
@@ -133,6 +135,7 @@ def quad_filter(data, images, matches, pairs):
     # TODO: cren optionize the following thresholds
     gap = 20
     edges_to_remove = []
+    loop_candidates = []
     for (im1, im2) in matches:
         if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) > gap:
             valid = False
@@ -143,7 +146,7 @@ def quad_filter(data, images, matches, pairs):
                 Rkl = get_transform(k, l, pairs)
                 Rli = get_transform(l, i, pairs)
                 if is_quad_valid(Rij, Rjk, Rkl, Rli):
-                    logger.debug("loop candidate found {}-{}-{}-{}".format(i, j, k, l))
+                    loop_candidates.append((i, j, k, l))
                     valid = True
                     break
 
@@ -153,6 +156,9 @@ def quad_filter(data, images, matches, pairs):
     for edge in edges_to_remove:
         logger.debug("quad removing edge {} -{}".format(edge[0], edge[1]))
         matches.pop(edge)
+
+    for cand in sorted(loop_candidates):
+        logger.debug("loop candidate {}".format(cand))
 
     logger.debug("quad filtering end")
     return matches
