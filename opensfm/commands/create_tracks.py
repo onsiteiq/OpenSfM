@@ -29,7 +29,9 @@ class Command:
         pairs = tracking.load_pairwise_transforms(data, data.images())
         matches = tracking.triplet_filter(data, data.images(), matches, pairs)
         matches = tracking.quad_filter(data, data.images(), matches, pairs)
+        filter_end = timer()
 
+        '''
         # debugging
         edges = defaultdict(list)
         for i in data.images():
@@ -40,8 +42,8 @@ class Command:
                     edges[i].append(im1)
         for i in sorted(edges.keys()):
             logger.debug("{} has edges with {}".format(i, sorted(edges[i])))
+        '''
 
-        filter_end = timer()
         graph = tracking.create_tracks_graph(features, colors, matches,
                                              data.config)
         tracks_end = timer()

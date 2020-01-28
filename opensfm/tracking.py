@@ -96,7 +96,7 @@ def triplet_filter(data, images, matches, pairs):
 
     # we will not remove any edge with sequence number difference less than gap
     # TODO: cren optionize the gap threshold below
-    gap = 5
+    gap = 0
     edges_to_remove = []
     for (i, j) in matches:
         if abs(_shot_id_to_int(i) - _shot_id_to_int(j)) > gap:
@@ -108,8 +108,12 @@ def triplet_filter(data, images, matches, pairs):
             if (i, j) in cnt_bad:
                 bad = cnt_bad[i, j]
 
+            # TODO: cren optionize the threshold below
             if (good == 0 and bad == 0) or (bad/(bad+good)) > 0.9:
                 edges_to_remove.append((i, j))
+                diff = abs(_shot_id_to_int(i) - _shot_id_to_int(j))
+                if diff < 5:
+                    logger.debug("interesting {} {} diff={}, good={}, bad={}".format(i, j, diff, good, bad))
 
     for edge in edges_to_remove:
         logger.debug("triplet removing edge {} -{}".format(edge[0], edge[1]))
@@ -160,13 +164,62 @@ def quad_filter(data, images, matches, pairs):
         logger.debug("valid quads {}".format(quad))
 
     loop_candidates = merge_quads(valid_quads)
+    '''
     for cand in sorted(loop_candidates, key=lambda cand: cand.get_center_0()):
         logger.debug("loop candidate center {:4.1f}-{:4.1f}, members {} - {}".format(
             cand.get_center_0(), cand.get_center_1(),
             sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
+    '''
+
+    for cand in sorted(loop_candidates, key=lambda cand: cand.get_center_0()):
+        overlap_ratios = []
+        for im1, im2 in combinations(cand.get_ids_0(), 2):
+            for im3 in cand.get_ids_1():
+                if all_edge_exists([im1, im2, im3], matches):
+                    overlap_ratios.append(get_overlap_ratio(im1, im2, im3, matches))
+
+        logger.debug("loop candidate center {:4.1f}-{:4.1f}, average overlap {}, members {} - {}".format(
+            cand.get_center_0(), cand.get_center_1(), sum(overlap_ratios) / len(overlap_ratios),
+            sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
 
     logger.debug("quad filtering end")
     return matches
+
+
+def get_overlap_ratio(im1, im2, im3, matches):
+    triplet_matches = {}
+    if (im1, im2) in matches:
+        triplet_matches[im1, im2] = matches[im1, im2]
+        base_cnt = len(triplet_matches[im1, im2])
+    else:
+        triplet_matches[im2, im1] = matches[im2, im1]
+        base_cnt = len(triplet_matches[im2, im1])
+
+    if (im1, im3) in matches:
+        triplet_matches[im1, im3] = matches[im1, im3]
+    else:
+        triplet_matches[im3, im1] = matches[im3, im1]
+
+    if (im2, im3) in matches:
+        triplet_matches[im2, im3] = matches[im2, im3]
+    else:
+        triplet_matches[im3, im2] = matches[im3, im2]
+
+    uf = UnionFind()
+    for im1, im2 in triplet_matches:
+        for f1, f2 in triplet_matches[im1, im2]:
+            uf.union((im1, f1), (im2, f2))
+
+    sets = {}
+    for i in uf:
+        p = uf[i]
+        if p in sets:
+            sets[p].append(i)
+        else:
+            sets[p] = [i]
+
+    tracks = [t for t in sets.values() if _good_track(t, 3)]
+    return len(tracks)/base_cnt
 
 
 def merge_quads(valid_quads):
@@ -175,7 +228,7 @@ def merge_quads(valid_quads):
     for quad in valid_quads:
         added = False
         for cand in loop_candidates:
-            if cand.belong(quad):
+            if cand.is_close_to(quad):
                 cand.add(quad)
                 added = True
                 break
@@ -227,7 +280,7 @@ class LoopCandidate(object):
             total += _shot_id_to_int(id)
         return total/len(ids)
 
-    def belong(self, quad):
+    def is_close_to(self, quad):
         # TODO: cren optionize the threshold below
         d = 5
         return abs(self.center_0 - _shot_id_to_int(quad[0])) < d and \
@@ -318,7 +371,7 @@ def all_edge_exists(node_list, matches):
 
 def is_triplet_valid(R0, R1, R2):
     # TODO - cren optionize the degree threshold below
-    if np.linalg.norm(cv2.Rodrigues(R2.dot(R1.dot(R0)))[0].ravel()) < math.pi/72:
+    if np.linalg.norm(cv2.Rodrigues(R2.dot(R1.dot(R0)))[0].ravel()) < math.pi/12:
         return True
     else:
         return False
