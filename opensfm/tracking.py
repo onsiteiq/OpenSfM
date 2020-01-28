@@ -94,28 +94,29 @@ def triplet_filter(data, images, matches, pairs):
                 incr_cnt(pairs, cnt, j, k)
                 incr_cnt(pairs, cnt, k, i)
 
-    # we will not remove any edge with sequence number difference less than gap
-    # TODO: cren optionize the gap threshold below
-    gap = 0
     edges_to_remove = []
     for (i, j) in matches:
-        if abs(_shot_id_to_int(i) - _shot_id_to_int(j)) > gap:
-            good = 0
-            bad = 0
-            if (i, j) in cnt_good:
-                good = cnt_good[i, j]
+        good = 0
+        bad = 0
+        if (i, j) in cnt_good:
+            good = cnt_good[i, j]
 
-            if (i, j) in cnt_bad:
-                bad = cnt_bad[i, j]
+        if (i, j) in cnt_bad:
+            bad = cnt_bad[i, j]
 
-            # TODO: cren optionize the threshold below
-            if (good == 0 and bad == 0) or (bad/(bad+good)) > 0.9:
+        # we will not remove any edge with sequence number difference less than 3
+        # unless there's strong indication.
+        # TODO: cren optionize the gap threshold below
+        gap = abs(_shot_id_to_int(i) - _shot_id_to_int(j))
+        if gap < 3:
+            if (bad + good) >= 3 and (bad / (bad + good)) > 0.9:
                 edges_to_remove.append((i, j))
-                diff = abs(_shot_id_to_int(i) - _shot_id_to_int(j))
-                if diff < 5:
-                    logger.debug("interesting {} {} diff={}, good={}, bad={}".format(i, j, diff, good, bad))
+                logger.debug("interesting {} {} gap={}, good={}, bad={}".format(i, j, gap, good, bad))
+        else:
+            if (bad == 0 and good == 0) or (bad/(bad+good)) > 0.9:
+                edges_to_remove.append((i, j))
 
-    for edge in edges_to_remove:
+    for edge in sorted(edges_to_remove):
         logger.debug("triplet removing edge {} -{}".format(edge[0], edge[1]))
         matches.pop(edge)
 
@@ -137,7 +138,7 @@ def quad_filter(data, images, matches, pairs):
     """
     logger.debug("quad filtering start")
     # TODO: cren optionize the following thresholds
-    gap = 20
+    gap = 10
     edges_to_remove = []
     valid_quads = []
     for (im1, im2) in matches:
@@ -156,54 +157,68 @@ def quad_filter(data, images, matches, pairs):
             if not valid:
                 edges_to_remove.append((im1, im2))
 
-    for edge in edges_to_remove:
+    for edge in sorted(edges_to_remove):
         logger.debug("quad removing edge {} -{}".format(edge[0], edge[1]))
         matches.pop(edge)
 
-    for quad in sorted(valid_quads):
-        logger.debug("valid quads {}".format(quad))
+    logger.debug("quad filtering end, removed {} edges, {:2.1f}% of all".
+                 format(len(edges_to_remove), 100*len(edges_to_remove)/len(pairs)))
 
     loop_candidates = merge_quads(valid_quads)
-    '''
+
     for cand in sorted(loop_candidates, key=lambda cand: cand.get_center_0()):
-        logger.debug("loop candidate center {:4.1f}-{:4.1f}, members {} - {}".format(
+        common_ratios_0 = []
+        for n1, n2 in combinations(cand.get_ids_0(), 2):
+            for m in cand.get_ids_1():
+                if all_edge_exists([n1, n2, m], matches):
+                    common_ratios_0.append(get_common_ratio(n1, n2, m, matches))
+
+        common_ratios_1 = []
+        for n1, n2 in combinations(cand.get_ids_1(), 2):
+            for m in cand.get_ids_0():
+                if all_edge_exists([n1, n2, m], matches):
+                    common_ratios_1.append(get_common_ratio(n1, n2, m, matches))
+
+        logger.debug("loop candidate center {:4.1f}-{:4.1f}, "
+                     "average overlap {}, {}, "
+                     "members {} - {}".format(
             cand.get_center_0(), cand.get_center_1(),
-            sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
-    '''
-
-    for cand in sorted(loop_candidates, key=lambda cand: cand.get_center_0()):
-        overlap_ratios = []
-        for im1, im2 in combinations(cand.get_ids_0(), 2):
-            for im3 in cand.get_ids_1():
-                if all_edge_exists([im1, im2, im3], matches):
-                    overlap_ratios.append(get_overlap_ratio(im1, im2, im3, matches))
-
-        logger.debug("loop candidate center {:4.1f}-{:4.1f}, average overlap {}, members {} - {}".format(
-            cand.get_center_0(), cand.get_center_1(), sum(overlap_ratios) / len(overlap_ratios),
+            sum(common_ratios_0) / len(common_ratios_0),
+            sum(common_ratios_1) / len(common_ratios_1),
             sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
 
     logger.debug("quad filtering end")
     return matches
 
 
-def get_overlap_ratio(im1, im2, im3, matches):
+def get_common_ratio(n1, n2, m, matches):
+    """
+    calculates the ratio of # of common features of the triplet (n1, n2, m) to
+    # of common features of the pair (n1, n2). the larger the ratio the more
+    likely m is correctly related to n1, n2.
+    :param n1:
+    :param n2:
+    :param m:
+    :param matches:
+    :return:
+    """
     triplet_matches = {}
-    if (im1, im2) in matches:
-        triplet_matches[im1, im2] = matches[im1, im2]
-        base_cnt = len(triplet_matches[im1, im2])
+    if (n1, n2) in matches:
+        triplet_matches[n1, n2] = matches[n1, n2]
+        base_cnt = len(triplet_matches[n1, n2])
     else:
-        triplet_matches[im2, im1] = matches[im2, im1]
-        base_cnt = len(triplet_matches[im2, im1])
+        triplet_matches[n2, n1] = matches[n2, n1]
+        base_cnt = len(triplet_matches[n2, n1])
 
-    if (im1, im3) in matches:
-        triplet_matches[im1, im3] = matches[im1, im3]
+    if (n1, m) in matches:
+        triplet_matches[n1, m] = matches[n1, m]
     else:
-        triplet_matches[im3, im1] = matches[im3, im1]
+        triplet_matches[m, n1] = matches[m, n1]
 
-    if (im2, im3) in matches:
-        triplet_matches[im2, im3] = matches[im2, im3]
+    if (n2, m) in matches:
+        triplet_matches[n2, m] = matches[n2, m]
     else:
-        triplet_matches[im3, im2] = matches[im3, im2]
+        triplet_matches[m, n2] = matches[m, n2]
 
     uf = UnionFind()
     for im1, im2 in triplet_matches:
@@ -379,7 +394,7 @@ def is_triplet_valid(R0, R1, R2):
 
 def is_quad_valid(R0, R1, R2, R3):
     # TODO - cren optionize the degree threshold below
-    if np.linalg.norm(cv2.Rodrigues(R3.dot(R2.dot(R1.dot(R0))))[0].ravel()) < math.pi/36:
+    if np.linalg.norm(cv2.Rodrigues(R3.dot(R2.dot(R1.dot(R0))))[0].ravel()) < math.pi/12:
         return True
     else:
         return False
