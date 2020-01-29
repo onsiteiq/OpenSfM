@@ -28,7 +28,7 @@ class Command:
         matches_end = timer()
         pairs = tracking.load_pairwise_transforms(data, data.images())
         matches = tracking.triplet_filter(data, data.images(), matches, pairs)
-        matches = tracking.quad_filter(data, data.images(), matches, pairs)
+        matches = tracking.loop_filter(data, data.images(), features, matches, pairs)
         filter_end = timer()
 
         '''

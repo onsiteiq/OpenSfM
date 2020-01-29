@@ -125,7 +125,7 @@ def triplet_filter(data, images, matches, pairs):
     return matches
 
 
-def quad_filter(data, images, matches, pairs):
+def loop_filter(data, images, features, matches, pairs):
     """
     if there’s an edge between (i, j) where i and j are sequence numbers far apart, check that
     there also exists an edge (i plus/minus k, j plus/minus k), where k is a small integer,
@@ -171,13 +171,13 @@ def quad_filter(data, images, matches, pairs):
         for n1, n2 in combinations(cand.get_ids_0(), 2):
             for m in cand.get_ids_1():
                 if all_edge_exists([n1, n2, m], matches):
-                    common_ratios_0.append(get_common_ratio(n1, n2, m, matches))
+                    common_ratios_0.append(get_common_ratio(n1, n2, m, features, matches))
 
         common_ratios_1 = []
         for n1, n2 in combinations(cand.get_ids_1(), 2):
             for m in cand.get_ids_0():
                 if all_edge_exists([n1, n2, m], matches):
-                    common_ratios_1.append(get_common_ratio(n1, n2, m, matches))
+                    common_ratios_1.append(get_common_ratio(n1, n2, m, features, matches))
 
         logger.debug("loop candidate center {:4.1f}-{:4.1f}, "
                      "average overlap {}, {}, "
@@ -191,7 +191,7 @@ def quad_filter(data, images, matches, pairs):
     return matches
 
 
-def get_common_ratio(n1, n2, m, matches):
+def get_common_ratio(n1, n2, m, features, matches):
     """
     calculates the ratio of # of common features of the triplet (n1, n2, m) to
     # of common features of the pair (n1, n2). the larger the ratio the more
@@ -234,6 +234,16 @@ def get_common_ratio(n1, n2, m, matches):
             sets[p] = [i]
 
     tracks = [t for t in sets.values() if _good_track(t, 3)]
+
+    if len(tracks) > base_cnt:
+        logger.debug("error here")
+        if (n1, n2) in matches:
+            logger.debug("base matches {}".format(matches[n1, n2]))
+        else:
+            logger.debug("base matches {}".format(matches[n2, n1]))
+
+        logger.debug("common tracks {}".format(tracks)
+
     return len(tracks)/base_cnt
 
 
