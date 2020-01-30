@@ -181,10 +181,13 @@ def loop_filter(data, images, features, matches, pairs):
 
         logger.debug("loop candidate center {:4.1f}-{:4.1f}, "
                      "average overlap {}, {}, "
+                     "max overlap {}, {}, "
                      "members {} - {}".format(
             cand.get_center_0(), cand.get_center_1(),
             sum(common_ratios_0) / len(common_ratios_0),
             sum(common_ratios_1) / len(common_ratios_1),
+            max(common_ratios_0),
+            max(common_ratios_1),
             sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
 
     logger.debug("quad filtering end")
@@ -202,28 +205,27 @@ def get_common_ratio(n1, n2, m, features, matches):
     :param matches:
     :return:
     """
-    triplet_matches = {}
+    uf = UnionFind()
     if (n1, n2) in matches:
-        triplet_matches[n1, n2] = matches[n1, n2]
-        base_cnt = len(triplet_matches[n1, n2])
+        for f1, f2 in matches[n1, n2]:
+            uf.union((n1, f1), (n2, f2))
     else:
-        triplet_matches[n2, n1] = matches[n2, n1]
-        base_cnt = len(triplet_matches[n2, n1])
+        for f1, f2 in matches[n2, n1]:
+            uf.union((n2, f1), (n1, f2))
 
     if (n1, m) in matches:
-        triplet_matches[n1, m] = matches[n1, m]
+        for f1, f2 in matches[n1, m]:
+            uf.union((n1, f1), (m, f2))
     else:
-        triplet_matches[m, n1] = matches[m, n1]
+        for f1, f2 in matches[m, n1]:
+            uf.union((m, f1), (n1, f2))
 
     if (n2, m) in matches:
-        triplet_matches[n2, m] = matches[n2, m]
+        for f1, f2 in matches[n2, m]:
+            uf.union((n2, f1), (m, f2))
     else:
-        triplet_matches[m, n2] = matches[m, n2]
-
-    uf = UnionFind()
-    for im1, im2 in triplet_matches:
-        for f1, f2 in triplet_matches[im1, im2]:
-            uf.union((im1, f1), (im2, f2))
+        for f1, f2 in matches[m, n2]:
+            uf.union((m, f1), (n2, f2))
 
     sets = {}
     for i in uf:
@@ -235,16 +237,23 @@ def get_common_ratio(n1, n2, m, features, matches):
 
     tracks = [t for t in sets.values() if _good_track(t, 3)]
 
-    if len(tracks) > base_cnt:
-        logger.debug("error here")
-        if (n1, n2) in matches:
-            logger.debug("base matches {}".format(matches[n1, n2]))
-        else:
-            logger.debug("base matches {}".format(matches[n2, n1]))
+    cnt = 0
+    if (n1, n2) in matches:
+        base_cnt = len(matches[n1, n2])
+        for f1, f2 in matches[n1, n2]:
+            for track in tracks:
+                if (n1, f1) in track and (n2, f2) in track:
+                    cnt += 1
+                    break
+    else:
+        base_cnt = len(matches[n2, n1])
+        for f1, f2 in matches[n2, n1]:
+            for track in tracks:
+                if (n2, f1) in track and (n1, f2) in track:
+                    cnt += 1
+                    break
 
-        logger.debug("common tracks {}".format(tracks)
-
-    return len(tracks)/base_cnt
+    return cnt/base_cnt
 
 
 def merge_quads(valid_quads):
