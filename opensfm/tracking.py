@@ -78,21 +78,15 @@ def triplet_filter(data, images, matches, pairs):
     for (i, j) in pairs:
         for k in images:
             if i != k and j != k:
-                Rij = get_transform(i, j, pairs)
-                Rjk = get_transform(j, k, pairs)
-                Rki = get_transform(k, i, pairs)
+                if all_edge_exists([i, j, k], matches):
+                    if is_triplet_valid(i, j, k, pairs):
+                        cnt = cnt_good
+                    else:
+                        cnt = cnt_bad
 
-                if Rij.size == 0 or Rjk.size == 0 or Rki.size == 0:
-                    continue
-
-                if is_triplet_valid(Rij, Rjk, Rki):
-                    cnt = cnt_good
-                else:
-                    cnt = cnt_bad
-
-                incr_cnt(pairs, cnt, i, j)
-                incr_cnt(pairs, cnt, j, k)
-                incr_cnt(pairs, cnt, k, i)
+                    incr_cnt(pairs, cnt, i, j)
+                    incr_cnt(pairs, cnt, j, k)
+                    incr_cnt(pairs, cnt, k, i)
 
     edges_to_remove = []
     for (i, j) in matches:
@@ -143,6 +137,7 @@ def loop_filter(data, images, features, matches, pairs):
     valid_quads = []
     for (im1, im2) in matches:
         if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) > gap:
+            '''
             valid = False
             possible_quads = get_quads(im1, im2, matches)
             for (i, j, k, l) in possible_quads:
@@ -153,8 +148,11 @@ def loop_filter(data, images, features, matches, pairs):
                 if is_quad_valid(Rij, Rjk, Rkl, Rli):
                     valid_quads.append((i, j, k, l))
                     valid = True
-
-            if not valid:
+            '''
+            new_quads = get_quads(im1, im2, matches)
+            if new_quads:
+                valid_quads.extend(new_quads)
+            else:
                 edges_to_remove.append((im1, im2))
 
     for edge in sorted(edges_to_remove):
@@ -164,73 +162,74 @@ def loop_filter(data, images, features, matches, pairs):
     logger.debug("quad filtering end, removed {} edges, {:2.1f}% of all".
                  format(len(edges_to_remove), 100*len(edges_to_remove)/len(pairs)))
 
-    loop_candidates = merge_quads(valid_quads)
+    # TODO: cren optionize the threshold below
+    radius = 10
+    valid_quads_set = set(tuple(quad) for quad in valid_quads)
+    loop_candidates = merge_quads(valid_quads_set, radius)
 
     for cand in sorted(loop_candidates, key=lambda cand: cand.get_center_0()):
-        common_ratios_0 = []
-        common_ratios_1 = []
-        weights_0 = []
-        weights_1 = []
+        common_ratios = []
 
         ns = list(cand.get_ids_0())
         ms = list(cand.get_ids_1())
         for n1, n2 in zip(ns, ns[1:]):
             ratio_max = 0
-            weight = 0
             for m in ms:
                 if all_edge_exists([n1, n2, m], matches):
-                    ratio, w = get_common_ratio(n1, n2, m, features, matches)
+                    ratio = get_common_ratio(n1, n2, m, features, matches)
                     if ratio > ratio_max:
                         ratio_max = ratio
-                        weight = w
 
             if ratio_max > 0:
-                common_ratios_0.append(ratio_max)
-                weights_0.append(weight)
+                common_ratios.append(ratio_max)
 
         for m1, m2 in zip(ms, ms[1:]):
             ratio_max = 0
             for n in ns:
                 if all_edge_exists([m1, m2, n], matches):
-                    ratio, weight = get_common_ratio(m1, m2, n, features, matches)
+                    ratio = get_common_ratio(m1, m2, n, features, matches)
                     if ratio > ratio_max:
                         ratio_max = ratio
-                        weight = w
 
             if ratio_max > 0:
-                common_ratios_1.append(ratio_max)
-                weights_1.append(weight)
+                common_ratios.append(ratio_max)
 
-        avg_0 = avg_1 = 0
-        w0 = w1 = 0
-        if common_ratios_0:
-            avg_0 = sum(common_ratios_0) / len(common_ratios_0)
-            w0 = sum(weights_0) / len(weights_0)
-
-        if common_ratios_1:
-            avg_1 = sum(common_ratios_1) / len(common_ratios_1)
-            w1 = sum(weights_1) / len(weights_1)
+        avg_0 = 0
+        if common_ratios:
+            avg_0 = sum(common_ratios) / len(common_ratios)
 
         logger.debug("loop candidate center {:4.1f}-{:4.1f}, "
-                     "average overlap {}, {}, "
-                     "weight {}, {}, "
+                     "average overlap {}, "
                      "members {} - {}".format(
-            cand.get_center_0(), cand.get_center_1(),
-            avg_0, avg_1, w0, w1,
+            cand.get_center_0(), cand.get_center_1(), avg_0,
             sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
 
     logger.debug("quad filtering end")
     return matches
 
 
-def calc_feature_distribution(im, fids, features, grid_size):
-    occupied = set()
+def calc_feature_distribution(im, fids_n1_n2, fids_n1_m, features):
+    """
+    returning a weight that is the ratio of feature coverage of n1_m and n1_n2
+    :param im:
+    :param fids_n1_n2:
+    :param fids_n1_m:
+    :param features:
+    :return:
+    """
+    grid_size = math.sqrt(len(fids_n1_n2))
 
-    for id in fids:
+    occupied_n1_n2 = set()
+    for id in fids_n1_n2:
         x, y, s = features[im][id]
-        occupied.add((int(x*grid_size), int(y*grid_size)))
+        occupied_n1_n2.add((int(x*grid_size), int(y*grid_size)))
 
-    return len(occupied)
+    occupied_n1_m = set()
+    for id in fids_n1_m:
+        x, y, s = features[im][id]
+        occupied_n1_m.add((int(x*grid_size), int(y*grid_size)))
+
+    return len(occupied_n1_m)/len(occupied_n1_n2)
 
 
 def get_common_ratio(n1, n2, m, features, matches):
@@ -259,7 +258,7 @@ def get_common_ratio(n1, n2, m, features, matches):
             fids_n1_n2.append(f2)
 
     if base_cnt < 50:
-        return 0, 0
+        return 0
 
     fids_n1_m = []
     if (n1, m) in matches:
@@ -302,20 +301,17 @@ def get_common_ratio(n1, n2, m, features, matches):
                     cnt += 1
                     break
 
-    grid_size = math.sqrt(len(fids_n1_n2))
-    o_n1n2 = calc_feature_distribution(n1, fids_n1_n2, features, grid_size)
-    o_n1m = calc_feature_distribution(n1, fids_n1_m, features, grid_size)
-    weight = o_n1m / o_n1n2
-    #logger.debug("dist n1n2={} n1m={}, weight={}".format(dist_n1_n2, dist_n1_m, weight))
+    weight = calc_feature_distribution(n1, fids_n1_n2, fids_n1_m, features)
 
-    return cnt/base_cnt, weight
+    return cnt/base_cnt * weight
 
 
-def merge_quads(valid_quads):
+def merge_quads(valid_quads, radius):
     """
     merge similar quads into loop candidates
 
     :param valid_quads:
+    :param radius:
     :return:
     """
     loop_candidates = []
@@ -328,8 +324,7 @@ def merge_quads(valid_quads):
                 break
 
         if not added:
-            # TODO: cren optionize the threshold below
-            new_cand = LoopCandidate(10)
+            new_cand = LoopCandidate(radius)
             new_cand.add(quad)
             loop_candidates.append(new_cand)
 
@@ -422,7 +417,13 @@ def get_quads(im1, im2, matches):
 
             im1_neighbor = _int_to_shot_id(i)
             im2_neighbor = _int_to_shot_id(j)
+
+            '''
             if all_edge_exists([im1, im1_neighbor, im2, im2_neighbor], matches):
+                quads.append(sorted((im1, im1_neighbor, im2, im2_neighbor)))
+            '''
+            if all_edge_exists([im1, im1_neighbor, im2], matches) and \
+               all_edge_exists([im1, im2_neighbor, im2], matches):
                 quads.append(sorted((im1, im1_neighbor, im2, im2_neighbor)))
 
     return quads
@@ -463,84 +464,13 @@ def all_edge_exists(node_list, matches):
     return True
 
 
-def is_triplet_valid(R0, R1, R2):
-    # TODO - cren optionize the degree threshold below
-    if np.linalg.norm(cv2.Rodrigues(R2.dot(R1.dot(R0)))[0].ravel()) < math.pi/6:
-        return True
-    else:
-        return False
-
-
-def is_quad_valid(R0, R1, R2, R3):
-    # TODO - cren optionize the degree threshold below
-    if np.linalg.norm(cv2.Rodrigues(R3.dot(R2.dot(R1.dot(R0))))[0].ravel()) < math.pi/6:
-        return True
-    else:
-        return False
-
-
-def triplet_filter_2(matches, pairs):
-    """
-    find triplets of the form (i,j,j+k), where i, j, j+k are image sequence numbers, and
-    difference between i and j is larger than some threshold, and k is some small integer.
-    we will check if the pairwise rotations satisfy triplet constraint. if not, the edge
-    (i,j) is removed. if we find an isolated (i,j), with no edges between (i,j+k) then we
-    will remove the edge (i,j) since it is likely an erroneous epiploar geometry
-    :param matches:
-    :return:
-    """
-    #TODO: cren optionize the following parameters
-    thresh = 20
-    k = 3
-
-    filtered_matches = []
-    for im1, im1_matches in matches:
-        im2s = sorted(im1_matches.keys())
-
-        if len(im2s) == 0:
-            continue
-
-        im2s_to_remove = set()
-        last_result_valid = False
-        for j in range(len(im2s)-1):
-            if _shot_id_to_int(im2s[j]) - _shot_id_to_int(im1) > thresh:
-                if _shot_id_to_int(im2s[j+1]) - _shot_id_to_int(im2s[j]) <= k:
-                    logger.debug("triplet {} {} {}".format(im1, im2s[j], im2s[j+1]))
-
-                    if (im2s[j], im2s[j+1]) in pairs:
-                        T0 = pairs[im1, im2s[j]][0]
-                        T1 = pairs[im1, im2s[j+1]][0]
-                        T2 = pairs[im2s[j], im2s[j+1]][0]
-
-                        if is_triplet_valid_2(T0, T1, T2):
-                            last_result_valid = True
-                            continue
-
-                if not last_result_valid:
-                    im2s_to_remove.add(im2s[j])
-
-                last_result_valid = False
-
-        # handle boundary condition
-        if not last_result_valid and _shot_id_to_int(im2s[-1]) - _shot_id_to_int(im1) > thresh:
-            im2s_to_remove.add(im2s[-1])
-
-        logger.debug("triplet edges of {} removing {}".format(im1, sorted(im2s_to_remove)))
-        for im2 in im2s_to_remove:
-            im1_matches.pop(im2)
-
-        filtered_matches.append((im1, im1_matches))
-
-    return filtered_matches
-
-
-def is_triplet_valid_2(T0, T1, T2):
-    r0 = T0[:, :3]
-    r1 = T1[:, :3]
-    r2 = T2[:, :3]
+def is_triplet_valid(i, j, k, pairs):
+    Rji = get_transform(i, j, pairs)
+    Rkj = get_transform(j, k, pairs)
+    Rik = get_transform(k, i, pairs)
 
     # TODO - cren optionize the degree threshold below
-    if np.linalg.norm(cv2.Rodrigues(r2.dot(r1.T.dot(r0)))[0].ravel()) < math.pi/12:
+    if np.linalg.norm(cv2.Rodrigues(Rik.dot(Rkj.dot(Rji)))[0].ravel()) < math.pi/6:
         return True
     else:
         return False
