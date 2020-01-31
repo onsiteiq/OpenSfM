@@ -109,11 +109,11 @@ def triplet_filter(data, images, matches, pairs):
         # TODO: cren optionize the gap threshold below
         gap = abs(_shot_id_to_int(i) - _shot_id_to_int(j))
         if gap < 3:
-            if (bad + good) >= 3 and (bad / (bad + good)) > 0.9:
+            if (bad + good) >= 3 and (bad / (bad + good)) > 0.75:
                 edges_to_remove.append((i, j))
                 logger.debug("interesting {} {} gap={}, good={}, bad={}".format(i, j, gap, good, bad))
         else:
-            if (bad == 0 and good == 0) or (bad/(bad+good)) > 0.9:
+            if (bad == 0 and good == 0) or (bad/(bad+good)) > 0.75:
                 edges_to_remove.append((i, j))
 
     for edge in sorted(edges_to_remove):
@@ -168,30 +168,69 @@ def loop_filter(data, images, features, matches, pairs):
 
     for cand in sorted(loop_candidates, key=lambda cand: cand.get_center_0()):
         common_ratios_0 = []
-        for n1, n2 in combinations(cand.get_ids_0(), 2):
-            for m in cand.get_ids_1():
-                if all_edge_exists([n1, n2, m], matches):
-                    common_ratios_0.append(get_common_ratio(n1, n2, m, features, matches))
-
         common_ratios_1 = []
-        for n1, n2 in combinations(cand.get_ids_1(), 2):
-            for m in cand.get_ids_0():
+        weights_0 = []
+        weights_1 = []
+
+        ns = list(cand.get_ids_0())
+        ms = list(cand.get_ids_1())
+        for n1, n2 in zip(ns, ns[1:]):
+            ratio_max = 0
+            weight = 0
+            for m in ms:
                 if all_edge_exists([n1, n2, m], matches):
-                    common_ratios_1.append(get_common_ratio(n1, n2, m, features, matches))
+                    ratio, w = get_common_ratio(n1, n2, m, features, matches)
+                    if ratio > ratio_max:
+                        ratio_max = ratio
+                        weight = w
+
+            if ratio_max > 0:
+                common_ratios_0.append(ratio_max)
+                weights_0.append(weight)
+
+        for m1, m2 in zip(ms, ms[1:]):
+            ratio_max = 0
+            for n in ns:
+                if all_edge_exists([m1, m2, n], matches):
+                    ratio, weight = get_common_ratio(m1, m2, n, features, matches)
+                    if ratio > ratio_max:
+                        ratio_max = ratio
+                        weight = w
+
+            if ratio_max > 0:
+                common_ratios_1.append(ratio_max)
+                weights_1.append(weight)
+
+        avg_0 = avg_1 = 0
+        w0 = w1 = 0
+        if common_ratios_0:
+            avg_0 = sum(common_ratios_0) / len(common_ratios_0)
+            w0 = sum(weights_0) / len(weights_0)
+
+        if common_ratios_1:
+            avg_1 = sum(common_ratios_1) / len(common_ratios_1)
+            w1 = sum(weights_1) / len(weights_1)
 
         logger.debug("loop candidate center {:4.1f}-{:4.1f}, "
                      "average overlap {}, {}, "
-                     "max overlap {}, {}, "
+                     "weight {}, {}, "
                      "members {} - {}".format(
             cand.get_center_0(), cand.get_center_1(),
-            sum(common_ratios_0) / len(common_ratios_0),
-            sum(common_ratios_1) / len(common_ratios_1),
-            max(common_ratios_0),
-            max(common_ratios_1),
+            avg_0, avg_1, w0, w1,
             sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
 
     logger.debug("quad filtering end")
     return matches
+
+
+def calc_feature_distribution(im, fids, features, grid_size):
+    occupied = set()
+
+    for id in fids:
+        x, y, s = features[im][id]
+        occupied.add((int(x*grid_size), int(y*grid_size)))
+
+    return len(occupied)
 
 
 def get_common_ratio(n1, n2, m, features, matches):
@@ -206,19 +245,31 @@ def get_common_ratio(n1, n2, m, features, matches):
     :return:
     """
     uf = UnionFind()
+    fids_n1_n2 = []
+
     if (n1, n2) in matches:
+        base_cnt = len(matches[n1, n2])
         for f1, f2 in matches[n1, n2]:
             uf.union((n1, f1), (n2, f2))
+            fids_n1_n2.append(f1)
     else:
+        base_cnt = len(matches[n2, n1])
         for f1, f2 in matches[n2, n1]:
             uf.union((n2, f1), (n1, f2))
+            fids_n1_n2.append(f2)
 
+    if base_cnt < 50:
+        return 0, 0
+
+    fids_n1_m = []
     if (n1, m) in matches:
         for f1, f2 in matches[n1, m]:
             uf.union((n1, f1), (m, f2))
+            fids_n1_m.append(f1)
     else:
         for f1, f2 in matches[m, n1]:
             uf.union((m, f1), (n1, f2))
+            fids_n1_m.append(f2)
 
     if (n2, m) in matches:
         for f1, f2 in matches[n2, m]:
@@ -239,25 +290,34 @@ def get_common_ratio(n1, n2, m, features, matches):
 
     cnt = 0
     if (n1, n2) in matches:
-        base_cnt = len(matches[n1, n2])
         for f1, f2 in matches[n1, n2]:
             for track in tracks:
                 if (n1, f1) in track and (n2, f2) in track:
                     cnt += 1
                     break
     else:
-        base_cnt = len(matches[n2, n1])
         for f1, f2 in matches[n2, n1]:
             for track in tracks:
                 if (n2, f1) in track and (n1, f2) in track:
                     cnt += 1
                     break
 
-    return cnt/base_cnt
+    grid_size = math.sqrt(len(fids_n1_n2))
+    o_n1n2 = calc_feature_distribution(n1, fids_n1_n2, features, grid_size)
+    o_n1m = calc_feature_distribution(n1, fids_n1_m, features, grid_size)
+    weight = o_n1m / o_n1n2
+    #logger.debug("dist n1n2={} n1m={}, weight={}".format(dist_n1_n2, dist_n1_m, weight))
+
+    return cnt/base_cnt, weight
 
 
 def merge_quads(valid_quads):
-    # merge similar quads into loop candidates
+    """
+    merge similar quads into loop candidates
+
+    :param valid_quads:
+    :return:
+    """
     loop_candidates = []
     for quad in valid_quads:
         added = False
@@ -268,7 +328,8 @@ def merge_quads(valid_quads):
                 break
 
         if not added:
-            new_cand = LoopCandidate()
+            # TODO: cren optionize the threshold below
+            new_cand = LoopCandidate(10)
             new_cand.add(quad)
             loop_candidates.append(new_cand)
 
@@ -292,7 +353,8 @@ class LoopCandidate(object):
     Loop candidate
     """
 
-    def __init__(self):
+    def __init__(self, r):
+        self.radius = r
         self.center_0 = -1
         self.center_1 = -1
         self.ids_0 = set()
@@ -315,14 +377,12 @@ class LoopCandidate(object):
         return total/len(ids)
 
     def is_close_to(self, quad):
-        # TODO: cren optionize the threshold below
-        d = 5
-        return abs(self.center_0 - _shot_id_to_int(quad[0])) < d and \
-               abs(self.center_1 - _shot_id_to_int(quad[2])) < d
+        return abs(self.center_0 - _shot_id_to_int(quad[0])) < self.radius and \
+               abs(self.center_1 - _shot_id_to_int(quad[2])) < self.radius
 
     def combine(self, another):
-        if abs(self.get_center_0() - another.get_center_0()) < 5 and \
-           abs(self.get_center_1() - another.get_center_1()) < 5:
+        if abs(self.get_center_0() - another.get_center_0()) < self.radius and \
+           abs(self.get_center_1() - another.get_center_1()) < self.radius:
             self.ids_0 = self.ids_0 | another.get_ids_0()
             self.ids_1 = self.ids_1 | another.get_ids_1()
 
@@ -405,7 +465,7 @@ def all_edge_exists(node_list, matches):
 
 def is_triplet_valid(R0, R1, R2):
     # TODO - cren optionize the degree threshold below
-    if np.linalg.norm(cv2.Rodrigues(R2.dot(R1.dot(R0)))[0].ravel()) < math.pi/12:
+    if np.linalg.norm(cv2.Rodrigues(R2.dot(R1.dot(R0)))[0].ravel()) < math.pi/6:
         return True
     else:
         return False
@@ -413,7 +473,7 @@ def is_triplet_valid(R0, R1, R2):
 
 def is_quad_valid(R0, R1, R2, R3):
     # TODO - cren optionize the degree threshold below
-    if np.linalg.norm(cv2.Rodrigues(R3.dot(R2.dot(R1.dot(R0))))[0].ravel()) < math.pi/12:
+    if np.linalg.norm(cv2.Rodrigues(R3.dot(R2.dot(R1.dot(R0))))[0].ravel()) < math.pi/6:
         return True
     else:
         return False
