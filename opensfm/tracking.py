@@ -137,18 +137,6 @@ def loop_filter(data, images, features, matches, pairs):
     valid_quads = []
     for (im1, im2) in matches:
         if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) > gap:
-            '''
-            valid = False
-            possible_quads = get_quads(im1, im2, matches)
-            for (i, j, k, l) in possible_quads:
-                Rij = get_transform(i, j, pairs)
-                Rjk = get_transform(j, k, pairs)
-                Rkl = get_transform(k, l, pairs)
-                Rli = get_transform(l, i, pairs)
-                if is_quad_valid(Rij, Rjk, Rkl, Rli):
-                    valid_quads.append((i, j, k, l))
-                    valid = True
-            '''
             new_quads = get_quads(im1, im2, matches)
             if new_quads:
                 valid_quads.extend(new_quads)
@@ -165,9 +153,10 @@ def loop_filter(data, images, features, matches, pairs):
     # TODO: cren optionize the threshold below
     radius = 10
     valid_quads_set = set(tuple(quad) for quad in valid_quads)
-    loop_candidates = merge_quads(valid_quads_set, radius)
+    loop_candidates = cluster_quads(valid_quads_set, radius)
 
-    for cand in sorted(loop_candidates, key=lambda cand: cand.get_center_0()):
+    edges_to_remove = set()
+    for cand in loop_candidates:
         common_ratios = []
 
         ns = list(cand.get_ids_0())
@@ -194,17 +183,32 @@ def loop_filter(data, images, features, matches, pairs):
             if ratio_max > 0:
                 common_ratios.append(ratio_max)
 
-        avg_0 = 0
+        avg_ratio = 0
         if common_ratios:
-            avg_0 = sum(common_ratios) / len(common_ratios)
+            avg_ratio = sum(common_ratios) / len(common_ratios)
 
         logger.debug("loop candidate center {:4.1f}-{:4.1f}, "
                      "average overlap {}, "
                      "members {} - {}".format(
-            cand.get_center_0(), cand.get_center_1(), avg_0,
+            cand.get_center_0(), cand.get_center_1(), avg_ratio,
             sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
 
-    logger.debug("quad filtering end")
+        if avg_ratio < 0.1:
+            for im1 in cand.get_ids_0():
+                for im2 in cand.get_ids_1():
+                    if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) > gap:
+                        if (im1, im2) in matches:
+                            edges_to_remove.add((im1, im2))
+                        elif (im2, im1) in matches:
+                            edges_to_remove.add((im2, im1))
+
+    for edge in sorted(edges_to_remove):
+        logger.debug("quad removing edge {} -{}".format(edge[0], edge[1]))
+        matches.pop(edge)
+
+    logger.debug("loop filtering end, removed {} edges, {:2.1f}% of all".
+                 format(len(edges_to_remove), 100*len(edges_to_remove)/len(pairs)))
+
     return matches
 
 
@@ -306,7 +310,7 @@ def get_common_ratio(n1, n2, m, features, matches):
     return cnt/base_cnt * weight
 
 
-def merge_quads(valid_quads, radius):
+def cluster_quads(valid_quads, radius):
     """
     merge similar quads into loop candidates
 
@@ -315,13 +319,13 @@ def merge_quads(valid_quads, radius):
     :return:
     """
     loop_candidates = []
-    for quad in valid_quads:
+    for quad in sorted(valid_quads):
         added = False
         for cand in loop_candidates:
             if cand.is_close_to(quad):
                 cand.add(quad)
                 added = True
-                break
+                #break
 
         if not added:
             new_cand = LoopCandidate(radius)
@@ -341,6 +345,40 @@ def merge_quads(valid_quads, radius):
             break
 
     return loop_candidates
+
+
+'''
+def quad_to_coords(quad):
+    im_indices = []
+    for im in quad:
+        im_indices.append(_shot_id_to_int(im))
+
+    coords = []
+    coords.append((im_indices[0], im_indices[2]))
+    coords.append((im_indices[0], im_indices[3]))
+    coords.append((im_indices[1], im_indices[2]))
+    coords.append((im_indices[1], im_indices[3]))
+
+    return coords
+
+def cluster_quads_kmeans(valid_quads, radius):
+    coords_set = set()
+    for quad in valid_quads:
+        coords = quad_to_coords(quad)
+        for coord in coords:
+            coords_set.add(coord)
+
+    np_coords = np.asarray(list(coords_set), dtype=np.float32)
+
+    # define criteria and apply kmeans()
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1.0)
+    ret, label, center = cv2.kmeans(np_coords, 50, None, criteria, 100, cv2.KMEANS_RANDOM_CENTERS)
+
+    # Now separate the data, Note the flatten()
+    for i in range(100):
+        A = np_coords[label.ravel() == i]
+        logger.debug("{} -- {}".format(sorted(set(A[:, 0])), sorted(set(A[:, 1]))))
+'''
 
 
 class LoopCandidate(object):
@@ -424,7 +462,7 @@ def get_quads(im1, im2, matches):
             '''
             if all_edge_exists([im1, im1_neighbor, im2], matches) and \
                all_edge_exists([im1, im2_neighbor, im2], matches):
-                quads.append(sorted((im1, im1_neighbor, im2, im2_neighbor)))
+                quads.append(sorted([im1, im1_neighbor, im2, im2_neighbor]))
 
     return quads
 

@@ -31,7 +31,6 @@ class Command:
         matches = tracking.loop_filter(data, data.images(), features, matches, pairs)
         filter_end = timer()
 
-        '''
         # debugging
         edges = defaultdict(list)
         for i in data.images():
@@ -42,7 +41,6 @@ class Command:
                     edges[i].append(im1)
         for i in sorted(edges.keys()):
             logger.debug("{} has edges with {}".format(i, sorted(edges[i])))
-        '''
 
         graph = tracking.create_tracks_graph(features, colors, matches,
                                              data.config)
