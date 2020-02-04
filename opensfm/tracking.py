@@ -199,9 +199,10 @@ def loop_filter(data, images, features, matches, pairs):
                     if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) > gap:
                         if (im1, im2) in matches:
                             edges_to_remove.add((im1, im2))
-                        if (im2, im1) in matches:
+                        elif (im2, im1) in matches:
                             edges_to_remove.add((im2, im1))
 
+                        # this shouldn't happen
                         if (im1, im2) in matches and (im2, im1) in matches:
                             logger.debug("error {}-{} exist twice".format(im1, im2))
 
