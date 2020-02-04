@@ -767,6 +767,34 @@ def reconstructed_points_for_images(graph, reconstruction, images):
     return sorted(res, key=lambda x: -x[1])
 
 
+def reconstructed_points_for_images_sequential(graph, reconstruction, images, last_image):
+    """Number of reconstructed points visible on each image.
+
+    Returns:
+        A list of (image, num_point) pairs sorted by decreasing number of points.
+        if a preferred image, i.e., the next or the previous image, exists, it
+        will be placed at top of the list
+    """
+    next_image = _next_shot_id(last_image)
+    prev_image = _prev_shot_id(last_image)
+    res = []
+    for image in images:
+        if image not in reconstruction.shots:
+            common_tracks = 0
+            for track in graph[image]:
+                if track in reconstruction.points:
+                    common_tracks += 1
+
+            # we prefer doing reconstruction sequentially, when the link is not very weak
+            if common_tracks > 50 and image == next_image:
+                common_tracks = 10000
+            elif common_tracks > 50 and image == prev_image:
+                common_tracks = 9999
+
+            res.append((image, common_tracks))
+    return sorted(res, key=lambda x: -x[1])
+
+
 def resect(data, graph, graph_inliers, reconstruction, shot_id,
     camera, metadata, threshold, min_inliers):
     """Try resecting and adding a shot to the reconstruction.
@@ -1354,6 +1382,8 @@ def grow_reconstruction_sequential(data, graph, graph_inliers, reconstruction, i
 
     should_bundle = ShouldBundle(data, reconstruction)
     should_retriangulate = ShouldRetriangulate(data, reconstruction)
+
+    last_image = sorted(reconstruction.shots)[-1]
     while True:
         if config['save_partial_reconstructions']:
             paint_reconstruction(data, graph, reconstruction)
@@ -1361,10 +1391,15 @@ def grow_reconstruction_sequential(data, graph, graph_inliers, reconstruction, i
                 [reconstruction], 'reconstruction.{}.json'.format(
                     datetime.datetime.now().isoformat().replace(':', '_')))
 
+        candidates = reconstructed_points_for_images_sequential(
+            graph, reconstruction, images, last_image)
+        if not candidates:
+            break
+
         logger.info("-------------------------------------------------------")
         threshold = data.config['resection_threshold']
         min_inliers = data.config['resection_min_inliers']
-        for image in images:
+        for image, num_tracks in candidates:
             camera = reconstruction.cameras[data.load_exif(image)['camera']]
             metadata = get_image_metadata(data, image)
             ok, resrep = resect(data, graph, graph_inliers, reconstruction, image,
@@ -1372,7 +1407,7 @@ def grow_reconstruction_sequential(data, graph, graph_inliers, reconstruction, i
             if not ok:
                 continue
 
-            logger.info("Adding {0} to the reconstruction".format(image))
+            logger.info("Adding {} to the reconstruction, num_tracks {}".format(image, num_tracks))
             step = {
                 'image': image,
                 'resection': resrep,
@@ -1420,6 +1455,7 @@ def grow_reconstruction_sequential(data, graph, graph_inliers, reconstruction, i
             if not reconstruction.alignment.scaled:
                 scale_reconstruction_to_pdr(reconstruction, data)
 
+            last_image = image
             break
         else:
             break

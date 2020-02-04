@@ -101,9 +101,9 @@ def debug_plot_reconstruction(reconstruction):
         X.append(p[0])
         Y.append(p[1])
 
-        ax.text(p[0], p[1], str(_shot_id_to_int(shot.id)), fontsize=6)
+        ax.text(p[0], p[1], str(_shot_id_to_int(shot.id)), fontsize=8)
 
-    plt.plot(X, Y, linestyle='-', color='green', linewidth=3)
+    plt.plot(X, Y, linestyle='-', color='green', linewidth=1)
     plt.show()
 
 

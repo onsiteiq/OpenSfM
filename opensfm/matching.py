@@ -40,7 +40,6 @@ def match_images(data, ref_images, cand_images):
     # Generate pairs for matching
     pairs, preport = pairs_selection.match_candidates_from_metadata(
         ref_images, cand_images, exifs, data)
-    logger.info('Matching {} image pairs'.format(len(pairs)))
 
     # Store per each image in ref for processing
     per_image = defaultdict(list)
@@ -72,6 +71,12 @@ def match_images(data, ref_images, cand_images):
     matches = context.parallel_map(match_unwrap_args, args, processes, jobs_per_process)
     logger.debug('Matched {} pairs in {} seconds.'.format(
         len(pairs), timer()-start))
+
+    for im1, im1_matches in matches:
+        for im2, m in im1_matches.items():
+            im2_matches = matches[im2]
+            if im1 in im2_matches:
+                logger.debug("error {}-{} exist twice".format(im1, im2))
 
     # Index results per pair
     pairs = {}

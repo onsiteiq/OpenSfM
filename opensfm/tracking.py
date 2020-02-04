@@ -193,14 +193,17 @@ def loop_filter(data, images, features, matches, pairs):
             cand.get_center_0(), cand.get_center_1(), avg_ratio,
             sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
 
-        if avg_ratio < 0.1:
+        if avg_ratio < 0.12:
             for im1 in cand.get_ids_0():
                 for im2 in cand.get_ids_1():
                     if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) > gap:
                         if (im1, im2) in matches:
                             edges_to_remove.add((im1, im2))
-                        elif (im2, im1) in matches:
+                        if (im2, im1) in matches:
                             edges_to_remove.add((im2, im1))
+
+                        if (im1, im2) in matches and (im2, im1) in matches:
+                            logger.debug("error {}-{} exist twice".format(im1, im2))
 
     for edge in sorted(edges_to_remove):
         logger.debug("quad removing edge {} -{}".format(edge[0], edge[1]))
@@ -508,7 +511,7 @@ def is_triplet_valid(i, j, k, pairs):
     Rik = get_transform(k, i, pairs)
 
     # TODO - cren optionize the degree threshold below
-    if np.linalg.norm(cv2.Rodrigues(Rik.dot(Rkj.dot(Rji)))[0].ravel()) < math.pi/6:
+    if np.linalg.norm(cv2.Rodrigues(Rik.dot(Rkj.dot(Rji)))[0].ravel()) < math.pi/12:
         return True
     else:
         return False
