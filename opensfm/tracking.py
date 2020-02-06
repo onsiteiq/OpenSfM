@@ -103,11 +103,11 @@ def triplet_filter(data, images, matches, pairs):
         # TODO: cren optionize the gap threshold below
         gap = abs(_shot_id_to_int(i) - _shot_id_to_int(j))
         if gap < 3:
-            if (bad + good) >= 3 and (bad / (bad + good)) > 0.75:
+            if good == 0 and bad >= 3:
                 edges_to_remove.append((i, j))
                 logger.debug("interesting {} {} gap={}, good={}, bad={}".format(i, j, gap, good, bad))
         else:
-            if (bad == 0 and good == 0) or (bad/(bad+good)) > 0.75:
+            if (bad == 0 and good == 0) or (bad/(bad+good)) > 0.9:
                 edges_to_remove.append((i, j))
 
     for edge in sorted(edges_to_remove):
@@ -193,7 +193,7 @@ def loop_filter(data, images, features, matches, pairs):
             cand.get_center_0(), cand.get_center_1(), avg_ratio,
             sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
 
-        if avg_ratio < 0.12:
+        if avg_ratio < 0.20:
             for im1 in cand.get_ids_0():
                 for im2 in cand.get_ids_1():
                     if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) > gap:
@@ -347,6 +347,14 @@ def cluster_quads(valid_quads, radius):
 
         if not can_merge:
             break
+
+    remove_candidates = []
+    for cand in loop_candidates:
+        if cand.get_center_1() - cand.get_center_0() < 2*radius:
+            remove_candidates.append(cand)
+
+    for cand in remove_candidates:
+        loop_candidates.remove(cand)
 
     return loop_candidates
 

@@ -786,9 +786,9 @@ def reconstructed_points_for_images_sequential(graph, reconstruction, images, la
                     common_tracks += 1
 
             # we prefer doing reconstruction sequentially, when the link is not very weak
-            if common_tracks > 50 and image == next_image:
+            if image == next_image:
                 common_tracks = 10000
-            elif common_tracks > 50 and image == prev_image:
+            elif image == prev_image:
                 common_tracks = 9999
 
             res.append((image, common_tracks))
@@ -1759,44 +1759,6 @@ def incremental_reconstruction(data, graph):
     return report, reconstructions
 
 
-def remove_sky_features(data, graph):
-    """
-    remove features that has pitch angle above horizon. also remove
-    features that appear in more than 100 images (which are likely
-    features in the sky or from far away buildings)
-    :param data:
-    :param graph:
-    :return:
-    """
-    try:
-        cameras = data.load_camera_models()
-        camera = cameras[data.load_exif('0000000000.jpg')['camera']]
-    except:
-        return
-
-    tracks = []
-    for n in graph.nodes(data=True):
-        if n[1]['bipartite'] == 1:
-            tracks.append(n[0])
-
-    for track in tracks:
-        if len(graph[track]) > 100:
-            graph.remove_node(track)
-            continue
-
-        bad_count = 0
-        for shot_id in graph[track]:
-            x = graph[track][shot_id]['feature']
-            b = camera.pixel_bearing(x)
-
-            if b[1] < -0.00:
-                bad_count += 1
-
-            if bad_count > len(graph[track])/2:
-                graph.remove_node(track)
-                break
-
-
 def incremental_reconstruction_sequential(data, graph):
     """Run the entire incremental reconstruction pipeline."""
     logger.info("Starting incremental reconstruction sequentially")
@@ -1809,9 +1771,6 @@ def incremental_reconstruction_sequential(data, graph):
     if not data.reference_lla_exists() and not data.config['use_provided_reference_lla']:
         data.invent_reference_lla()
 
-    if 'remove_sky_features' in data.config and data.config['remove_sky_features']:
-        remove_sky_features(data, graph)
-
     target_images = data.config.get('target_images', [] )
     
     if target_images:
@@ -1820,25 +1779,22 @@ def incremental_reconstruction_sequential(data, graph):
     gcp = None
     if data.ground_control_points_exist():
         gcp = data.load_ground_control_points()
-
     common_tracks = tracking.all_common_tracks(graph, tracks)
-
-    '''
-    # debug - print # of common tracks between adjacent images
-    for (im1, im2), (tracks, p1, p2) in iteritems(common_tracks):
-        if _shot_id_to_int(im2) - _shot_id_to_int(im1) == 1:
-            logger.info("{}, {}, #={}".format(im1, im2, len(tracks)))
-    '''
-    
     reconstructions = []
+    pairs = compute_image_pairs(common_tracks, data)
+    chrono.lap('compute_image_pairs')
+    report['num_candidate_image_pairs'] = len(pairs)
     report['reconstructions'] = []
-    image_groups = []
 
     full_images = list(set(images))
+
     full_images.sort()
 
-    # Breakup image sets along specified GPS locations (no longer used, but kept code)
+    image_groups = []
 
+    # Breakup image sets along specified GPS locations
+
+    gps_points_dict = {}
     if data.gps_points_exist():
         gps_points_dict = data.load_gps_points()
         split_images = []
@@ -1886,6 +1842,31 @@ def incremental_reconstruction_sequential(data, graph):
             else:
                 # bootstrap didn't work, try the next pair
                 curr_idx += 1
+
+    '''
+    # select as seed the pair with largest number of common tracks
+    for remaining_images in image_groups:
+
+        for im1, im2 in pairs:
+            if im1 in remaining_images and im2 in remaining_images:
+                rec_report = {}
+                report['reconstructions'].append(rec_report)
+                tracks, p1, p2 = common_tracks[im1, im2]
+                reconstruction, graph_inliers, rec_report['bootstrap'] = bootstrap_reconstruction(
+                    data, graph, im1, im2, p1, p2)
+
+                if reconstruction:
+                    remaining_images.remove(im1)
+                    remaining_images.remove(im2)
+                    reconstruction, rec_report['grow'] = grow_reconstruction_sequential(
+                        data, graph, graph_inliers, reconstruction, remaining_images, gcp)
+                    reconstructions.append(reconstruction)
+                    reconstructions = sorted(reconstructions,
+                                             key=lambda x: -len(x.shots))
+                    rec_report['stats'] = compute_statistics(reconstruction, graph_inliers)
+                    logger.info(rec_report['stats'])
+                    data.save_reconstruction(reconstructions)
+    '''
 
     if reconstructions:
         #if len(target_images) == 0:
