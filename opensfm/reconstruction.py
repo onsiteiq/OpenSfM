@@ -1813,6 +1813,7 @@ def incremental_reconstruction_sequential(data, graph):
     # load pdr data and globally align with gps points
     init_pdr_predictions(data)
 
+    '''
     for remaining_images in image_groups:
         curr_idx = 0
         while curr_idx < len(remaining_images) - 1 > 0:
@@ -1866,7 +1867,6 @@ def incremental_reconstruction_sequential(data, graph):
                     rec_report['stats'] = compute_statistics(reconstruction, graph_inliers)
                     logger.info(rec_report['stats'])
                     data.save_reconstruction(reconstructions)
-    '''
 
     if reconstructions:
         #if len(target_images) == 0:

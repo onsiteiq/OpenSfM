@@ -151,7 +151,7 @@ def loop_filter(data, images, features, matches, pairs):
                  format(len(edges_to_remove), 100*len(edges_to_remove)/len(pairs)))
 
     # TODO: cren optionize the threshold below
-    radius = 10
+    radius = gap/2
     valid_quads_set = set(tuple(quad) for quad in valid_quads)
     loop_candidates = cluster_quads(valid_quads_set, radius)
 
@@ -159,8 +159,8 @@ def loop_filter(data, images, features, matches, pairs):
     for cand in loop_candidates:
         common_ratios = []
 
-        ns = list(cand.get_ids_0())
-        ms = list(cand.get_ids_1())
+        ns = sorted(cand.get_ids_0())
+        ms = sorted(cand.get_ids_1())
         for n1, n2 in zip(ns, ns[1:]):
             ratio_max = 0
             for m in ms:
@@ -193,10 +193,10 @@ def loop_filter(data, images, features, matches, pairs):
             cand.get_center_0(), cand.get_center_1(), avg_ratio,
             sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
 
-        if avg_ratio < 0.20:
+        if avg_ratio < 0.15:
             for im1 in cand.get_ids_0():
                 for im2 in cand.get_ids_1():
-                    if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) > gap:
+                    if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) > radius:
                         if (im1, im2) in matches:
                             edges_to_remove.add((im1, im2))
                         elif (im2, im1) in matches:
@@ -348,9 +348,10 @@ def cluster_quads(valid_quads, radius):
         if not can_merge:
             break
 
+    # if the centers are close together, this is really not a 'loop' but a line
     remove_candidates = []
     for cand in loop_candidates:
-        if cand.get_center_1() - cand.get_center_0() < 2*radius:
+        if cand.get_center_1() - cand.get_center_0() < radius:
             remove_candidates.append(cand)
 
     for cand in remove_candidates:
