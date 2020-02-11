@@ -116,14 +116,16 @@ class Command:
         # Run the incremental reconstruction
         
         if args.direct_align:
-            #if data.pdr_shots_exist():
-                #report = reconstruction.direct_align_reconstruction_pdr( data )
-            #else:
-                #report = reconstruction.direct_align_reconstruction( data )
+            if data.pdr_shots_exist():
+                report = reconstruction.direct_align_reconstruction_pdr( data )
+            else:
+                report = reconstruction.direct_align_reconstruction( data )
 
+            '''
             if data.reconstruction_exists():
                 reconstructions = data.load_reconstruction()
                 align_reconstructions_to_hlf(reconstructions, data)
+            '''
 
         else:
             graph = data.load_tracks_graph()

@@ -220,7 +220,7 @@ def match(im1, im2, camera1, camera2,
         return None, np.array([])
 
     # TODO: cren optionize pre-integration check
-    preint_check = False
+    preint_check = True
     if preint_check:
         if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) < 5:
             if not rotation_close_to_preint(im1, im2, T, pdr_shots_dict):

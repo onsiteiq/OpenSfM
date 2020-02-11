@@ -100,14 +100,13 @@ def triplet_filter(data, images, matches, pairs):
 
         # we will not remove any edge with sequence number difference less than 3
         # unless there's strong indication.
-        # TODO: cren optionize the gap threshold below
-        gap = abs(_shot_id_to_int(i) - _shot_id_to_int(j))
-        if gap < 3:
-            if good == 0 and bad >= 3:
-                edges_to_remove.append((i, j))
-                logger.debug("interesting {} {} gap={}, good={}, bad={}".format(i, j, gap, good, bad))
-        else:
+        # TODO: cren optionize the threshold below
+        if abs(_shot_id_to_int(i) - _shot_id_to_int(j)) < 3:
             if (bad == 0 and good == 0) or (bad/(bad+good)) > 0.9:
+                edges_to_remove.append((i, j))
+                logger.debug("interesting {} {} good={}, bad={}".format(i, j, good, bad))
+        else:
+            if (bad == 0 and good == 0) or (bad/(bad+good)) > 0.75:
                 edges_to_remove.append((i, j))
 
     for edge in sorted(edges_to_remove):
@@ -132,7 +131,7 @@ def loop_filter(data, images, features, matches, pairs):
     """
     logger.debug("quad filtering start")
     # TODO: cren optionize the following thresholds
-    gap = 10
+    gap = 6
     edges_to_remove = []
     valid_quads = []
     for (im1, im2) in matches:
@@ -193,7 +192,7 @@ def loop_filter(data, images, features, matches, pairs):
             cand.get_center_0(), cand.get_center_1(), avg_ratio,
             sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
 
-        if avg_ratio < 0.15:
+        if avg_ratio < 0.25:
             for im1 in cand.get_ids_0():
                 for im2 in cand.get_ids_1():
                     if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) > radius:
