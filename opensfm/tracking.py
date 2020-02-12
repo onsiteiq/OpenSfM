@@ -136,7 +136,7 @@ def loop_filter(data, images, features, matches, pairs):
     valid_quads = []
     for (im1, im2) in matches:
         if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) > gap:
-            new_quads = get_quads(im1, im2, matches)
+            new_quads = get_quads(im1, im2, matches, pairs)
             if new_quads:
                 valid_quads.extend(new_quads)
             else:
@@ -192,7 +192,7 @@ def loop_filter(data, images, features, matches, pairs):
             cand.get_center_0(), cand.get_center_1(), avg_ratio,
             sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
 
-        if avg_ratio < 0.25:
+        if avg_ratio < 0.15:
             for im1 in cand.get_ids_0():
                 for im2 in cand.get_ids_1():
                     if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) > radius:
@@ -451,7 +451,7 @@ class LoopCandidate(object):
         return self.ids_1
 
 
-def get_quads(im1, im2, matches):
+def get_quads(im1, im2, matches, pairs):
     k = 3
     quads = []
 
@@ -468,13 +468,15 @@ def get_quads(im1, im2, matches):
             im1_neighbor = _int_to_shot_id(i)
             im2_neighbor = _int_to_shot_id(j)
 
-            '''
             if all_edge_exists([im1, im1_neighbor, im2, im2_neighbor], matches):
-                quads.append(sorted((im1, im1_neighbor, im2, im2_neighbor)))
+                if is_triplet_valid(im1, im1_neighbor, im2, pairs) and \
+                   is_triplet_valid(im2, im2_neighbor, im1_neighbor, pairs):
+                    quads.append(sorted((im1, im1_neighbor, im2, im2_neighbor)))
             '''
             if all_edge_exists([im1, im1_neighbor, im2], matches) and \
-               all_edge_exists([im1, im2_neighbor, im2], matches):
+               all_edge_exists([im1_neighbor, im2_neighbor, im2], matches):
                 quads.append(sorted([im1, im1_neighbor, im2, im2_neighbor]))
+            '''
 
     return quads
 
