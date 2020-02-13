@@ -122,7 +122,12 @@ def loop_filter(data, images, features, matches, pairs):
     """
     if there’s an edge between (i, j) where i and j are sequence numbers far apart, check that
     there also exists an edge (i plus/minus k, j plus/minus k), where k is a small integer,
-    and that the loop formed by the four nodes pass the multiplying-to-identity check.
+    and that the loop formed by the four nodes pass the multiplying-to-identity check. if so,
+    this is a valid "quad".
+
+    next, we merge quads into clusters. each cluster is a loop candidate. we check the loop
+    candidates to filter out bad ones, and remove all edges in them.
+
     :param data:
     :param images:
     :param matches:
@@ -133,12 +138,12 @@ def loop_filter(data, images, features, matches, pairs):
     # TODO: cren optionize the following thresholds
     gap = 6
     edges_to_remove = []
-    valid_quads = []
+    all_valid_quads = []
     for (im1, im2) in matches:
         if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) > gap:
-            new_quads = get_quads(im1, im2, matches, pairs)
-            if new_quads:
-                valid_quads.extend(new_quads)
+            valid_quads = get_valid_quads(im1, im2, matches, pairs)
+            if valid_quads:
+                all_valid_quads.extend(valid_quads)
             else:
                 edges_to_remove.append((im1, im2))
 
@@ -149,12 +154,39 @@ def loop_filter(data, images, features, matches, pairs):
     logger.debug("quad filtering end, removed {} edges, {:2.1f}% of all".
                  format(len(edges_to_remove), 100*len(edges_to_remove)/len(pairs)))
 
-    # TODO: cren optionize the threshold below
     radius = gap/2
-    valid_quads_set = set(tuple(quad) for quad in valid_quads)
+    valid_quads_set = set(tuple(quad) for quad in all_valid_quads)
+
+    # cluster quads into loop candidates
     loop_candidates = cluster_quads(valid_quads_set, radius)
 
+    # apply various checks to figure out bad loop candidates
+    bad_candidates = filter_candidates(loop_candidates, matches, features, pairs)
+
+    # remove matches in bad loop candidates
     edges_to_remove = set()
+    for cand in bad_candidates:
+        loop_candidates.remove(cand)
+        for im1 in cand.get_ids_0():
+            for im2 in cand.get_ids_1():
+                if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) > radius:
+                    if (im1, im2) in matches:
+                        edges_to_remove.add((im1, im2))
+                    elif (im2, im1) in matches:
+                        edges_to_remove.add((im2, im1))
+
+    for edge in sorted(edges_to_remove):
+        logger.debug("quad removing edge {} -{}".format(edge[0], edge[1]))
+        matches.pop(edge)
+
+    logger.debug("loop filtering end, removed {} edges, {:2.1f}% of all".
+                 format(len(edges_to_remove), 100*len(edges_to_remove)/len(pairs)))
+
+    return matches #, loop_candidates
+
+
+def filter_candidates(loop_candidates, matches, features, pairs):
+    bad_candidates = []
     for cand in loop_candidates:
         common_ratios = []
 
@@ -162,9 +194,17 @@ def loop_filter(data, images, features, matches, pairs):
         ms = sorted(cand.get_ids_1())
         for n1, n2 in zip(ns, ns[1:]):
             ratio_max = 0
+
+            fids_n1_n2 = common_fids(n1, n2, matches)
+            if len(fids_n1_n2) < 50:
+                continue
+            grid_size = math.sqrt(len(fids_n1_n2))
+            fo_n1_n2 = feature_occupancy(n1, fids_n1_n2, features, grid_size)
             for m in ms:
                 if all_edge_exists([n1, n2, m], matches):
-                    ratio = get_common_ratio(n1, n2, m, features, matches)
+                    fids_n1_m = common_fids(n1, m, matches)
+                    fo_n1_m = feature_occupancy(n1, fids_n1_m, features, grid_size)
+                    ratio = common_ratio(n1, n2, m, matches) * fo_n1_m / fo_n1_n2
                     if ratio > ratio_max:
                         ratio_max = ratio
 
@@ -173,9 +213,17 @@ def loop_filter(data, images, features, matches, pairs):
 
         for m1, m2 in zip(ms, ms[1:]):
             ratio_max = 0
+
+            fids_m1_m2 = common_fids(m1, m2, matches)
+            if len(fids_m1_m2) < 50:
+                continue
+            grid_size = math.sqrt(len(fids_m1_m2))
+            fo_m1_m2 = feature_occupancy(m1, fids_m1_m2, features, grid_size)
             for n in ns:
                 if all_edge_exists([m1, m2, n], matches):
-                    ratio = get_common_ratio(m1, m2, n, features, matches)
+                    fids_m1_n = common_fids(m1, n, matches)
+                    fo_m1_n = feature_occupancy(m1, fids_m1_n, features, grid_size)
+                    ratio = common_ratio(m1, m2, n, matches) * fo_m1_n / fo_m1_m2
                     if ratio > ratio_max:
                         ratio_max = ratio
 
@@ -192,54 +240,71 @@ def loop_filter(data, images, features, matches, pairs):
             cand.get_center_0(), cand.get_center_1(), avg_ratio,
             sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
 
+        # TODO - cren optionize the ratio threshold below
         if avg_ratio < 0.15:
-            for im1 in cand.get_ids_0():
-                for im2 in cand.get_ids_1():
-                    if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) > radius:
-                        if (im1, im2) in matches:
-                            edges_to_remove.add((im1, im2))
-                        elif (im2, im1) in matches:
-                            edges_to_remove.add((im2, im1))
+            bad_candidates.append(cand)
+        else:
+            chaining_test(cand, matches, pairs)
 
-                        # this shouldn't happen
-                        if (im1, im2) in matches and (im2, im1) in matches:
-                            logger.debug("error {}-{} exist twice".format(im1, im2))
-
-    for edge in sorted(edges_to_remove):
-        logger.debug("quad removing edge {} -{}".format(edge[0], edge[1]))
-        matches.pop(edge)
-
-    logger.debug("loop filtering end, removed {} edges, {:2.1f}% of all".
-                 format(len(edges_to_remove), 100*len(edges_to_remove)/len(pairs)))
-
-    return matches
+    return bad_candidates
 
 
-def calc_feature_distribution(im, fids_n1_n2, fids_n1_m, features):
-    """
-    returning a weight that is the ratio of feature coverage of n1_m and n1_n2
-    :param im:
-    :param fids_n1_n2:
-    :param fids_n1_m:
-    :param features:
+def chaining_test(loop_candidate, matches, pairs):
+    '''
+    find a loop that connects any image in ids_0 group to ids_1 group, and test if
+    the loop is valid
+    :param loop_candidate:
+    :param matches:
+    :param pairs:
     :return:
-    """
-    grid_size = math.sqrt(len(fids_n1_n2))
+    '''
+    ids_0 = sorted(loop_candidate.get_ids_0())
+    ids_1 = sorted(loop_candidate.get_ids_1(), reverse=True)
+    logger.debug("ids_0={}".format(ids_0))
+    logger.debug("ids_1={}".format(ids_1))
+    for start_id in ids_0:
+        logger.debug("start_id={}".format(start_id))
+        for end_id in ids_1:
+            logger.debug("end_id={}".format(end_id))
+            if (start_id, end_id) in matches or (end_id, start_id) in matches:
+                path = [start_id]
+                curr_id = next_id = start_id
+                while _shot_id_to_int(next_id) < _shot_id_to_int(end_id):
+                    next_id = _next_shot_id(next_id)
+                    if (curr_id, next_id) in matches or (next_id, curr_id) in matches:
+                        path.append(next_id)
+                        curr_id = next_id
 
-    occupied_n1_n2 = set()
-    for id in fids_n1_n2:
+                logger.debug("path={}".format(path))
+                if path[-1] == end_id:
+                    if is_loop_valid(path, pairs):
+                        return True
+
+    return False
+
+
+def common_fids(im1, im2, matches):
+    fids = []
+    if (im1, im2) in matches:
+        for f1, f2 in matches[im1, im2]:
+            fids.append(f1)
+    elif (im2, im1) in matches:
+        for f1, f2 in matches[im2, im1]:
+            fids.append(f2)
+
+    return fids
+
+
+def feature_occupancy(im, fids, features, grid_size):
+    occupied = set()
+    for id in fids:
         x, y, s = features[im][id]
-        occupied_n1_n2.add((int(x*grid_size), int(y*grid_size)))
+        occupied.add((int(x*grid_size), int(y*grid_size)))
 
-    occupied_n1_m = set()
-    for id in fids_n1_m:
-        x, y, s = features[im][id]
-        occupied_n1_m.add((int(x*grid_size), int(y*grid_size)))
-
-    return len(occupied_n1_m)/len(occupied_n1_n2)
+    return len(occupied)
 
 
-def get_common_ratio(n1, n2, m, features, matches):
+def common_ratio(n1, n2, m, matches):
     """
     calculates the ratio of # of common features of the triplet (n1, n2, m) to
     # of common features of the pair (n1, n2). the larger the ratio the more
@@ -251,31 +316,22 @@ def get_common_ratio(n1, n2, m, features, matches):
     :return:
     """
     uf = UnionFind()
-    fids_n1_n2 = []
 
     if (n1, n2) in matches:
         base_cnt = len(matches[n1, n2])
         for f1, f2 in matches[n1, n2]:
             uf.union((n1, f1), (n2, f2))
-            fids_n1_n2.append(f1)
     else:
         base_cnt = len(matches[n2, n1])
         for f1, f2 in matches[n2, n1]:
             uf.union((n2, f1), (n1, f2))
-            fids_n1_n2.append(f2)
 
-    if base_cnt < 50:
-        return 0
-
-    fids_n1_m = []
     if (n1, m) in matches:
         for f1, f2 in matches[n1, m]:
             uf.union((n1, f1), (m, f2))
-            fids_n1_m.append(f1)
     else:
         for f1, f2 in matches[m, n1]:
             uf.union((m, f1), (n1, f2))
-            fids_n1_m.append(f2)
 
     if (n2, m) in matches:
         for f1, f2 in matches[n2, m]:
@@ -308,9 +364,7 @@ def get_common_ratio(n1, n2, m, features, matches):
                     cnt += 1
                     break
 
-    weight = calc_feature_distribution(n1, fids_n1_n2, fids_n1_m, features)
-
-    return cnt/base_cnt * weight
+    return cnt/base_cnt
 
 
 def cluster_quads(valid_quads, radius):
@@ -451,7 +505,7 @@ class LoopCandidate(object):
         return self.ids_1
 
 
-def get_quads(im1, im2, matches, pairs):
+def get_valid_quads(im1, im2, matches, pairs):
     k = 3
     quads = []
 
@@ -470,7 +524,9 @@ def get_quads(im1, im2, matches, pairs):
 
             if all_edge_exists([im1, im1_neighbor, im2, im2_neighbor], matches):
                 if is_triplet_valid(im1, im1_neighbor, im2, pairs) and \
-                   is_triplet_valid(im2, im2_neighbor, im1_neighbor, pairs):
+                   is_triplet_valid(im2, im2_neighbor, im1_neighbor, pairs) and \
+                   is_triplet_valid(im1, im1_neighbor, im2_neighbor, pairs) and \
+                   is_triplet_valid(im2, im2_neighbor, im1, pairs):
                     quads.append(sorted((im1, im1_neighbor, im2, im2_neighbor)))
             '''
             if all_edge_exists([im1, im1_neighbor, im2], matches) and \
@@ -525,6 +581,26 @@ def is_triplet_valid(i, j, k, pairs):
     if np.linalg.norm(cv2.Rodrigues(Rik.dot(Rkj.dot(Rji)))[0].ravel()) < math.pi/12:
         return True
     else:
+        return False
+
+
+def is_loop_valid(images, pairs):
+    # for a triplet, the threshold is math.pi/12. for every additional image in the
+    # loop we allow on average an additional 1 degree error
+    # TODO - cren optionize the degree threshold below
+    thresh = math.pi/12 + (len(images) - 3) * math.pi/180
+
+    R = np.identity(3, dtype=float)
+    for n1, n2 in zip(images, images[1:]):
+        R = get_transform(n1, n2, pairs).dot(R)
+
+    R = get_transform(images[-1], images[0], pairs).dot(R)
+
+    if np.linalg.norm(cv2.Rodrigues(R)[0].ravel()) < thresh:
+        logger.debug("valid={} thresh={}".format(np.linalg.norm(cv2.Rodrigues(R)[0].ravel()), thresh))
+        return True
+    else:
+        logger.debug("invalid={} thresh={}".format(np.linalg.norm(cv2.Rodrigues(R)[0].ravel()), thresh))
         return False
 
 
