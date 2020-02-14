@@ -176,7 +176,7 @@ def loop_filter(data, images, features, matches, pairs):
                         edges_to_remove.add((im2, im1))
 
     for edge in sorted(edges_to_remove):
-        logger.debug("quad removing edge {} -{}".format(edge[0], edge[1]))
+        logger.debug("loop removing edge {} -{}".format(edge[0], edge[1]))
         matches.pop(edge)
 
     logger.debug("loop filtering end, removed {} edges, {:2.1f}% of all".
@@ -188,71 +188,90 @@ def loop_filter(data, images, features, matches, pairs):
 def filter_candidates(loop_candidates, matches, features, pairs):
     bad_candidates = []
     for cand in loop_candidates:
-        common_ratios = []
-
-        ns = sorted(cand.get_ids_0())
-        ms = sorted(cand.get_ids_1())
-        for n1, n2 in zip(ns, ns[1:]):
-            ratio_max = 0
-
-            fids_n1_n2 = common_fids(n1, n2, matches)
-            if len(fids_n1_n2) < 50:
-                continue
-            grid_size = math.sqrt(len(fids_n1_n2))
-            fo_n1_n2 = feature_occupancy(n1, fids_n1_n2, features, grid_size)
-            for m in ms:
-                if all_edge_exists([n1, n2, m], matches):
-                    fids_n1_m = common_fids(n1, m, matches)
-                    fo_n1_m = feature_occupancy(n1, fids_n1_m, features, grid_size)
-                    ratio = common_ratio(n1, n2, m, matches) * fo_n1_m / fo_n1_n2
-                    if ratio > ratio_max:
-                        ratio_max = ratio
-
-            if ratio_max > 0:
-                common_ratios.append(ratio_max)
-
-        for m1, m2 in zip(ms, ms[1:]):
-            ratio_max = 0
-
-            fids_m1_m2 = common_fids(m1, m2, matches)
-            if len(fids_m1_m2) < 50:
-                continue
-            grid_size = math.sqrt(len(fids_m1_m2))
-            fo_m1_m2 = feature_occupancy(m1, fids_m1_m2, features, grid_size)
-            for n in ns:
-                if all_edge_exists([m1, m2, n], matches):
-                    fids_m1_n = common_fids(m1, n, matches)
-                    fo_m1_n = feature_occupancy(m1, fids_m1_n, features, grid_size)
-                    ratio = common_ratio(m1, m2, n, matches) * fo_m1_n / fo_m1_m2
-                    if ratio > ratio_max:
-                        ratio_max = ratio
-
-            if ratio_max > 0:
-                common_ratios.append(ratio_max)
-
-        avg_ratio = 0
-        if common_ratios:
-            avg_ratio = sum(common_ratios) / len(common_ratios)
-
         logger.debug("loop candidate center {:4.1f}-{:4.1f}, "
-                     "average overlap {}, "
                      "members {} - {}".format(
-            cand.get_center_0(), cand.get_center_1(), avg_ratio,
+            cand.get_center_0(), cand.get_center_1(),
             sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
 
-        # TODO - cren optionize the ratio threshold below
-        if avg_ratio < 0.15:
+        if not is_chain_valid(cand, matches, pairs):
             bad_candidates.append(cand)
-        else:
-            chaining_test(cand, matches, pairs)
+        elif is_missing_features(cand, matches, features):
+            bad_candidates.append(cand)
 
     return bad_candidates
 
 
-def chaining_test(loop_candidate, matches, pairs):
+def is_missing_features(loop_candidate, matches, features):
     '''
-    find a loop that connects any image in ids_0 group to ids_1 group, and test if
-    the loop is valid
+    take two images n1, n2 from one side of the loop candidate, and one image m from the other side. the two images
+    n1 and n2 presumably have a valid match. we compare how much features n1/n2/m have in common vs n1/n2 has in
+    common. if this is a true loop, then the ratio of common features should be large. if a significant percentage
+    of features is missing, then this is likely to be a false loop. we also take feature distribution into
+    consideration - if this is a false loop, then common features n1/n2 should be more evenly distributed in the
+    image than the n1/m common features
+    :param loop_candidate:
+    :param matches:
+    :param features:
+    :return:
+    '''
+    common_ratios = []
+
+    ns = sorted(loop_candidate.get_ids_0())
+    ms = sorted(loop_candidate.get_ids_1())
+    for n1, n2 in zip(ns, ns[1:]):
+        ratio_max = 0
+
+        fids_n1_n2 = common_fids(n1, n2, matches)
+        if len(fids_n1_n2) < 50:
+            continue
+        grid_size = math.sqrt(len(fids_n1_n2))
+        fo_n1_n2 = feature_occupancy(n1, fids_n1_n2, features, grid_size)
+        for m in ms:
+            if all_edge_exists([n1, n2, m], matches):
+                fids_n1_m = common_fids(n1, m, matches)
+                fo_n1_m = feature_occupancy(n1, fids_n1_m, features, grid_size)
+                ratio = common_ratio(n1, n2, m, matches) * fo_n1_m / fo_n1_n2
+                if ratio > ratio_max:
+                    ratio_max = ratio
+
+        if ratio_max > 0:
+            common_ratios.append(ratio_max)
+
+    for m1, m2 in zip(ms, ms[1:]):
+        ratio_max = 0
+
+        fids_m1_m2 = common_fids(m1, m2, matches)
+        if len(fids_m1_m2) < 50:
+            continue
+        grid_size = math.sqrt(len(fids_m1_m2))
+        fo_m1_m2 = feature_occupancy(m1, fids_m1_m2, features, grid_size)
+        for n in ns:
+            if all_edge_exists([m1, m2, n], matches):
+                fids_m1_n = common_fids(m1, n, matches)
+                fo_m1_n = feature_occupancy(m1, fids_m1_n, features, grid_size)
+                ratio = common_ratio(m1, m2, n, matches) * fo_m1_n / fo_m1_m2
+                if ratio > ratio_max:
+                    ratio_max = ratio
+
+        if ratio_max > 0:
+            common_ratios.append(ratio_max)
+
+    avg_ratio = 0
+    if common_ratios:
+        avg_ratio = sum(common_ratios) / len(common_ratios)
+
+    logger.debug("average overlap {}, "
+                 "members {} - {}".format(avg_ratio,
+                                          sorted(loop_candidate.get_ids_0()), sorted(loop_candidate.get_ids_1())))
+
+    # TODO - cren optionize the ratio threshold below
+    return avg_ratio < 0.15
+
+
+def is_chain_valid(loop_candidate, matches, pairs):
+    '''
+    find a sequential chain that connects an image in ids_0 group to an image in ids_1 group, and loops back.
+    if any such loop is valid, the chain is regarded as valid
     :param loop_candidate:
     :param matches:
     :param pairs:
@@ -260,12 +279,8 @@ def chaining_test(loop_candidate, matches, pairs):
     '''
     ids_0 = sorted(loop_candidate.get_ids_0())
     ids_1 = sorted(loop_candidate.get_ids_1(), reverse=True)
-    logger.debug("ids_0={}".format(ids_0))
-    logger.debug("ids_1={}".format(ids_1))
     for start_id in ids_0:
-        logger.debug("start_id={}".format(start_id))
         for end_id in ids_1:
-            logger.debug("end_id={}".format(end_id))
             if (start_id, end_id) in matches or (end_id, start_id) in matches:
                 path = [start_id]
                 curr_id = next_id = start_id
@@ -275,9 +290,9 @@ def chaining_test(loop_candidate, matches, pairs):
                         path.append(next_id)
                         curr_id = next_id
 
-                logger.debug("path={}".format(path))
                 if path[-1] == end_id:
                     if is_loop_valid(path, pairs):
+                        logger.debug("valid chain {}".format(path))
                         return True
 
     return False
@@ -573,22 +588,25 @@ def all_edge_exists(node_list, matches):
 
 
 def is_triplet_valid(i, j, k, pairs):
+    '''
     Rji = get_transform(i, j, pairs)
     Rkj = get_transform(j, k, pairs)
     Rik = get_transform(k, i, pairs)
 
-    # TODO - cren optionize the degree threshold below
     if np.linalg.norm(cv2.Rodrigues(Rik.dot(Rkj.dot(Rji)))[0].ravel()) < math.pi/12:
         return True
     else:
         return False
+    '''
 
-
-def is_loop_valid(images, pairs):
-    # for a triplet, the threshold is math.pi/12. for every additional image in the
-    # loop we allow on average an additional 1 degree error
     # TODO - cren optionize the degree threshold below
-    thresh = math.pi/12 + (len(images) - 3) * math.pi/180
+    return is_loop_valid([i, j, k], pairs, thresh=math.pi/18)
+
+
+def is_loop_valid(images, pairs, thresh=None):
+    # TODO - cren optionize the degree threshold below
+    if thresh is None:
+        thresh = math.pi/4
 
     R = np.identity(3, dtype=float)
     for n1, n2 in zip(images, images[1:]):
