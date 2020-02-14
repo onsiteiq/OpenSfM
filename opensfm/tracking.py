@@ -2,6 +2,7 @@ import logging
 import sys
 import cv2
 import math
+import random
 
 import numpy as np
 import networkx as nx
@@ -79,7 +80,7 @@ def triplet_filter(data, images, matches, pairs):
         for k in images:
             if i != k and j != k:
                 if all_edge_exists([i, j, k], matches):
-                    if is_triplet_valid(i, j, k, pairs):
+                    if is_triplet_valid([i, j, k], pairs):
                         cnt = cnt_good
                     else:
                         cnt = cnt_bad
@@ -193,7 +194,7 @@ def filter_candidates(loop_candidates, matches, features, pairs):
             cand.get_center_0(), cand.get_center_1(),
             sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
 
-        if not is_chain_valid(cand, matches, pairs):
+        if not find_valid_loop(cand, matches, pairs):
             bad_candidates.append(cand)
         elif is_missing_features(cand, matches, features):
             bad_candidates.append(cand)
@@ -265,7 +266,77 @@ def is_missing_features(loop_candidate, matches, features):
                                           sorted(loop_candidate.get_ids_0()), sorted(loop_candidate.get_ids_1())))
 
     # TODO - cren optionize the ratio threshold below
-    return avg_ratio < 0.15
+    return avg_ratio < 0.17
+
+
+def get_random_path(start_id, end_id):
+    path = [start_id]
+
+    start_index = _shot_id_to_int(start_id)
+    end_index = _shot_id_to_int(end_id)
+
+    curr_index = start_index
+    while curr_index < end_index:
+        curr_index += random.randint(1, 2)
+        curr_index = min(end_index, curr_index)
+        path.append(_int_to_shot_id(curr_index))
+
+    return path
+
+
+def find_valid_loop(loop_candidate, matches, pairs):
+    ids_0 = sorted(loop_candidate.get_ids_0())
+    ids_1 = sorted(loop_candidate.get_ids_1())
+
+    max_retries = 1000
+    retries = 0
+    while retries < max_retries:
+        start_id = random.choice(ids_0)
+        end_id = random.choice(ids_1)
+
+        if (start_id, end_id) in matches or (end_id, start_id) in matches:
+            path = get_random_path(start_id, end_id)
+            if is_loop_valid(path, pairs):
+                logger.debug("valid chain {}".format(path))
+                return True
+
+        retries += 1
+
+    return False
+
+
+'''
+def find_valid_loop(loop_candidate, matches, pairs):
+    ids_0 = sorted(loop_candidate.get_ids_0())
+    ids_1 = sorted(loop_candidate.get_ids_1())
+    for n1, n2 in zip(ids_0, ids_0[1:]):
+        logger.debug("start chain {} {}".format(n1, n2))
+        found = False
+        path = [n1, n2]
+        next_id = n2
+        while _shot_id_to_int(next_id) < _shot_id_to_int(ids_1[-1]):
+            next_id = _next_shot_id(next_id)
+            next_triplet = [path[-1], path[-2], next_id]
+            if all_edge_exists(next_triplet, matches) and is_triplet_valid(next_triplet, pairs):
+                path.append(next_id)
+                logger.debug("chain {}".format(path))
+
+                if next_id in ids_1:
+                    if (n1, next_id) in matches or (next_id, n1) in matches:
+                        found = True
+                        break
+
+        if found:
+            if is_loop_valid(path, pairs):
+                logger.debug("valid chain {}".format(path))
+                return True
+            else:
+                logger.debug("invalid chain {}".format(path))
+        else:
+            logger.debug("no chain")
+
+    return False
+'''
 
 
 def is_chain_valid(loop_candidate, matches, pairs):
@@ -538,10 +609,10 @@ def get_valid_quads(im1, im2, matches, pairs):
             im2_neighbor = _int_to_shot_id(j)
 
             if all_edge_exists([im1, im1_neighbor, im2, im2_neighbor], matches):
-                if is_triplet_valid(im1, im1_neighbor, im2, pairs) and \
-                   is_triplet_valid(im2, im2_neighbor, im1_neighbor, pairs) and \
-                   is_triplet_valid(im1, im1_neighbor, im2_neighbor, pairs) and \
-                   is_triplet_valid(im2, im2_neighbor, im1, pairs):
+                if is_triplet_valid([im1, im1_neighbor, im2], pairs) and \
+                   is_triplet_valid([im2, im2_neighbor, im1_neighbor], pairs) and \
+                   is_triplet_valid([im1, im1_neighbor, im2_neighbor], pairs) and \
+                   is_triplet_valid([im2, im2_neighbor, im1], pairs):
                     quads.append(sorted((im1, im1_neighbor, im2, im2_neighbor)))
             '''
             if all_edge_exists([im1, im1_neighbor, im2], matches) and \
@@ -587,7 +658,7 @@ def all_edge_exists(node_list, matches):
     return True
 
 
-def is_triplet_valid(i, j, k, pairs):
+def is_triplet_valid(triplet, pairs):
     '''
     Rji = get_transform(i, j, pairs)
     Rkj = get_transform(j, k, pairs)
@@ -600,7 +671,7 @@ def is_triplet_valid(i, j, k, pairs):
     '''
 
     # TODO - cren optionize the degree threshold below
-    return is_loop_valid([i, j, k], pairs, thresh=math.pi/18)
+    return is_loop_valid(triplet, pairs, thresh=math.pi/18)
 
 
 def is_loop_valid(images, pairs, thresh=None):
