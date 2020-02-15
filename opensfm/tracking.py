@@ -196,8 +196,10 @@ def filter_candidates(loop_candidates, matches, features, pairs):
 
         if not find_valid_loop(cand, matches, pairs):
             bad_candidates.append(cand)
+            logger.debug("invalid loop: no valid loop found")
         elif is_missing_features(cand, matches, features):
             bad_candidates.append(cand)
+            logger.debug("invalid loop: missing features")
 
     return bad_candidates
 
@@ -261,9 +263,7 @@ def is_missing_features(loop_candidate, matches, features):
     if common_ratios:
         avg_ratio = sum(common_ratios) / len(common_ratios)
 
-    logger.debug("average overlap {}, "
-                 "members {} - {}".format(avg_ratio,
-                                          sorted(loop_candidate.get_ids_0()), sorted(loop_candidate.get_ids_1())))
+    logger.debug("average overlap {}".format(avg_ratio))
 
     # TODO - cren optionize the ratio threshold below
     return avg_ratio < 0.17
@@ -277,7 +277,7 @@ def get_random_path(start_id, end_id):
 
     curr_index = start_index
     while curr_index < end_index:
-        curr_index += random.randint(1, 2)
+        curr_index += random.randint(1, 3)
         curr_index = min(end_index, curr_index)
         path.append(_int_to_shot_id(curr_index))
 
@@ -285,6 +285,15 @@ def get_random_path(start_id, end_id):
 
 
 def find_valid_loop(loop_candidate, matches, pairs):
+    """
+    find chains that connects an image in ids_0 group to an image in ids_1 group, and loops back.
+    if any such chain satisfies loop constraint, the chain is regarded as valid. we randomize
+    members of the chain so that we are not affected if there's bad matches along the chain
+    :param loop_candidate:
+    :param matches:
+    :param pairs:
+    :return:
+    """
     ids_0 = sorted(loop_candidate.get_ids_0())
     ids_1 = sorted(loop_candidate.get_ids_1())
 
@@ -296,58 +305,25 @@ def find_valid_loop(loop_candidate, matches, pairs):
 
         if (start_id, end_id) in matches or (end_id, start_id) in matches:
             path = get_random_path(start_id, end_id)
-            if is_loop_valid(path, pairs):
-                logger.debug("valid chain {}".format(path))
+            if len(path) >= 3 and is_loop_valid(path, pairs):
+                #logger.debug("valid chain {}".format(path))
                 return True
 
-        retries += 1
+            retries += 1
 
     return False
 
 
 '''
-def find_valid_loop(loop_candidate, matches, pairs):
-    ids_0 = sorted(loop_candidate.get_ids_0())
-    ids_1 = sorted(loop_candidate.get_ids_1())
-    for n1, n2 in zip(ids_0, ids_0[1:]):
-        logger.debug("start chain {} {}".format(n1, n2))
-        found = False
-        path = [n1, n2]
-        next_id = n2
-        while _shot_id_to_int(next_id) < _shot_id_to_int(ids_1[-1]):
-            next_id = _next_shot_id(next_id)
-            next_triplet = [path[-1], path[-2], next_id]
-            if all_edge_exists(next_triplet, matches) and is_triplet_valid(next_triplet, pairs):
-                path.append(next_id)
-                logger.debug("chain {}".format(path))
-
-                if next_id in ids_1:
-                    if (n1, next_id) in matches or (next_id, n1) in matches:
-                        found = True
-                        break
-
-        if found:
-            if is_loop_valid(path, pairs):
-                logger.debug("valid chain {}".format(path))
-                return True
-            else:
-                logger.debug("invalid chain {}".format(path))
-        else:
-            logger.debug("no chain")
-
-    return False
-'''
-
-
 def is_chain_valid(loop_candidate, matches, pairs):
-    '''
+    """
     find a sequential chain that connects an image in ids_0 group to an image in ids_1 group, and loops back.
     if any such loop is valid, the chain is regarded as valid
     :param loop_candidate:
     :param matches:
     :param pairs:
     :return:
-    '''
+    """
     ids_0 = sorted(loop_candidate.get_ids_0())
     ids_1 = sorted(loop_candidate.get_ids_1(), reverse=True)
     for start_id in ids_0:
@@ -367,6 +343,7 @@ def is_chain_valid(loop_candidate, matches, pairs):
                         return True
 
     return False
+'''
 
 
 def common_fids(im1, im2, matches):
@@ -674,22 +651,25 @@ def is_triplet_valid(triplet, pairs):
     return is_loop_valid(triplet, pairs, thresh=math.pi/18)
 
 
-def is_loop_valid(images, pairs, thresh=None):
-    # TODO - cren optionize the degree threshold below
-    if thresh is None:
-        thresh = math.pi/4
-
+# TODO - cren optionize the degree threshold below
+def is_loop_valid(images, pairs, thresh=math.pi/4):
     R = np.identity(3, dtype=float)
     for n1, n2 in zip(images, images[1:]):
-        R = get_transform(n1, n2, pairs).dot(R)
+        r = get_transform(n1, n2, pairs)
+        if r.size == 0:
+            return False
+        R = r.dot(R)
 
-    R = get_transform(images[-1], images[0], pairs).dot(R)
+    r = get_transform(images[-1], images[0], pairs)
+    if r.size == 0:
+        return False
+    R = r.dot(R)
 
     if np.linalg.norm(cv2.Rodrigues(R)[0].ravel()) < thresh:
-        logger.debug("valid={} thresh={}".format(np.linalg.norm(cv2.Rodrigues(R)[0].ravel()), thresh))
+        #logger.debug("valid={} thresh={}".format(np.linalg.norm(cv2.Rodrigues(R)[0].ravel()), thresh))
         return True
     else:
-        logger.debug("invalid={} thresh={}".format(np.linalg.norm(cv2.Rodrigues(R)[0].ravel()), thresh))
+        #logger.debug("invalid={} thresh={}".format(np.linalg.norm(cv2.Rodrigues(R)[0].ravel()), thresh))
         return False
 
 
