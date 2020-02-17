@@ -270,6 +270,14 @@ def is_missing_features(loop_candidate, matches, features):
 
 
 def get_random_path(start_id, end_id):
+    """
+    we randomly skip members of the chain from start_id to end_id, so that we are less affected if there's
+    bad matches along the chain
+
+    :param start_id:
+    :param end_id:
+    :return:
+    """
     path = [start_id]
 
     start_index = _shot_id_to_int(start_id)
@@ -277,7 +285,7 @@ def get_random_path(start_id, end_id):
 
     curr_index = start_index
     while curr_index < end_index:
-        curr_index += random.randint(1, 3)
+        curr_index += random.randint(1, 2)
         curr_index = min(end_index, curr_index)
         path.append(_int_to_shot_id(curr_index))
 
@@ -287,8 +295,7 @@ def get_random_path(start_id, end_id):
 def find_valid_loop(loop_candidate, matches, pairs):
     """
     find chains that connects an image in ids_0 group to an image in ids_1 group, and loops back.
-    if any such chain satisfies loop constraint, the chain is regarded as valid. we randomize
-    members of the chain so that we are not affected if there's bad matches along the chain
+    if any such chain satisfies loop constraint, the chain is regarded as valid.
     :param loop_candidate:
     :param matches:
     :param pairs:
