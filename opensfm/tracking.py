@@ -211,7 +211,11 @@ def is_missing_features(loop_candidate, matches, features):
     common. if this is a true loop, then the ratio of common features should be large. if a significant percentage
     of features is missing, then this is likely to be a false loop. we also take feature distribution into
     consideration - if this is a false loop, then common features n1/n2 should be more evenly distributed in the
-    image than the n1/m common features
+    image than the n1/m common features.
+
+    this algorithm is inspired by Zach "What Can Missing Correspondences Tell Us About 3D Structure and Motion",
+    although the Bayesian formulation considered there is not really necessary in our case
+
     :param loop_candidate:
     :param matches:
     :param features:
@@ -231,9 +235,13 @@ def is_missing_features(loop_candidate, matches, features):
         fo_n1_n2 = feature_occupancy(n1, fids_n1_n2, features, grid_size)
         for m in ms:
             if all_edge_exists([n1, n2, m], matches):
-                fids_n1_m = common_fids(n1, m, matches)
-                fo_n1_m = feature_occupancy(n1, fids_n1_m, features, grid_size)
-                ratio = common_ratio(n1, n2, m, matches) * fo_n1_m / fo_n1_n2
+                ratio, fids_n1_n2_m = common_ratio(n1, n2, m, matches)
+
+                fo_n1_n2_m = feature_occupancy(n1, fids_n1_n2_m, features, grid_size)
+                feature_distribution_ratio = fo_n1_n2_m/fo_n1_n2
+
+                ratio = ratio * feature_distribution_ratio
+
                 if ratio > ratio_max:
                     ratio_max = ratio
 
@@ -250,9 +258,13 @@ def is_missing_features(loop_candidate, matches, features):
         fo_m1_m2 = feature_occupancy(m1, fids_m1_m2, features, grid_size)
         for n in ns:
             if all_edge_exists([m1, m2, n], matches):
-                fids_m1_n = common_fids(m1, n, matches)
-                fo_m1_n = feature_occupancy(m1, fids_m1_n, features, grid_size)
-                ratio = common_ratio(m1, m2, n, matches) * fo_m1_n / fo_m1_m2
+                ratio, fids_m1_m2_n = common_ratio(m1, m2, n, matches)
+
+                fo_m1_m2_n = feature_occupancy(m1, fids_m1_m2_n, features, grid_size)
+                feature_distribution_ratio = fo_m1_m2_n/fo_m1_m2
+
+                ratio = ratio * feature_distribution_ratio
+
                 if ratio > ratio_max:
                     ratio_max = ratio
 
@@ -266,7 +278,52 @@ def is_missing_features(loop_candidate, matches, features):
     logger.debug("average overlap {}".format(avg_ratio))
 
     # TODO - cren optionize the ratio threshold below
-    return avg_ratio < 0.17
+    return avg_ratio < 0.091
+
+
+class Graph:
+
+    def __init__(self, vertices):
+        self.V = vertices  # No. of vertices
+        self.graph = defaultdict(list)  # default dictionary to store graph
+
+    # function to add an edge to graph
+    def addEdge(self, v, w):
+        self.graph[v].append(w)  # Add w to v_s list
+        self.graph[w].append(v)  # Add v to w_s list
+
+    # A recursive function that uses visited[] and parent to detect
+    # cycle in subgraph reachable from vertex v.
+    def isCyclicUtil(self, v, visited, parent):
+
+        # Mark the current node as visited
+        visited[v] = True
+
+        # Recur for all the vertices adjacent to this vertex
+        for i in self.graph[v]:
+            # If the node is not visited then recurse on it
+            if visited[i] == False:
+                if (self.isCyclicUtil(i, visited, v)):
+                    return True
+            # If an adjacent vertex is visited and not parent of current vertex,
+            # then there is a cycle
+            elif parent != i:
+                return True
+
+        return False
+
+    # Returns true if the graph contains a cycle, else false.
+    def isCyclic(self):
+        # Mark all the vertices as not visited
+        visited = [False] * (self.V)
+        # Call the recursive helper function to detect cycle in different
+        # DFS trees
+        for i in range(self.V):
+            if visited[i] == False:  # Don't recur for u if it is already visited
+                if (self.isCyclicUtil(i, visited, -1)) == True:
+                    return True
+
+        return False
 
 
 def get_random_path(start_id, end_id):
@@ -421,20 +478,23 @@ def common_ratio(n1, n2, m, matches):
     tracks = [t for t in sets.values() if _good_track(t, 3)]
 
     cnt = 0
+    fids = []
     if (n1, n2) in matches:
         for f1, f2 in matches[n1, n2]:
             for track in tracks:
                 if (n1, f1) in track and (n2, f2) in track:
+                    fids.append(f1)
                     cnt += 1
                     break
     else:
         for f1, f2 in matches[n2, n1]:
             for track in tracks:
                 if (n2, f1) in track and (n1, f2) in track:
+                    fids.append(f2)
                     cnt += 1
                     break
 
-    return cnt/base_cnt
+    return cnt/base_cnt, fids
 
 
 def cluster_quads(valid_quads, radius):
@@ -483,38 +543,52 @@ def cluster_quads(valid_quads, radius):
     return loop_candidates
 
 
-'''
-def quad_to_coords(quad):
-    im_indices = []
-    for im in quad:
-        im_indices.append(_shot_id_to_int(im))
+class EpipolarGraph:
 
-    coords = []
-    coords.append((im_indices[0], im_indices[2]))
-    coords.append((im_indices[0], im_indices[3]))
-    coords.append((im_indices[1], im_indices[2]))
-    coords.append((im_indices[1], im_indices[3]))
+    def __init__(self, images, matches):
+        self.V = len(images)  # No. of vertices
+        self.graph = defaultdict(list)  # default dictionary to store graph
 
-    return coords
+        for im1, im2 in combinations(images, 2):
+            if not edge_exists(im1, im2, matches):
+                self.addEdge(im1, im2)
 
-def cluster_quads_kmeans(valid_quads, radius):
-    coords_set = set()
-    for quad in valid_quads:
-        coords = quad_to_coords(quad)
-        for coord in coords:
-            coords_set.add(coord)
+    def addEdge(self, v, w):
+        self.graph[v].append(w)  # Add w to v_s list
+        self.graph[w].append(v)  # Add v to w_s list
 
-    np_coords = np.asarray(list(coords_set), dtype=np.float32)
+    # A recursive function that uses visited[] and parent to detect
+    # cycle in subgraph reachable from vertex v.
+    def findPathUtil(self, v, visited, parent):
 
-    # define criteria and apply kmeans()
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1.0)
-    ret, label, center = cv2.kmeans(np_coords, 50, None, criteria, 100, cv2.KMEANS_RANDOM_CENTERS)
+        # Mark the current node as visited
+        visited[v] = True
 
-    # Now separate the data, Note the flatten()
-    for i in range(100):
-        A = np_coords[label.ravel() == i]
-        logger.debug("{} -- {}".format(sorted(set(A[:, 0])), sorted(set(A[:, 1]))))
-'''
+        # Recur for all the vertices adjacent to this vertex
+        for i in self.graph[v]:
+            # If the node is not visited then recurse on it
+            if not visited[i]:
+                if self.isCyclicUtil(i, visited, v):
+                    return True
+            # If an adjacent vertex is visited and not parent of current vertex,
+            # then there is a cycle
+            elif parent != i:
+                return True
+
+        return False
+
+    # Returns true if the graph contains a cycle, else false.
+    def findPath(self, im1, im2):
+        # Mark all the vertices as not visited
+        visited = [False] * (self.V)
+        # Call the recursive helper function to detect cycle in different
+        # DFS trees
+        for i in range(self.V):
+            if not visited[i]:  # Don't recur for u if it is already visited
+                if self.isCyclicUtil(i, visited, -1):
+                    return True
+
+        return False
 
 
 class LoopCandidate(object):
