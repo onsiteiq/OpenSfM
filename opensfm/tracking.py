@@ -162,7 +162,7 @@ def loop_filter(data, images, features, matches, pairs):
     loop_candidates = cluster_quads(valid_quads_set, radius)
 
     # apply various checks to figure out bad loop candidates
-    bad_candidates = filter_candidates(loop_candidates, matches, features, pairs)
+    bad_candidates = filter_candidates(images, loop_candidates, matches, features, pairs)
 
     # remove matches in bad loop candidates
     edges_to_remove = set()
@@ -186,7 +186,9 @@ def loop_filter(data, images, features, matches, pairs):
     return matches #, loop_candidates
 
 
-def filter_candidates(loop_candidates, matches, features, pairs):
+def filter_candidates(images, loop_candidates, matches, features, pairs):
+    path_finder = PathFinder(images, matches, pairs)
+
     bad_candidates = []
     for cand in loop_candidates:
         logger.debug("loop candidate center {:4.1f}-{:4.1f}, "
@@ -194,7 +196,8 @@ def filter_candidates(loop_candidates, matches, features, pairs):
             cand.get_center_0(), cand.get_center_1(),
             sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
 
-        if not find_valid_loop(cand, matches, pairs):
+        #if not find_valid_loop(cand, matches, pairs):
+        if not find_valid_loop_new(cand, matches, path_finder):
             bad_candidates.append(cand)
             logger.debug("invalid loop: no valid loop found")
         elif is_missing_features(cand, matches, features):
@@ -281,47 +284,93 @@ def is_missing_features(loop_candidate, matches, features):
     return avg_ratio < 0.091
 
 
-class Graph:
+class PathFinder:
 
-    def __init__(self, vertices):
-        self.V = vertices  # No. of vertices
+    def __init__(self, images, matches, pairs, max_jump=20):
+        self.numVertices = 0  # No. of vertices
+        self.start = self.finish = 0
+        self.pairs = pairs
         self.graph = defaultdict(list)  # default dictionary to store graph
+
+        for im1 in sorted(images):
+            im2 = _int_to_shot_id(_shot_id_to_int(im1) + 1)
+            for i in range(2, max_jump):
+                im3 = _int_to_shot_id(_shot_id_to_int(im1) + i)
+                if all_edge_exists([im1, im2, im3], matches):
+                    if is_triplet_valid([im1, im2, im3], pairs):
+                        self.addEdge(_shot_id_to_int(im1), _shot_id_to_int(im3))
+                        logger.debug("adding edge {} - {}".format(im1, im3))
 
     # function to add an edge to graph
     def addEdge(self, v, w):
         self.graph[v].append(w)  # Add w to v_s list
-        self.graph[w].append(v)  # Add v to w_s list
 
-    # A recursive function that uses visited[] and parent to detect
-    # cycle in subgraph reachable from vertex v.
-    def isCyclicUtil(self, v, visited, parent):
-
+    # A recursive function that uses visited[] to detect valid path
+    def findPathUtil(self, v, visited, recStack):
         # Mark the current node as visited
-        visited[v] = True
+        visited[v-self.start] = True
+        recStack[v-self.start] = True
+
+        curr_path = []
+        for k, is_in_stack in enumerate(recStack):
+            if is_in_stack:
+                curr_path.append(_int_to_shot_id(k + self.start))
+                curr_path.append(_int_to_shot_id(k + self.start + 1))
+        logger.debug("on stack {}".format(curr_path))
 
         # Recur for all the vertices adjacent to this vertex
         for i in self.graph[v]:
-            # If the node is not visited then recurse on it
-            if visited[i] == False:
-                if (self.isCyclicUtil(i, visited, v)):
-                    return True
-            # If an adjacent vertex is visited and not parent of current vertex,
-            # then there is a cycle
-            elif parent != i:
-                return True
+            if i < self.finish - 1:
+                if not visited[i-self.start]:
+                    # If the node is not visited then recurse on it
+                    if self.findPathUtil(i, visited, recStack):
+                        return True
+            elif i == self.finish - 1:
+                path = []
+                for j, is_in_stack in enumerate(recStack):
+                    if is_in_stack:
+                        path.append(_int_to_shot_id(j + self.start))
+                        path.append(_int_to_shot_id(j + self.start + 1))
+                path.append(_int_to_shot_id(i))
+                path.append(_int_to_shot_id(i+1))
 
+                if is_loop_valid(path, self.pairs):
+                    logger.debug("valid path {}".format(path))
+                    return True
+                else:
+                    logger.debug("invalid path {}".format(path))
+            elif i == self.finish:
+                path = []
+                for j, is_in_stack in enumerate(recStack):
+                    if is_in_stack:
+                        path.append(_int_to_shot_id(j+self.start))
+                        path.append(_int_to_shot_id(j+self.start+1))
+                path.append(_int_to_shot_id(i))
+
+                if is_loop_valid(path, self.pairs):
+                    logger.debug("valid path {}".format(path))
+                    return True
+                else:
+                    logger.debug("invalid path {}".format(path))
+
+        recStack[v-self.start] = False
         return False
 
-    # Returns true if the graph contains a cycle, else false.
-    def isCyclic(self):
+    # Returns true if the graph contains a path from start id to end id, else false.
+    def findPath(self, start_id, end_id):
+        self.start = _shot_id_to_int(start_id)
+        self.finish = _shot_id_to_int(end_id)
+        self.numVertices = self.finish - self.start + 1
+
         # Mark all the vertices as not visited
-        visited = [False] * (self.V)
-        # Call the recursive helper function to detect cycle in different
-        # DFS trees
-        for i in range(self.V):
-            if visited[i] == False:  # Don't recur for u if it is already visited
-                if (self.isCyclicUtil(i, visited, -1)) == True:
-                    return True
+        visited = [False] * self.numVertices
+        recStack = [False] * self.numVertices
+
+        logger.debug("finding path between {} - {}".format(start_id, end_id))
+
+        # Call the recursive helper function to detect valid path in different DFS trees
+        if self.findPathUtil(self.start, visited, recStack):
+            return True
 
         return False
 
@@ -347,6 +396,28 @@ def get_random_path(start_id, end_id):
         path.append(_int_to_shot_id(curr_index))
 
     return path
+
+
+def find_valid_loop_new(loop_candidate, matches, path_finder):
+    ids_0 = sorted(loop_candidate.get_ids_0())
+    ids_1 = sorted(loop_candidate.get_ids_1())
+
+    max_retries = 10
+    retries = 0
+    while retries < max_retries:
+        start_id = random.choice(ids_0)
+        end_id = random.choice(ids_1)
+
+        if start_id >= end_id:
+            continue
+
+        if (start_id, end_id) in matches or (end_id, start_id) in matches:
+            if path_finder.findPath(start_id, end_id):
+                return True
+
+            retries += 1
+
+    return False
 
 
 def find_valid_loop(loop_candidate, matches, pairs):
@@ -543,54 +614,6 @@ def cluster_quads(valid_quads, radius):
     return loop_candidates
 
 
-class EpipolarGraph:
-
-    def __init__(self, images, matches):
-        self.V = len(images)  # No. of vertices
-        self.graph = defaultdict(list)  # default dictionary to store graph
-
-        for im1, im2 in combinations(images, 2):
-            if not edge_exists(im1, im2, matches):
-                self.addEdge(im1, im2)
-
-    def addEdge(self, v, w):
-        self.graph[v].append(w)  # Add w to v_s list
-        self.graph[w].append(v)  # Add v to w_s list
-
-    # A recursive function that uses visited[] and parent to detect
-    # cycle in subgraph reachable from vertex v.
-    def findPathUtil(self, v, visited, parent):
-
-        # Mark the current node as visited
-        visited[v] = True
-
-        # Recur for all the vertices adjacent to this vertex
-        for i in self.graph[v]:
-            # If the node is not visited then recurse on it
-            if not visited[i]:
-                if self.isCyclicUtil(i, visited, v):
-                    return True
-            # If an adjacent vertex is visited and not parent of current vertex,
-            # then there is a cycle
-            elif parent != i:
-                return True
-
-        return False
-
-    # Returns true if the graph contains a cycle, else false.
-    def findPath(self, im1, im2):
-        # Mark all the vertices as not visited
-        visited = [False] * (self.V)
-        # Call the recursive helper function to detect cycle in different
-        # DFS trees
-        for i in range(self.V):
-            if not visited[i]:  # Don't recur for u if it is already visited
-                if self.isCyclicUtil(i, visited, -1):
-                    return True
-
-        return False
-
-
 class LoopCandidate(object):
     """
     Loop candidate
@@ -733,15 +756,15 @@ def is_triplet_valid(triplet, pairs):
 
 
 # TODO - cren optionize the degree threshold below
-def is_loop_valid(images, pairs, thresh=math.pi/4):
+def is_loop_valid(path, pairs, thresh=math.pi/4):
     R = np.identity(3, dtype=float)
-    for n1, n2 in zip(images, images[1:]):
+    for n1, n2 in zip(path, path[1:]):
         r = get_transform(n1, n2, pairs)
         if r.size == 0:
             return False
         R = r.dot(R)
 
-    r = get_transform(images[-1], images[0], pairs)
+    r = get_transform(path[-1], path[0], pairs)
     if r.size == 0:
         return False
     R = r.dot(R)
