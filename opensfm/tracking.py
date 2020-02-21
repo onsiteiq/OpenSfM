@@ -196,8 +196,7 @@ def filter_candidates(images, loop_candidates, matches, features, pairs):
             cand.get_center_0(), cand.get_center_1(),
             sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
 
-        #if not find_valid_loop(cand, matches, pairs):
-        if 'badloop' == find_valid_loop_new(cand, matches, path_finder):
+        if 'badloop' == find_valid_loop(cand, matches, path_finder):
             bad_candidates.append(cand)
             logger.debug("invalid loop: only bad loops found")
         elif is_missing_features(cand, matches, features):
@@ -285,11 +284,23 @@ def is_missing_features(loop_candidate, matches, features):
 
 
 class PathFinder:
+    """
+    at initialization, we construct a directed graph that consists of 
+    'trusted' edges. an edge is considered trusted if it is part of a 
+    valid triplet. 
+
+    the main utility of this class is to return a 'path' between any
+    two images, start_id/end_id. a 'path' is set of images in ascending
+    order, with a trusted edge between each neighboring pair. each path
+    generally goes from one image to a close neighbors at each leg, but 
+    (occasionally and at random places) jumps over some images. this is
+    designed to skip a small subset of images in each path, in the event 
+    they have bad epipolar geometry.
+    """
 
     def __init__(self, images, matches, pairs, max_jump=10):
         self.path = []
         self.numVertices = 0  # No. of vertices
-        self.sortOrder = []
         self.start = self.finish = 0
         self.pairs = pairs
         self.graph = defaultdict(set)  # default dictionary to store graph
@@ -326,7 +337,8 @@ class PathFinder:
         # Recur until we reach the end_id. note most of the time we sort the neighboring vertices with
         # nearest neighbor first, so that we tend to find the longest path. however we occasionally
         # flip the sorting order, in order to randomly skip some vertices (in case they are bad)
-        for i in sorted(self.graph[v], reverse=self.sortOrder[v-self.start]):
+        isReversed = random.choices(population=[True, False], weights=[0.2, 0.8], k=1)[0]
+        for i in sorted(self.graph[v], reverse=isReversed):
             if i < self.finish:
                 if not visited[i-self.start]:
                     if self.findPathUtil(i, visited, recStack):
@@ -348,7 +360,6 @@ class PathFinder:
         self.start = _shot_id_to_int(start_id)
         self.finish = _shot_id_to_int(end_id)
         self.numVertices = self.finish - self.start + 1
-        self.sortOrder = random.choices(population=[True, False], weights=[0.1, 0.9], k=self.numVertices)
 
         # Mark all the vertices as not visited
         visited = [False] * self.numVertices
@@ -388,7 +399,7 @@ def get_random_path(start_id, end_id):
     return path
 
 
-def find_valid_loop_new(loop_candidate, matches, path_finder):
+def find_valid_loop(loop_candidate, matches, path_finder):
     """
     this method returns:
         'goodloop' if a valid loop has been found
@@ -427,67 +438,6 @@ def find_valid_loop_new(loop_candidate, matches, path_finder):
                     retries += 1
 
     return ret_val
-
-
-def find_valid_loop(loop_candidate, matches, pairs):
-    """
-    find chains that connects an image in ids_0 group to an image in ids_1 group, and loops back.
-    if any such chain satisfies loop constraint, the chain is regarded as valid.
-    :param loop_candidate:
-    :param matches:
-    :param pairs:
-    :return:
-    """
-    ids_0 = sorted(loop_candidate.get_ids_0())
-    ids_1 = sorted(loop_candidate.get_ids_1())
-
-    max_retries = 1000
-    retries = 0
-    while retries < max_retries:
-        start_id = random.choice(ids_0)
-        end_id = random.choice(ids_1)
-
-        if (start_id, end_id) in matches or (end_id, start_id) in matches:
-            path = get_random_path(start_id, end_id)
-            if len(path) >= 3 and is_loop_valid(path, pairs):
-                #logger.debug("valid chain {}".format(path))
-                return True
-
-            retries += 1
-
-    return False
-
-
-'''
-def is_chain_valid(loop_candidate, matches, pairs):
-    """
-    find a sequential chain that connects an image in ids_0 group to an image in ids_1 group, and loops back.
-    if any such loop is valid, the chain is regarded as valid
-    :param loop_candidate:
-    :param matches:
-    :param pairs:
-    :return:
-    """
-    ids_0 = sorted(loop_candidate.get_ids_0())
-    ids_1 = sorted(loop_candidate.get_ids_1(), reverse=True)
-    for start_id in ids_0:
-        for end_id in ids_1:
-            if (start_id, end_id) in matches or (end_id, start_id) in matches:
-                path = [start_id]
-                curr_id = next_id = start_id
-                while _shot_id_to_int(next_id) < _shot_id_to_int(end_id):
-                    next_id = _next_shot_id(next_id)
-                    if (curr_id, next_id) in matches or (next_id, curr_id) in matches:
-                        path.append(next_id)
-                        curr_id = next_id
-
-                if path[-1] == end_id:
-                    if is_loop_valid(path, pairs):
-                        logger.debug("valid chain {}".format(path))
-                        return True
-
-    return False
-'''
 
 
 def common_fids(im1, im2, matches):
@@ -765,7 +715,7 @@ def is_triplet_valid(triplet, pairs):
 
 
 # TODO - cren optionize the degree threshold below
-def is_loop_valid(path, pairs, thresh=math.pi/4):
+def is_loop_valid(path, pairs, thresh=math.pi/9):
     R = np.identity(3, dtype=float)
     for n1, n2 in zip(path, path[1:]):
         r = get_transform(n1, n2, pairs)
