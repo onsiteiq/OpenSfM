@@ -197,9 +197,9 @@ def filter_candidates(images, loop_candidates, matches, features, pairs):
             sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
 
         #if not find_valid_loop(cand, matches, pairs):
-        if not find_valid_loop_new(cand, matches, path_finder):
+        if 'badloop' == find_valid_loop_new(cand, matches, path_finder):
             bad_candidates.append(cand)
-            logger.debug("invalid loop: no valid loop found")
+            logger.debug("invalid loop: only bad loops found")
         elif is_missing_features(cand, matches, features):
             bad_candidates.append(cand)
             logger.debug("invalid loop: missing features")
@@ -287,8 +287,9 @@ def is_missing_features(loop_candidate, matches, features):
 class PathFinder:
 
     def __init__(self, images, matches, pairs, max_jump=10):
-        self.pathFound = False
+        self.path = []
         self.numVertices = 0  # No. of vertices
+        self.sortOrder = []
         self.start = self.finish = 0
         self.pairs = pairs
         self.graph = defaultdict(set)  # default dictionary to store graph
@@ -309,8 +310,9 @@ class PathFinder:
         self.graph[v].add(w)  # Add w to v_s list
 
     # A recursive function that uses visited[] to detect valid path
-    def findPathUtil(self, v, recStack):
-        # Mark the current node as visited
+    def findPathUtil(self, v, visited, recStack):
+        # push the current node to stack
+        visited[v-self.start] = True
         recStack[v-self.start] = True
 
         '''
@@ -321,51 +323,46 @@ class PathFinder:
         logger.debug("on stack {}".format(curr_path))
         '''
 
-        # Recur until we reach the end_id. note we sort the neighboring vertices, so that
-        # we tend to find the longest path first
-        for i in sorted(self.graph[v]):
-            if i < self.finish - 1:
-                # If the node is not visited then recurse on it
-                if self.findPathUtil(i, recStack):
-                    return True
+        # Recur until we reach the end_id. note most of the time we sort the neighboring vertices with
+        # nearest neighbor first, so that we tend to find the longest path. however we occasionally
+        # flip the sorting order, in order to randomly skip some vertices (in case they are bad)
+        for i in sorted(self.graph[v], reverse=self.sortOrder[v-self.start]):
+            if i < self.finish:
+                if not visited[i-self.start]:
+                    if self.findPathUtil(i, visited, recStack):
+                        return True
             elif i == self.finish:
-                self.pathFound = True
-                path = []
+                self.path = []
                 for j, is_in_stack in enumerate(recStack):
                     if is_in_stack:
-                        path.append(_int_to_shot_id(j+self.start))
-                path.append(_int_to_shot_id(i))
+                        self.path.append(_int_to_shot_id(j+self.start))
+                self.path.append(_int_to_shot_id(self.finish))
+                return True
 
-                logger.debug("path {}".format(path))
-                if is_loop_valid(path, self.pairs):
-                    return True
-
+        # pop this node from stack
         recStack[v-self.start] = False
         return False
 
     # Returns true if the graph contains a path from start id to end id, else false.
     def findPath(self, start_id, end_id):
-        self.pathFound = False
         self.start = _shot_id_to_int(start_id)
         self.finish = _shot_id_to_int(end_id)
         self.numVertices = self.finish - self.start + 1
+        self.sortOrder = random.choices(population=[True, False], weights=[0.1, 0.9], k=self.numVertices)
 
         # Mark all the vertices as not visited
+        visited = [False] * self.numVertices
         recStack = [False] * self.numVertices
 
-        logger.debug("finding path between {} - {}".format(start_id, end_id))
-
         # Call the recursive helper function to detect valid path in different DFS trees
-        if self.findPathUtil(self.start, recStack):
-            logger.debug("valid path")
-            return True
-
-        if self.pathFound:
-            logger.debug("invalid path")
+        if self.findPathUtil(self.start, visited, recStack):
+            #logger.debug("path {}".format(self.path))
+            if is_loop_valid(self.path, self.pairs):
+                return 'goodloop'
+            else:
+                return 'badloop'
         else:
-            logger.debug("no path")
-
-        return False
+            return 'noloop'
 
 
 def get_random_path(start_id, end_id):
@@ -392,6 +389,19 @@ def get_random_path(start_id, end_id):
 
 
 def find_valid_loop_new(loop_candidate, matches, path_finder):
+    """
+    this method returns:
+        'goodloop' if a valid loop has been found
+        'badloop' if all we found are invalid loops
+        'noloop' if there is no loop found
+    :param loop_candidate:
+    :param matches:
+    :param path_finder:
+    :return:
+    """
+
+    ret_val = 'noloop'
+
     ids_0 = sorted(loop_candidate.get_ids_0())
     ids_1 = sorted(loop_candidate.get_ids_1(), reverse=True)
 
@@ -401,10 +411,22 @@ def find_valid_loop_new(loop_candidate, matches, path_finder):
                 continue
 
             if (start_id, end_id) in matches or (end_id, start_id) in matches:
-                if path_finder.findPath(start_id, end_id):
-                    return True
+                max_retries = 100
+                retries = 0
+                while retries < max_retries:
+                    result = path_finder.findPath(start_id, end_id)
+                    if result == 'goodloop':
+                        return 'goodloop'
+                    elif result == 'badloop':
+                        # if loop was found but bad, keep retrying. remember we found bad loop
+                        ret_val = 'badloop'
+                    else:
+                        # if no loop is found, break and try different start/end point
+                        break
 
-    return False
+                    retries += 1
+
+    return ret_val
 
 
 def find_valid_loop(loop_candidate, matches, pairs):
@@ -756,7 +778,7 @@ def is_loop_valid(path, pairs, thresh=math.pi/4):
         return False
     R = r.dot(R)
 
-    logger.debug("error={} thresh={}".format(np.linalg.norm(cv2.Rodrigues(R)[0].ravel()), thresh))
+    #logger.debug("error={} thresh={}".format(np.linalg.norm(cv2.Rodrigues(R)[0].ravel()), thresh))
     if np.linalg.norm(cv2.Rodrigues(R)[0].ravel()) < thresh:
         return True
     else:
