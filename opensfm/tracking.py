@@ -309,9 +309,8 @@ class PathFinder:
         self.graph[v].add(w)  # Add w to v_s list
 
     # A recursive function that uses visited[] to detect valid path
-    def findPathUtil(self, v, visited, recStack):
+    def findPathUtil(self, v, recStack):
         # Mark the current node as visited
-        visited[v-self.start] = True
         recStack[v-self.start] = True
 
         '''
@@ -326,10 +325,9 @@ class PathFinder:
         # we tend to find the longest path first
         for i in sorted(self.graph[v]):
             if i < self.finish - 1:
-                if not visited[i-self.start]:
-                    # If the node is not visited then recurse on it
-                    if self.findPathUtil(i, visited, recStack):
-                        return True
+                # If the node is not visited then recurse on it
+                if self.findPathUtil(i, recStack):
+                    return True
             elif i == self.finish:
                 self.pathFound = True
                 path = []
@@ -353,13 +351,12 @@ class PathFinder:
         self.numVertices = self.finish - self.start + 1
 
         # Mark all the vertices as not visited
-        visited = [False] * self.numVertices
         recStack = [False] * self.numVertices
 
         logger.debug("finding path between {} - {}".format(start_id, end_id))
 
         # Call the recursive helper function to detect valid path in different DFS trees
-        if self.findPathUtil(self.start, visited, recStack):
+        if self.findPathUtil(self.start, recStack):
             logger.debug("valid path")
             return True
 
