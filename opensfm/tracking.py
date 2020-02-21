@@ -286,24 +286,27 @@ def is_missing_features(loop_candidate, matches, features):
 
 class PathFinder:
 
-    def __init__(self, images, matches, pairs, max_jump=20):
+    def __init__(self, images, matches, pairs, max_jump=10):
+        self.pathFound = False
         self.numVertices = 0  # No. of vertices
         self.start = self.finish = 0
         self.pairs = pairs
-        self.graph = defaultdict(list)  # default dictionary to store graph
+        self.graph = defaultdict(set)  # default dictionary to store graph
 
         for im1 in sorted(images):
-            im2 = _int_to_shot_id(_shot_id_to_int(im1) + 1)
-            for i in range(2, max_jump):
-                im3 = _int_to_shot_id(_shot_id_to_int(im1) + i)
-                if all_edge_exists([im1, im2, im3], matches):
-                    if is_triplet_valid([im1, im2, im3], pairs):
-                        self.addEdge(_shot_id_to_int(im1), _shot_id_to_int(im3))
-                        logger.debug("adding edge {} - {}".format(im1, im3))
+            for i in range(1, max_jump):
+                im2 = _int_to_shot_id(_shot_id_to_int(im1) + i)
+                for j in range(1, max_jump):
+                    im3 = _int_to_shot_id(_shot_id_to_int(im2) + j)
+                    if all_edge_exists([im1, im2, im3], matches):
+                        if is_triplet_valid([im1, im2, im3], pairs):
+                            self.addEdge(_shot_id_to_int(im1), _shot_id_to_int(im2))
+                            self.addEdge(_shot_id_to_int(im1), _shot_id_to_int(im3))
+                            logger.debug("adding edge {} - {} - {}".format(im1, im2, im3))
 
     # function to add an edge to graph
     def addEdge(self, v, w):
-        self.graph[v].append(w)  # Add w to v_s list
+        self.graph[v].add(w)  # Add w to v_s list
 
     # A recursive function that uses visited[] to detect valid path
     def findPathUtil(self, v, visited, recStack):
@@ -311,53 +314,40 @@ class PathFinder:
         visited[v-self.start] = True
         recStack[v-self.start] = True
 
+        '''
         curr_path = []
         for k, is_in_stack in enumerate(recStack):
             if is_in_stack:
                 curr_path.append(_int_to_shot_id(k + self.start))
-                curr_path.append(_int_to_shot_id(k + self.start + 1))
         logger.debug("on stack {}".format(curr_path))
+        '''
 
-        # Recur for all the vertices adjacent to this vertex
-        for i in self.graph[v]:
+        # Recur until we reach the end_id. note we sort the neighboring vertices, so that
+        # we tend to find the longest path first
+        for i in sorted(self.graph[v]):
             if i < self.finish - 1:
                 if not visited[i-self.start]:
                     # If the node is not visited then recurse on it
                     if self.findPathUtil(i, visited, recStack):
                         return True
-            elif i == self.finish - 1:
-                path = []
-                for j, is_in_stack in enumerate(recStack):
-                    if is_in_stack:
-                        path.append(_int_to_shot_id(j + self.start))
-                        path.append(_int_to_shot_id(j + self.start + 1))
-                path.append(_int_to_shot_id(i))
-                path.append(_int_to_shot_id(i+1))
-
-                if is_loop_valid(path, self.pairs):
-                    logger.debug("valid path {}".format(path))
-                    return True
-                else:
-                    logger.debug("invalid path {}".format(path))
             elif i == self.finish:
+                self.pathFound = True
                 path = []
                 for j, is_in_stack in enumerate(recStack):
                     if is_in_stack:
                         path.append(_int_to_shot_id(j+self.start))
-                        path.append(_int_to_shot_id(j+self.start+1))
                 path.append(_int_to_shot_id(i))
 
+                logger.debug("path {}".format(path))
                 if is_loop_valid(path, self.pairs):
-                    logger.debug("valid path {}".format(path))
                     return True
-                else:
-                    logger.debug("invalid path {}".format(path))
 
         recStack[v-self.start] = False
         return False
 
     # Returns true if the graph contains a path from start id to end id, else false.
     def findPath(self, start_id, end_id):
+        self.pathFound = False
         self.start = _shot_id_to_int(start_id)
         self.finish = _shot_id_to_int(end_id)
         self.numVertices = self.finish - self.start + 1
@@ -370,7 +360,13 @@ class PathFinder:
 
         # Call the recursive helper function to detect valid path in different DFS trees
         if self.findPathUtil(self.start, visited, recStack):
+            logger.debug("valid path")
             return True
+
+        if self.pathFound:
+            logger.debug("invalid path")
+        else:
+            logger.debug("no path")
 
         return False
 
@@ -400,22 +396,16 @@ def get_random_path(start_id, end_id):
 
 def find_valid_loop_new(loop_candidate, matches, path_finder):
     ids_0 = sorted(loop_candidate.get_ids_0())
-    ids_1 = sorted(loop_candidate.get_ids_1())
+    ids_1 = sorted(loop_candidate.get_ids_1(), reverse=True)
 
-    max_retries = 10
-    retries = 0
-    while retries < max_retries:
-        start_id = random.choice(ids_0)
-        end_id = random.choice(ids_1)
+    for start_id in ids_0:
+        for end_id in ids_1:
+            if start_id >= end_id:
+                continue
 
-        if start_id >= end_id:
-            continue
-
-        if (start_id, end_id) in matches or (end_id, start_id) in matches:
-            if path_finder.findPath(start_id, end_id):
-                return True
-
-            retries += 1
+            if (start_id, end_id) in matches or (end_id, start_id) in matches:
+                if path_finder.findPath(start_id, end_id):
+                    return True
 
     return False
 
@@ -769,11 +759,10 @@ def is_loop_valid(path, pairs, thresh=math.pi/4):
         return False
     R = r.dot(R)
 
+    logger.debug("error={} thresh={}".format(np.linalg.norm(cv2.Rodrigues(R)[0].ravel()), thresh))
     if np.linalg.norm(cv2.Rodrigues(R)[0].ravel()) < thresh:
-        #logger.debug("valid={} thresh={}".format(np.linalg.norm(cv2.Rodrigues(R)[0].ravel()), thresh))
         return True
     else:
-        #logger.debug("invalid={} thresh={}".format(np.linalg.norm(cv2.Rodrigues(R)[0].ravel()), thresh))
         return False
 
 
