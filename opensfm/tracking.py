@@ -104,14 +104,14 @@ def triplet_filter(data, images, matches, pairs):
         # TODO: cren optionize the threshold below
         if abs(_shot_id_to_int(i) - _shot_id_to_int(j)) < 3:
             if (bad == 0 and good == 0) or (bad/(bad+good)) > 0.9:
+                #logger.debug("interesting {} {} good={}, bad={}".format(i, j, good, bad))
                 edges_to_remove.append((i, j))
-                logger.debug("interesting {} {} good={}, bad={}".format(i, j, good, bad))
         else:
             if (bad == 0 and good == 0) or (bad/(bad+good)) > 0.75:
                 edges_to_remove.append((i, j))
 
     for edge in sorted(edges_to_remove):
-        logger.debug("triplet removing edge {} -{}".format(edge[0], edge[1]))
+        #logger.debug("triplet removing edge {} -{}".format(edge[0], edge[1]))
         matches.pop(edge)
 
     logger.debug("triplet filtering end, removed {} edges, {:2.1f}% of all".
@@ -149,7 +149,7 @@ def loop_filter(data, images, features, matches, pairs):
                 edges_to_remove.append((im1, im2))
 
     for edge in sorted(edges_to_remove):
-        logger.debug("quad removing edge {} -{}".format(edge[0], edge[1]))
+        #logger.debug("quad removing edge {} -{}".format(edge[0], edge[1]))
         matches.pop(edge)
 
     logger.debug("quad filtering end, removed {} edges, {:2.1f}% of all".
@@ -177,7 +177,7 @@ def loop_filter(data, images, features, matches, pairs):
                         edges_to_remove.add((im2, im1))
 
     for edge in sorted(edges_to_remove):
-        logger.debug("loop removing edge {} -{}".format(edge[0], edge[1]))
+        #logger.debug("loop removing edge {} -{}".format(edge[0], edge[1]))
         matches.pop(edge)
 
     logger.debug("loop filtering end, removed {} edges, {:2.1f}% of all".
@@ -191,12 +191,7 @@ def filter_candidates(images, loop_candidates, matches, features, pairs):
 
     bad_candidates = []
     for cand in loop_candidates:
-        logger.debug("loop candidate center {:4.1f}-{:4.1f}, "
-                     "members {} - {}".format(
-            cand.get_center_0(), cand.get_center_1(),
-            sorted(cand.get_ids_0()), sorted(cand.get_ids_1())))
-
-        if 'badloop' == find_valid_loop(cand, matches, path_finder):
+        if 'badloop' == validate_loop(cand, matches, pairs, path_finder):
             bad_candidates.append(cand)
             logger.debug("invalid loop: only bad loops found")
         elif is_missing_features(cand, matches, features):
@@ -280,7 +275,7 @@ def is_missing_features(loop_candidate, matches, features):
     logger.debug("average overlap {}".format(avg_ratio))
 
     # TODO - cren optionize the ratio threshold below
-    return avg_ratio < 0.091
+    return avg_ratio < 0.08
 
 
 class PathFinder:
@@ -298,7 +293,7 @@ class PathFinder:
     they have bad epipolar geometry.
     """
 
-    def __init__(self, images, matches, pairs, max_jump=10):
+    def __init__(self, images, matches, pairs, max_jump=5):
         self.path = []
         self.numVertices = 0  # No. of vertices
         self.start = self.finish = 0
@@ -312,16 +307,16 @@ class PathFinder:
                     im3 = _int_to_shot_id(_shot_id_to_int(im2) + j)
                     if all_edge_exists([im1, im2, im3], matches):
                         if is_triplet_valid([im1, im2, im3], pairs):
+                            #logger.debug("adding edge {} - {} - {}".format(im1, im2, im3))
                             self.addEdge(_shot_id_to_int(im1), _shot_id_to_int(im2))
                             self.addEdge(_shot_id_to_int(im1), _shot_id_to_int(im3))
-                            logger.debug("adding edge {} - {} - {}".format(im1, im2, im3))
 
     # function to add an edge to graph
     def addEdge(self, v, w):
         self.graph[v].add(w)  # Add w to v_s list
 
     # A recursive function that uses visited[] to detect valid path
-    def findPathUtil(self, v, visited, recStack):
+    def findPathUtil(self, v, visited, recStack, random_skip):
         # push the current node to stack
         visited[v-self.start] = True
         recStack[v-self.start] = True
@@ -334,14 +329,19 @@ class PathFinder:
         logger.debug("on stack {}".format(curr_path))
         '''
 
-        # Recur until we reach the end_id. note most of the time we sort the neighboring vertices with
-        # nearest neighbor first, so that we tend to find the longest path. however we occasionally
-        # flip the sorting order, in order to randomly skip some vertices (in case they are bad)
-        isReversed = random.choices(population=[True, False], weights=[0.2, 0.8], k=1)[0]
+        # Recur until we reach the end_id. if random_skip is true, most of the time we sort the
+        # neighboring nodes with closest indexed image first, so that we tend to find the longest
+        # path. however we occasionally flip the sorting order, in order to randomly skip some
+        # vertices (in case they are bad)
+        if random_skip:
+            isReversed = random.choices(population=[True, False], weights=[0.1, 0.9], k=1)[0]
+        else:
+            isReversed = False
+
         for i in sorted(self.graph[v], reverse=isReversed):
             if i < self.finish:
                 if not visited[i-self.start]:
-                    if self.findPathUtil(i, visited, recStack):
+                    if self.findPathUtil(i, visited, recStack, random_skip):
                         return True
             elif i == self.finish:
                 self.path = []
@@ -356,7 +356,7 @@ class PathFinder:
         return False
 
     # Returns true if the graph contains a path from start id to end id, else false.
-    def findPath(self, start_id, end_id):
+    def findPath(self, start_id, end_id, random_skip=True):
         self.start = _shot_id_to_int(start_id)
         self.finish = _shot_id_to_int(end_id)
         self.numVertices = self.finish - self.start + 1
@@ -366,7 +366,7 @@ class PathFinder:
         recStack = [False] * self.numVertices
 
         # Call the recursive helper function to detect valid path in different DFS trees
-        if self.findPathUtil(self.start, visited, recStack):
+        if self.findPathUtil(self.start, visited, recStack, random_skip):
             #logger.debug("path {}".format(self.path))
             if is_loop_valid(self.path, self.pairs):
                 return 'goodloop'
@@ -399,7 +399,7 @@ def get_random_path(start_id, end_id):
     return path
 
 
-def find_valid_loop(loop_candidate, matches, path_finder):
+def validate_loop(loop_candidate, matches, pairs, path_finder):
     """
     this method returns:
         'goodloop' if a valid loop has been found
@@ -407,14 +407,36 @@ def find_valid_loop(loop_candidate, matches, path_finder):
         'noloop' if there is no loop found
     :param loop_candidate:
     :param matches:
+    :param pairs:
     :param path_finder:
     :return:
     """
-
     ret_val = 'noloop'
+
+    center_0 = int(loop_candidate.get_center_0())
+    center_1 = int(loop_candidate.get_center_1())
 
     ids_0 = sorted(loop_candidate.get_ids_0())
     ids_1 = sorted(loop_candidate.get_ids_1(), reverse=True)
+
+    logger.debug("loop candidate center {:4.1f}-{:4.1f}, "
+                 "members {} - {}".format(center_0, center_1, ids_0, ids_1))
+
+    if center_1 - center_0 > 10:
+        rs = []
+        for i in range(-1, 1):
+            n1 = _int_to_shot_id(center_0 + i)
+            n2 = _int_to_shot_id(center_1 + i)
+            if (n1, n2) in matches or (n2, n1) in matches:
+                r = get_transform(n1, n2, pairs)
+                rs.append(np.linalg.norm(cv2.Rodrigues(r)[0].ravel()))
+                logger.debug("{} - {} rotation {}".format(n1, n2, rs[-1]))
+
+        if len(rs) > 0:
+            avg_rotation  = sum(rs) / len(rs)
+            logger.debug("average rotation {}".format(avg_rotation))
+            if avg_rotation < math.pi/9:
+                return 'badloop'
 
     for start_id in ids_0:
         for end_id in ids_1:
@@ -564,7 +586,7 @@ def cluster_quads(valid_quads, radius):
     # if the centers are close together, this is really not a 'loop' but a line
     remove_candidates = []
     for cand in loop_candidates:
-        if cand.get_center_1() - cand.get_center_0() < radius:
+        if cand.get_center_1() - cand.get_center_0() < 10:
             remove_candidates.append(cand)
 
     for cand in remove_candidates:
