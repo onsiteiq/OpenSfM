@@ -42,38 +42,44 @@ def triplet_filter(data, images, matches, pairs):
     cnt_good = {}
     cnt_bad = {}
 
-    for (i, j) in pairs:
-        for k in images:
-            if i != k and j != k:
-                if all_edge_exists([i, j, k], matches):
-                    if is_triplet_valid([i, j, k], pairs):
-                        cnt = cnt_good
-                    else:
-                        cnt = cnt_bad
+    gap = 6
+    for i in range(len(images)):
+        for j in range(i+1, i+1+gap):
+            for k in range(len(images)):
+                if i != k and j != k:
+                    im1 = _int_to_shot_id(i)
+                    im2 = _int_to_shot_id(j)
+                    im3 = _int_to_shot_id(k)
+                    if edge_exists_all([im1, im2, im3], matches):
+                        if is_triplet_valid([im1, im2, im3], pairs):
+                            cnt = cnt_good
+                        else:
+                            cnt = cnt_bad
 
-                    incr_cnt(pairs, cnt, i, j)
-                    incr_cnt(pairs, cnt, j, k)
-                    incr_cnt(pairs, cnt, k, i)
+                        #incr_cnt(pairs, cnt, im1, im2)
+                        incr_cnt(pairs, cnt, im2, im3)
+                        incr_cnt(pairs, cnt, im3, im1)
 
     edges_to_remove = []
-    for (i, j) in matches:
+    for (im1, im2) in matches:
         good = 0
         bad = 0
-        if (i, j) in cnt_good:
-            good = cnt_good[i, j]
+        if (im1, im2) in cnt_good:
+            good = cnt_good[im1, im2]
 
-        if (i, j) in cnt_bad:
-            bad = cnt_bad[i, j]
+        if (im1, im2) in cnt_bad:
+            bad = cnt_bad[im1, im2]
 
-        # we will not remove any edge with sequence number difference less than 3
-        # unless there's strong indication.
-        if abs(_shot_id_to_int(i) - _shot_id_to_int(j)) < 3:
-            if (bad == 0 and good == 0) or (bad/(bad+good)) > data.config['filtering_triplet_bad_ratio_1']:
-                #logger.debug("interesting {} {} good={}, bad={}".format(i, j, good, bad))
-                edges_to_remove.append((i, j))
+        # we will not remove any edge with small sequence number difference unless there's
+        # stronger evidence.
+        if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) < gap:
+            if bad+good > 3 and (bad/(bad+good)) > data.config['filtering_triplet_bad_ratio']:
+                #logger.debug("removing close edge {} {} good={}, bad={}".format(im1, im2, good, bad))
+                edges_to_remove.append((im1, im2))
         else:
-            if (bad == 0 and good == 0) or (bad/(bad+good)) > data.config['filtering_triplet_bad_ratio_2']:
-                edges_to_remove.append((i, j))
+            if bad+good == 0 or (bad/(bad+good)) > data.config['filtering_triplet_bad_ratio']:
+                #logger.debug("removing {} {} good={}, bad={}".format(im1, im2, good, bad))
+                edges_to_remove.append((im1, im2))
 
     for edge in sorted(edges_to_remove):
         logger.debug("triplet removing edge {} -{}".format(edge[0], edge[1]))
@@ -100,34 +106,35 @@ def loop_filter(data, images, features, matches, pairs):
     :param pairs:
     :return:
     """
-    logger.debug("quad filtering start")
+    logger.debug("loop pass 1 filtering start")
 
     common_feature_thresh = data.config['filtering_common_feature_thresh']
 
     # TODO: cren optionize the following thresholds
     gap = 6
     edges_to_remove = []
-    all_valid_quads = []
+    all_valid_triplets = []
     for (im1, im2) in matches:
         if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) > gap:
-            valid_quads = get_valid_quads(im1, im2, matches, pairs)
-            if valid_quads:
-                all_valid_quads.extend(valid_quads)
+            valid_triplets = get_valid_triplets(im1, im2, matches, pairs)
+            if valid_triplets:
+                all_valid_triplets.extend(valid_triplets)
             else:
                 edges_to_remove.append((im1, im2))
 
     for edge in sorted(edges_to_remove):
-        logger.debug("quad removing edge {} -{}".format(edge[0], edge[1]))
+        logger.debug("loop pass 1 removing edge {} -{}".format(edge[0], edge[1]))
         matches.pop(edge)
 
-    logger.debug("quad filtering end, removed {} edges, {:2.1f}% of all".
+    logger.debug("loop pass 1 filtering end, removed {} edges, {:2.1f}% of all".
                  format(len(edges_to_remove), 100*len(edges_to_remove)/len(pairs)))
 
+    logger.debug("loop pass 2 filtering start")
     radius = gap/2
-    valid_quads_set = set(tuple(quad) for quad in all_valid_quads)
+    valid_triplets_set = set(tuple(triplet) for triplet in all_valid_triplets)
 
     # cluster quads into loop candidates
-    loop_candidates = cluster_quads(valid_quads_set, radius)
+    loop_candidates = cluster_triplets(valid_triplets_set, radius)
 
     # apply various checks to figure out bad loop candidates
     bad_candidates = filter_candidates(images, loop_candidates, matches, features, pairs, common_feature_thresh)
@@ -148,7 +155,7 @@ def loop_filter(data, images, features, matches, pairs):
         #logger.debug("loop removing edge {} -{}".format(edge[0], edge[1]))
         matches.pop(edge)
 
-    logger.debug("loop filtering end, removed {} edges, {:2.1f}% of all".
+    logger.debug("loop pass 2 filtering end, removed {} edges, {:2.1f}% of all".
                  format(len(edges_to_remove), 100*len(edges_to_remove)/len(pairs)))
 
     return matches #, loop_candidates
@@ -211,7 +218,7 @@ def validate_loop_features(loop_candidate, matches, features):
         grid_size = math.sqrt(len(fids_n1_n2))
         fo_n1_n2 = feature_occupancy(n1, fids_n1_n2, features, grid_size)
         for m in ms:
-            if all_edge_exists([n1, n2, m], matches):
+            if edge_exists_all([n1, n2, m], matches):
                 ratio, fids_n1_n2_m = common_ratio(n1, n2, m, matches)
 
                 fo_n1_n2_m = feature_occupancy(n1, fids_n1_n2_m, features, grid_size)
@@ -234,7 +241,7 @@ def validate_loop_features(loop_candidate, matches, features):
         grid_size = math.sqrt(len(fids_m1_m2))
         fo_m1_m2 = feature_occupancy(m1, fids_m1_m2, features, grid_size)
         for n in ns:
-            if all_edge_exists([m1, m2, n], matches):
+            if edge_exists_all([m1, m2, n], matches):
                 ratio, fids_m1_m2_n = common_ratio(m1, m2, n, matches)
 
                 fo_m1_m2_n = feature_occupancy(m1, fids_m1_m2_n, features, grid_size)
@@ -411,6 +418,52 @@ def common_ratio(n1, n2, m, matches):
     return cnt/base_cnt, fids
 
 
+def cluster_triplets(valid_triplets, radius):
+    """
+    merge similar triplets into loop candidates
+
+    :param valid_triplets:
+    :param radius:
+    :return:
+    """
+    loop_candidates = []
+    for triplet in sorted(valid_triplets):
+        added = False
+        for cand in loop_candidates:
+            if cand.is_close_to(triplet):
+                cand.add(triplet)
+                added = True
+                #break
+
+        if not added:
+            new_cand = LoopCandidate(radius)
+            new_cand.add(triplet)
+            loop_candidates.append(new_cand)
+
+    # merge loop candidates that are close together
+    while True:
+        can_merge = False
+        for cand1, cand2 in combinations(loop_candidates, 2):
+            if cand1.combine(cand2):
+                loop_candidates.remove(cand2)
+                can_merge = True
+                break
+
+        if not can_merge:
+            break
+
+    # if the centers are close together, this is really not a 'loop' but a line
+    remove_candidates = []
+    for cand in loop_candidates:
+        if cand.get_center_1() - cand.get_center_0() < 6:
+            remove_candidates.append(cand)
+
+    for cand in remove_candidates:
+        loop_candidates.remove(cand)
+
+    return loop_candidates
+
+
 def cluster_quads(valid_quads, radius):
     """
     merge similar quads into loop candidates
@@ -448,7 +501,7 @@ def cluster_quads(valid_quads, radius):
     # if the centers are close together, this is really not a 'loop' but a line
     remove_candidates = []
     for cand in loop_candidates:
-        if cand.get_center_1() - cand.get_center_0() < 10:
+        if cand.get_center_1() - cand.get_center_0() < 6:
             remove_candidates.append(cand)
 
     for cand in remove_candidates:
@@ -484,7 +537,7 @@ class PathFinder:
                 im2 = _int_to_shot_id(_shot_id_to_int(im1) + i)
                 for j in range(1, max_jump):
                     im3 = _int_to_shot_id(_shot_id_to_int(im2) + j)
-                    if all_edge_exists([im1, im2, im3], matches):
+                    if edge_exists_all([im1, im2, im3], matches):
                         if is_triplet_valid([im1, im2, im3], pairs):
                             #logger.debug("adding edge {} - {} - {}".format(im1, im2, im3))
                             self.addEdge(_shot_id_to_int(im1), _shot_id_to_int(im2))
@@ -567,11 +620,17 @@ class LoopCandidate(object):
         self.ids_0 = set()
         self.ids_1 = set()
 
-    def add(self, quad):
-        self.ids_0.add(quad[0])
-        self.ids_0.add(quad[1])
-        self.ids_1.add(quad[2])
-        self.ids_1.add(quad[3])
+    def add(self, triplet):
+        self.ids_0.add(triplet[0])
+        self.ids_1.add(triplet[2])
+
+        i = _shot_id_to_int(triplet[0])
+        j = _shot_id_to_int(triplet[1])
+        k = _shot_id_to_int(triplet[2])
+        if j < (i+k)/2:
+            self.ids_0.add(triplet[1])
+        else:
+            self.ids_1.add(triplet[1])
 
         # update loop center
         self.center_0 = self.get_average(self.ids_0)
@@ -583,9 +642,9 @@ class LoopCandidate(object):
             total += _shot_id_to_int(id)
         return total/len(ids)
 
-    def is_close_to(self, quad):
-        return abs(self.center_0 - _shot_id_to_int(quad[0])) < self.radius and \
-               abs(self.center_1 - _shot_id_to_int(quad[2])) < self.radius
+    def is_close_to(self, triplet):
+        return abs(self.center_0 - _shot_id_to_int(triplet[0])) < self.radius and \
+               abs(self.center_1 - _shot_id_to_int(triplet[2])) < self.radius
 
     def combine(self, another):
         if abs(self.get_center_0() - another.get_center_0()) < self.radius and \
@@ -613,6 +672,30 @@ class LoopCandidate(object):
         return self.ids_1
 
 
+def get_valid_triplets(im1, im2, matches, pairs):
+    k = 3
+    triplets = []
+
+    ind_im1 = _shot_id_to_int(im1)
+    ind_im2 = _shot_id_to_int(im2)
+
+    for i in range(-k, k+1):
+        if i == 0:
+            continue
+        im1_neighbor = _int_to_shot_id(ind_im1+i)
+        im2_neighbor = _int_to_shot_id(ind_im2+i)
+
+        if edge_exists_all([im1, im1_neighbor, im2], matches):
+            if is_triplet_valid([im1, im1_neighbor, im2], pairs):
+                triplets.append(sorted((im1, im1_neighbor, im2)))
+
+        if edge_exists_all([im1, im2_neighbor, im2], matches):
+            if is_triplet_valid([im1, im2_neighbor, im2], pairs):
+                triplets.append(sorted((im1, im2_neighbor, im2)))
+
+    return triplets
+
+
 def get_valid_quads(im1, im2, matches, pairs):
     k = 3
     quads = []
@@ -630,15 +713,15 @@ def get_valid_quads(im1, im2, matches, pairs):
             im1_neighbor = _int_to_shot_id(i)
             im2_neighbor = _int_to_shot_id(j)
 
-            if all_edge_exists([im1, im1_neighbor, im2, im2_neighbor], matches):
+            if edge_exists_all([im1, im1_neighbor, im2, im2_neighbor], matches):
                 if is_triplet_valid([im1, im1_neighbor, im2], pairs) and \
                         is_triplet_valid([im2, im2_neighbor, im1_neighbor], pairs) and \
                         is_triplet_valid([im1, im1_neighbor, im2_neighbor], pairs) and \
                         is_triplet_valid([im2, im2_neighbor, im1], pairs):
                     quads.append(sorted((im1, im1_neighbor, im2, im2_neighbor)))
             '''
-            if all_edge_exists([im1, im1_neighbor, im2], matches) and \
-               all_edge_exists([im1_neighbor, im2_neighbor, im2], matches):
+            if edge_exists_all([im1, im1_neighbor, im2], matches) and \
+               edge_exists_all([im1_neighbor, im2_neighbor, im2], matches):
                 quads.append(sorted([im1, im1_neighbor, im2, im2_neighbor]))
             '''
 
@@ -672,7 +755,7 @@ def edge_exists(im1, im2, matches):
     return (im1, im2) in matches or (im2, im1) in matches
 
 
-def all_edge_exists(node_list, matches):
+def edge_exists_all(node_list, matches):
     for im1, im2 in combinations(node_list, 2):
         if not edge_exists(im1, im2, matches):
             return False
