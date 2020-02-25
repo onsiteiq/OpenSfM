@@ -13,6 +13,7 @@ from opensfm import log
 from opensfm import multiview
 from opensfm import pairs_selection
 from opensfm import feature_loading
+from opensfm import filtering
 
 
 logger = logging.getLogger(__name__)
@@ -219,19 +220,16 @@ def match(im1, im2, camera1, camera2,
                 len(matches)))
         return None, np.array([])
 
-    # TODO: cren optionize pre-integration check
-    preint_check = True
-    if preint_check:
-        if abs(_shot_id_to_int(im1) - _shot_id_to_int(im2)) < 5:
-            if not rotation_close_to_preint(im1, im2, T, pdr_shots_dict):
-                logger.debug(
-                    'Matching {} and {}.  Matcher: {} '
-                    'T-desc: {:1.3f} T-robust: {:1.3f} T-total: {:1.3f} '
-                    'Matches: {} Robust: {} Preint check: FAILED'.format(
-                        im1, im2, matcher_type,
-                        time_2d_matching, time_robust_matching, time_total,
-                        len(matches), len(rmatches)))
-                return None, np.array([])
+    if config['filtering_use_preint']:
+        if not filtering.rotation_close_to_preint(im1, im2, T, pdr_shots_dict):
+            logger.debug(
+                'Matching {} and {}.  Matcher: {} '
+                'T-desc: {:1.3f} T-robust: {:1.3f} T-total: {:1.3f} '
+                'Matches: {} Robust: {} Preint check: FAILED'.format(
+                    im1, im2, matcher_type,
+                    time_2d_matching, time_robust_matching, time_total,
+                    len(matches), len(rmatches)))
+            return None, np.array([])
 
     logger.debug(
         'Matching {} and {}.  Matcher: {} '
@@ -242,54 +240,6 @@ def match(im1, im2, camera1, camera2,
             len(matches), len(rmatches), robust_matching_min_match))
 
     return T, np.array(rmatches, dtype=int)
-
-
-def rotation_close_to_preint(im1, im2, T, pdr_shots_dict):
-    """
-    compare relative rotation of robust matching to that of imu gyro preintegration,
-    if they are not close, it is considered to be an erroneous epipoar geometry
-    """
-    # calculate relative rotation from preintegrated gyro input
-    preint_im1_rot = cv2.Rodrigues(np.asarray([pdr_shots_dict[im1][7], pdr_shots_dict[im1][8], pdr_shots_dict[im1][9]]))[0]
-    preint_im2_rot = cv2.Rodrigues(np.asarray([pdr_shots_dict[im2][7], pdr_shots_dict[im2][8], pdr_shots_dict[im2][9]]))[0]
-    preint_rel_rot = np.dot(preint_im2_rot, preint_im1_rot.T)
-
-    # convert this rotation from sensor frame to camera frame
-    b_to_c = np.asarray([1, 0, 0, 0, 0, -1, 0, 1, 0]).reshape(3, 3)
-    preint_rel_rot = cv2.Rodrigues(b_to_c.dot(cv2.Rodrigues(preint_rel_rot)[0].ravel()))[0]
-
-    # get relative rotation from T obtained from robust matching
-    robust_match_rel_rot = T[:, :3]
-
-    # calculate difference between the two relative rotations. this is the geodesic distance
-    # see D. Huynh "Metrics for 3D Rotations: Comparison and Analysis" equation 23
-    diff_rot = np.dot(preint_rel_rot, robust_match_rel_rot.T)
-    geo_diff = np.linalg.norm(cv2.Rodrigues(diff_rot)[0].ravel())
-
-    # TODO - cren optionize the degree threshold below
-    if geo_diff < math.pi/6.0:
-        logger.debug("{} {} preint/robust geodesic {} within threshold".format(im1, im2, geo_diff))
-        return True
-    else:
-        #logger.debug("preint rel rot axis/angle = {}".format(_get_axis_angle(preint_rel_rot)))
-        #logger.debug("robust rel rot axis/angle = {}".format(_get_axis_angle(robust_match_rel_rot)))
-        logger.debug("{} {} preint/robust geodesic {} exceeds threshold".format(im1, im2, geo_diff))
-        return False
-
-
-def _get_axis_angle(rot_mat):
-    axis_angle = cv2.Rodrigues(rot_mat)[0].ravel()
-    angle = np.linalg.norm(axis_angle)
-    axis = axis_angle / angle
-    return axis, angle
-
-
-def _shot_id_to_int(shot_id):
-    """
-    Returns: shot id to integer
-    """
-    tokens = shot_id.split(".")
-    return int(tokens[0])
 
 
 def match_words(f1, words1, f2, words2, config):

@@ -66,6 +66,12 @@ matching_bow_gps_neighbors: 0         # Number of images (selected by GPS distan
 matching_bow_other_cameras: False     # If True, BoW image selection will use N neighbors from the same camera + N neighbors from any different camera.
 matching_use_filters: False           # If True, removes static matches using ad-hoc heuristics
 
+# Params for match filtering 
+filtering_use_preint: False             # If True, filter matches based on gyroscope pre-integration results
+filtering_triplet_bad_ratio_1: 0.9      # remove edge if bad to all triplets ratio exceeds this threshold
+filtering_triplet_bad_ratio_2: 0.75     # remove edge if bad to all triplets ratio exceeds this threshold
+filtering_common_feature_thresh: 0.08   # used in missing feature analysis - feature common ratio 
+
 # Params for geometric estimation
 robust_matching_threshold: 0.004        # Outlier threshold for fundamental matrix estimation as portion of image width
 robust_matching_calib_threshold: 0.004  # Outlier threshold for essential matrix estimation during matching in radians

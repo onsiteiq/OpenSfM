@@ -7,6 +7,7 @@ from networkx.algorithms import bipartite
 from opensfm import dataset
 from opensfm import io
 from opensfm import tracking
+from opensfm import filtering
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +27,9 @@ class Command:
         features_end = timer()
         matches = tracking.load_matches(data, data.images())
         matches_end = timer()
-        pairs = tracking.load_pairwise_transforms(data, data.images())
-        matches = tracking.triplet_filter(data, data.images(), matches, pairs)
-        matches = tracking.loop_filter(data, data.images(), features, matches, pairs)
+        pairs = filtering.load_pairwise_transforms(data, data.images())
+        matches = filtering.triplet_filter(data, data.images(), matches, pairs)
+        matches = filtering.loop_filter(data, data.images(), features, matches, pairs)
         filter_end = timer()
 
         # debugging
