@@ -19,6 +19,20 @@ def has_gps_info(exif):
             'longitude' in exif['gps'])
 
 
+def calc_pdr_distance(data, image_ref, image_cand):
+    if data.pdr_shots_exist():
+        pdr_shots_dict = data.load_pdr_shots()
+    else:
+        return 0
+
+    if image_ref in pdr_shots_dict and image_cand in pdr_shots_dict:
+        pos_ref = pdr_shots_dict[image_ref][:3]
+        pos_cand = pdr_shots_dict[image_cand][:3]
+        distance = np.linalg.norm(np.array(pos_ref) - np.array(pos_cand))
+
+        return distance
+
+
 def match_candidates_by_distance(images_ref, images_cand, exifs, reference,
                                  max_neighbors, max_distance):
     """Find candidate matching pairs by GPS distance.
@@ -129,8 +143,12 @@ def match_candidates_with_bow(data, images_ref, images_cand,
             pairs = pairs.union(pairs_from_neighbors(im, exifs, order, other, max_neighbors))
         else:
             for i in order[:max_neighbors]:
-                pairs.add(tuple(sorted((im, other[i]))))
-                logger.debug("adding pair {} - {}".format(im, other[i]))
+                dist = calc_pdr_distance(data, im, other[i])
+                if dist < 15 * 0.3048:
+                    pairs.add(tuple(sorted((im, other[i]))))
+                    logger.debug("adding pair {} - {}, pdr distance {} feet".format(im, other[i], dist/0.3048))
+                else:
+                    logger.debug("not adding pair {} - {}, pdr distance {} feet".format(im, other[i], dist/0.3048))
     return pairs
 
 
