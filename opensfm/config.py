@@ -61,6 +61,8 @@ matching_time_neighbors: 0            # Number of images to match selected by ti
 matching_order_neighbors: 10          # Number of images to match selected by image name. Set to 0 to disable
 matching_pdr_distance: 0              # Maximum pdr distance in feet between two images for matching. Set to 0 to disable
 matching_bow_neighbors: 0             # Number of images to match selected by BoW distance. Set to 0 to disable
+matching_bow_pdr_distance: 15         # Maximum PDR distance for preempting images before using selection by BoW distance. 
+matching_bow_index_range: 200         # Maximum index range for preempting images before using selection by BoW distance. 
 matching_bow_gps_distance: 0          # Maximum GPS distance for preempting images before using selection by BoW distance. Set to 0 to disable
 matching_bow_gps_neighbors: 0         # Number of images (selected by GPS distance) to preempt before using selection by BoW distance. Set to 0 to use no limit (or disable if matching_bow_gps_distance is also 0)
 matching_bow_other_cameras: False     # If True, BoW image selection will use N neighbors from the same camera + N neighbors from any different camera.

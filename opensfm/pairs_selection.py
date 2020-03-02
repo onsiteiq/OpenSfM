@@ -75,14 +75,10 @@ def match_candidates_by_distance(images_ref, images_cand, exifs, reference,
 
 
 def match_candidates_with_bow(data, images_ref, images_cand,
-                              exifs, reference, max_neighbors,
-                              max_gps_distance, max_gps_neighbors,
-                              enforce_other_cameras, order_neighbors):
+                              exifs, max_neighbors, order_neighbors,
+                              max_pdr_distance, max_index_range,
+                              enforce_other_cameras):
     """Find candidate matching pairs using BoW-based distance.
-
-    If max_gps_distance > 0, then we use first restrain a set of
-    candidates using max_gps_neighbors neighbors selected using
-    GPS distance.
 
     If enforce_other_cameras is True, we keep max_neighbors images
     with same cameras AND  max_neighbors images from any other different
@@ -91,24 +87,9 @@ def match_candidates_with_bow(data, images_ref, images_cand,
     if max_neighbors <= 0:
         return set()
 
-    '''
-    # preempt candidates images using GPS
-    preempted_cand = {im: images_cand for im in images_ref}
-    if max_gps_distance > 0 or max_gps_neighbors > 0:
-        gps_pairs = match_candidates_by_distance(images_ref, images_cand,
-                                                 exifs, reference,
-                                                 max_gps_neighbors,
-                                                 max_gps_distance)
-        preempted_cand = defaultdict(list)
-        for p in gps_pairs:
-            preempted_cand[p[0]].append(p[1])
-            preempted_cand[p[1]].append(p[0])
-    '''
-
     # restrict bow searching to 150 index neighbors
     preempted_cand = defaultdict(list)
-    order_loop = 200
-    n = (order_loop + 1) // 2
+    n = (max_index_range + 1) // 2
     m = (order_neighbors + 1) // 2
 
     for i, image_ref in enumerate(images_ref):
@@ -129,7 +110,7 @@ def match_candidates_with_bow(data, images_ref, images_cand,
     histograms = load_histograms(data, need_load)
     args = list(match_bow_arguments(preempted_cand, histograms))
 
-    # paralel BoW neighbors computation
+    # parallel BoW neighbors computation
     per_process = 512
     processes = context.processes_that_fit_in_memory(data.config['processes'], per_process)
     batch_size = int(max(1, len(args)/(2*processes)))
@@ -144,7 +125,7 @@ def match_candidates_with_bow(data, images_ref, images_cand,
         else:
             for i in order[:max_neighbors]:
                 dist = calc_pdr_distance(data, im, other[i])
-                if dist < 15 * 0.3048:
+                if dist < max_pdr_distance * 0.3048:
                     pairs.add(tuple(sorted((im, other[i]))))
                     logger.debug("adding pair {} - {}, pdr distance {} feet".format(im, other[i], dist/0.3048))
                 else:
@@ -247,8 +228,8 @@ def match_candidates_from_metadata(images_ref, images_cand, exifs, data):
     order_neighbors = data.config['matching_order_neighbors']
     pdr_max_distance = data.config['matching_pdr_distance']
     bow_neighbors = data.config['matching_bow_neighbors']
-    bow_gps_distance = data.config['matching_bow_gps_distance']
-    bow_gps_neighbors = data.config['matching_bow_gps_neighbors']
+    bow_pdr_distance = data.config['matching_bow_pdr_distance']
+    bow_index_range = data.config['matching_bow_index_range']
     bow_other_cameras = data.config['matching_bow_other_cameras']
 
     if not data.reference_lla_exists():
@@ -282,9 +263,9 @@ def match_candidates_from_metadata(images_ref, images_cand, exifs, data):
         o = match_candidates_by_order(images_ref, images_cand, order_neighbors)
         p = match_candidates_by_pdr(images_ref, images_cand, pdr_max_distance, data)
         b = match_candidates_with_bow(data, images_ref, images_cand,
-                                      exifs, reference, bow_neighbors,
-                                      bow_gps_distance, bow_gps_neighbors,
-                                      bow_other_cameras, order_neighbors)
+                                      exifs, bow_neighbors, order_neighbors,
+                                      bow_pdr_distance, bow_index_range,
+                                      bow_other_cameras)
         pairs = d | t | o | p | b
 
     pairs = ordered_pairs(pairs, images_ref)
