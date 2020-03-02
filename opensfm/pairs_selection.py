@@ -129,7 +129,7 @@ def match_candidates_with_bow(data, images_ref, images_cand,
     histograms = load_histograms(data, need_load)
     args = list(match_bow_arguments(preempted_cand, histograms))
 
-    # parralel BoW neighbors computation
+    # paralel BoW neighbors computation
     per_process = 512
     processes = context.processes_that_fit_in_memory(data.config['processes'], per_process)
     batch_size = int(max(1, len(args)/(2*processes)))

@@ -69,7 +69,7 @@ matching_use_filters: False           # If True, removes static matches using ad
 # Params for match filtering 
 filtering_use_preint: False             # If True, filter matches based on gyroscope pre-integration results
 filtering_triplet_bad_ratio: 0.9        # remove edge if bad to all triplets ratio exceeds this threshold
-filtering_common_feature_thresh: 0.08   # used in missing feature analysis - feature common ratio 
+filtering_common_feature_thresh: 0.04   # used in missing feature analysis - feature common ratio 
 
 # Params for geometric estimation
 robust_matching_threshold: 0.004        # Outlier threshold for fundamental matrix estimation as portion of image width
