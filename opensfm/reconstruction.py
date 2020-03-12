@@ -21,12 +21,10 @@ from opensfm import log
 from opensfm import tracking
 from opensfm import multiview
 from opensfm import types
-from opensfm.align import align_reconstruction, align_reconstruction_segments, apply_similarity
+from opensfm.align import align_reconstruction, apply_similarity
 from opensfm.align_pdr import init_pdr_predictions, direct_align_pdr, \
-    update_pdr_prediction_position, update_pdr_prediction_rotation, \
-    cull_resection_pdr, validate_resection_pdr, \
-    scale_reconstruction_to_pdr, align_reconstructions_to_pdr, align_reconstructions_to_hlf, \
-    debug_rotation_prior
+    update_pdr_prediction_position, \
+    align_reconstructions_to_pdr, align_reconstructions_to_hlf
 from opensfm.context import parallel_map, current_memory_usage
 from opensfm import transformations as tf
 
@@ -243,26 +241,7 @@ def bundle_single_view(graph, reconstruction, shot_id, data):
         p, stddev1 = update_pdr_prediction_position(shot.id, reconstruction, data)
         ba.add_position_prior(str(shot.id), p[0], p[1], p[2], stddev1)
 
-        #r, stddev2 = update_pdr_prediction_rotation(shot.id, reconstruction, data)
-        #ba.add_rotation_prior(str(shot.id), r[0], r[1], r[2], stddev2)
-
-        # debug
-        if stddev1 != 999999.0:
-            prev_shot_id = _prev_shot_id(shot.id)
-            if prev_shot_id in reconstruction.shots:
-                v = p - reconstruction.shots[prev_shot_id].pose.get_origin()
-                logger.debug("pdr prior for {} positional displacement {} {} {}, dop={}".format(shot.id, v[0], v[1], v[2], stddev1))
-
-        #if stddev2 != 999999.0:
-            #prev_shot_id = _prev_shot_id(shot.id)
-            #if prev_shot_id in reconstruction.shots:
-                #q_0 = tf.quaternion_from_euler(r[0], r[1], r[2])
-                #q_1 = tf.quaternion_from_matrix(reconstruction.shots[prev_shot_id].pose.get_rotation_matrix())
-
-                #logger.debug("pdr prior for {} angular displacement {} dop={}".
-                             #format(shot.id, tf.quaternion_distance(q_0, q_1), stddev2))
-
-    ba.set_point_projection_loss_function(config['loss_function'], 
+    ba.set_point_projection_loss_function(config['loss_function'],
             config['loss_function_threshold'])
 
     ba.set_internal_parameters_prior_sd(
@@ -816,9 +795,6 @@ def resect(data, graph, graph_inliers, reconstruction, shot_id,
     if len(bs) < 6:
         return False, {'num_common_points': len(bs)}
 
-    # remove features that are obviously wrong, according to pdr
-    #bs, Xs, ids = cull_resection_pdr(shot_id, reconstruction, data, bs, Xs, ids)
-
     T = multiview.absolute_pose_ransac(
         bs, Xs, "EPNP", 1 - np.cos(threshold), 1000, 0.999)
 
@@ -860,15 +836,6 @@ def resect(data, graph, graph_inliers, reconstruction, shot_id,
                  copy_graph_data(graph, graph_inliers, shot_id, ids[i])
         bundle_single_view(graph_inliers, reconstruction, shot_id, data)
         return True, report
-
-        # check if rotation of this shot after bundle adjustment is close to what we are expecting
-        #is_pos_ok, is_rot_ok = validate_resection_pdr(reconstruction, data, shot)
-        #if is_pos_ok and is_rot_ok:
-            #reconstruction.add_shot(shot)
-            #return True, report
-        #else:
-            #logger.info("resection of {} failed. pos_ok {} rot_ok {}".format(shot_id, is_pos_ok, is_rot_ok))
-            #return False, report
     else:
         return False, report
 
@@ -1452,9 +1419,6 @@ def grow_reconstruction_sequential(data, graph, graph_inliers, reconstruction, i
                 remove_outliers(graph_inliers, reconstruction, config, bundled_points)
                 step['local_bundle'] = brep
 
-            if not reconstruction.alignment.scaled:
-                scale_reconstruction_to_pdr(reconstruction, data)
-
             last_image = image
             break
         else:
@@ -1469,7 +1433,7 @@ def grow_reconstruction_sequential(data, graph, graph_inliers, reconstruction, i
 
     bundle(graph_inliers, reconstruction, gcp, config)
     remove_outliers(graph_inliers, reconstruction, config)
-    align_reconstruction_segments(reconstruction, gcp, config)
+    align_reconstruction(reconstruction, gcp, config)
     paint_reconstruction(data, graph, reconstruction)
 
     if len(images) > 0:
@@ -1810,41 +1774,9 @@ def incremental_reconstruction_sequential(data, graph):
     else:
         image_groups.append( full_images )
 
-    # load pdr data and globally align with gps points
+    # load pdr data and globally align with gps points, if any
     init_pdr_predictions(data)
 
-    '''
-    for remaining_images in image_groups:
-        curr_idx = 0
-        while curr_idx < len(remaining_images) - 1 > 0:
-            im1 = remaining_images[curr_idx]
-            im2 = remaining_images[curr_idx+1]
-
-            if (im1, im2) not in common_tracks:
-                curr_idx += 1
-                continue
-
-            rec_report = {}
-            report['reconstructions'].append(rec_report)
-            tracks, p1, p2 = common_tracks[im1, im2]
-
-            reconstruction, graph_inliers, rec_report['bootstrap'] = bootstrap_reconstruction(
-                data, graph, im1, im2, p1, p2)
-
-            if reconstruction:
-                remaining_images.remove(im1)
-                remaining_images.remove(im2)
-                reconstruction, rec_report['grow'] = grow_reconstruction_sequential(
-                    data, graph, graph_inliers, reconstruction, remaining_images, gcp)
-                reconstructions.append(reconstruction)
-                rec_report['stats'] = compute_statistics(reconstruction, graph_inliers)
-                logger.info(rec_report['stats'])
-                curr_idx = 0
-            else:
-                # bootstrap didn't work, try the next pair
-                curr_idx += 1
-
-    '''
     # select as seed the pair with largest number of common tracks
     for remaining_images in image_groups:
 
@@ -1866,12 +1798,9 @@ def incremental_reconstruction_sequential(data, graph):
                                              key=lambda x: -len(x.shots))
                     rec_report['stats'] = compute_statistics(reconstruction, graph_inliers)
                     logger.info(rec_report['stats'])
-                    data.save_reconstruction(reconstructions)
 
     if reconstructions:
-        #if len(target_images) == 0:
-            # only tries pdr alignment when we are not subsetting
-            #align_reconstructions_to_pdr(reconstructions, data)
+        align_reconstructions_to_pdr(reconstructions, data)
 
         reconstructions = sorted(reconstructions, key=lambda x: -len(x.shots))
         data.save_reconstruction(reconstructions)

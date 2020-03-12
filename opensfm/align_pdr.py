@@ -20,6 +20,159 @@ from opensfm.debug_plot import debug_plot_pdr
 logger = logging.getLogger(__name__)
 
 
+def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad=True):
+    """
+    *globally* align pdr predictions to GPS points. used with direct_align
+
+    use 2 gps points at a time to align pdr predictions
+
+    :param gps_points_dict: gps points in topocentric coordinates
+    :param pdr_shots_dict: position of each shot as predicted by pdr
+    :param scale_factor: reconstruction_scale_factor
+    :param skip_bad: avoid bad alignment sections
+    :return: aligned pdr shot predictions
+    """
+    if len(gps_points_dict) < 2 or len(pdr_shots_dict) < 2:
+        return {}
+
+    # reconstruction_scale_factor is from oiq_config.yaml, and it's feet per pixel.
+    # 0.3048 is meter per foot. 1.0 / (reconstruction_scale_factor * 0.3048) is
+    # therefore pixels/meter, and since pdr output is in meters, it's the
+    # expected scale
+    expected_scale = 1.0 / (scale_factor * 0.3048)
+
+    pdr_predictions_dict = {}
+
+    all_gps_shot_ids = sorted(gps_points_dict.keys())
+    for i in range(len(all_gps_shot_ids) - 1):
+        gps_coords = []
+        pdr_coords = []
+
+        for j in range(2):
+            shot_id = all_gps_shot_ids[i+j]
+            gps_coords.append(gps_points_dict[shot_id])
+            pdr_coords.append([pdr_shots_dict[shot_id][0], pdr_shots_dict[shot_id][1], 0])
+
+        #s, A, b = get_affine_transform_2d(gps_coords, pdr_coords)
+        s, A, b = get_affine_transform_2d_no_numpy(gps_coords, pdr_coords)
+
+        # the closer s is to expected_scale, the better the fit, and the less the deviation
+        deviation = math.fabs(1.0 - s/expected_scale)
+
+        # debugging
+        #[x, y, z] = _rotation_matrix_to_euler_angles(A)
+        #logger.debug("update_pdr_global_2d: deviation=%f, rotation=%f, %f, %f", deviation, np.degrees(x), np.degrees(y), np.degrees(z))
+
+        if skip_bad and not ((0.50 * expected_scale) < s < (2.0 * expected_scale)):
+            logger.debug("s/expected_scale={}, discard".format(s/expected_scale))
+            continue
+
+        start_shot_id = all_gps_shot_ids[i]
+        end_shot_id = all_gps_shot_ids[i+1]
+
+        # in first iteration, we transform pdr from first shot
+        # in last iteration, we transform pdr until last shot
+        if i == 0:
+            start_shot_id = _int_to_shot_id(0)
+
+        if i == len(gps_points_dict)-2:
+            end_shot_id = _int_to_shot_id(len(pdr_shots_dict)-1)
+
+        #new_dict = apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id,
+        #s, A, b,
+        #deviation, [all_gps_shot_ids[i], all_gps_shot_ids[i+1]])
+        new_dict = apply_affine_transform_no_numpy(pdr_shots_dict, start_shot_id, end_shot_id,
+                                                   s, A, b,
+                                                   deviation, [all_gps_shot_ids[i], all_gps_shot_ids[i+1]])
+        pdr_predictions_dict.update(new_dict)
+
+    return pdr_predictions_dict
+
+
+def update_pdr_global(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad=True, stride_len=3):
+    """
+    *globally* align pdr predictions to GPS points. used with direct_align
+
+    Move a sliding window through the gps points and get stride_len neighboring points at a time;
+    use them to piece-wise affine transform pdr predictions to align with GPS points
+
+    :param gps_points_dict: gps points in topocentric coordinates
+    :param pdr_shots_dict: position of each shot as predicted by pdr
+    :param scale_factor: reconstruction_scale_factor - scale factor feet per pixel
+    :param skip_bad: avoid bad alignment sections
+    :param stride_len: how many gps points are used for each section
+    :return: aligned pdr shot predictions - [x, y, z, dop]
+    """
+    if len(gps_points_dict) < stride_len or len(pdr_shots_dict) < stride_len:
+        logger.info("update_pdr_global: need more gps points. supplied only {}", len(gps_points_dict))
+        return {}
+
+    pdr_predictions_dict = {}
+
+    # reconstruction_scale_factor is from oiq_config.yaml, and it's feet per pixel.
+    # 0.3048 is meter per foot. 1.0 / (reconstruction_scale_factor * 0.3048) is
+    # therefore pixels/meter, and since pdr output is in meters, it's the
+    # expected scale
+    expected_scale = 1.0 / (scale_factor * 0.3048)
+
+    last_deviation = 1.0
+
+    all_gps_shot_ids = sorted(gps_points_dict.keys())
+    first_iteration = True
+    for i in range(len(all_gps_shot_ids) - stride_len + 1):
+        gps_coords = []
+        pdr_coords = []
+        gps_shot_ids = []
+
+        for j in range(stride_len):
+            shot_id = all_gps_shot_ids[i+j]
+            gps_shot_ids.append(shot_id)
+            gps_coords.append(gps_points_dict[shot_id])
+            pdr_coords.append(pdr_shots_dict[shot_id][0:3])
+
+        s, A, b = get_affine_transform(gps_coords, pdr_coords)
+
+        # the closer s is to expected_scale, the better the fit, and the less the deviation
+        ratio = s/expected_scale
+        if ratio > 1.0:
+            ratio = 1/ratio
+
+        # if deviation is very large, skip it
+        deviation = math.fabs(1.0 - ratio)
+        if skip_bad and deviation > 0.5:
+            last_deviation = 1.0
+            continue
+
+        # if x/y rotation is not close to 0, then likely it's 'flipped' and no good
+        [x, y, z] = _rotation_matrix_to_euler_angles(A)
+        logger.debug("update_pdr_global: deviation=%f, rotation=%f, %f, %f", deviation, np.degrees(x), np.degrees(y), np.degrees(z))
+        if skip_bad and (math.fabs(x) > 1.0 or math.fabs(y) > 1.0):
+            last_deviation = 1.0
+            continue
+
+        # based on deviation, we choose different starting pdr shot to transform
+        if deviation < last_deviation:
+            pdr_start_shot_id = gps_shot_ids[0]
+        else:
+            pdr_start_shot_id = gps_shot_ids[1]
+
+        pdr_end_shot_id = _int_to_shot_id(len(pdr_shots_dict)-1)
+
+        if first_iteration:
+            # in first iteration, we transform pdr from first shot
+            pdr_start_shot_id = _int_to_shot_id(0)
+            first_iteration = False
+
+        new_dict = apply_affine_transform(pdr_shots_dict, pdr_start_shot_id, pdr_end_shot_id,
+                                          s, A, b,
+                                          deviation, gps_shot_ids)
+        pdr_predictions_dict.update(new_dict)
+
+        last_deviation = deviation
+
+    return pdr_predictions_dict
+
+
 def init_pdr_predictions(data, use_2d=False):
     """
     globally align pdr path to gps points
@@ -175,561 +328,6 @@ def direct_align_pdr(data, target_images=None):
     return reconstruction
 
 
-def update_gps_picker(curr_gps_points_dict, pdr_shots_dict, scale_factor, num_extrapolation):
-    """
-    this routine is intended to be ported and used in gps picker
-
-    globally align pdr path to current set of gps shots. return pdr predictions for
-    the first x + num_extrapolation shots, where x is the largest sequence number in
-    current gps shots.
-
-    when there is no gps point, no alignment is done, instead, this function returns
-    a scaled version of the pdr path, so that gps pickers can see it and easily work
-    with it on the floor plan
-
-    when there is one gps point, no alignment is done, instead, this function simply
-    shifts the pdr path so it overlaps with that single gps point
-
-    :param curr_gps_points:
-    :param pdr_shots_dict:
-    :param scale_factor:
-    :param num_extrapolation:
-    :return:
-    """
-    pdr_predictions_dict = {}
-
-    scaled_pdr_shots_dict = {}
-    for shot_id in pdr_shots_dict:
-        scaled_pdr_shots_dict[shot_id] = (pdr_shots_dict[shot_id][0]/(scale_factor * 0.3048),
-                                          pdr_shots_dict[shot_id][1]/(scale_factor * 0.3048), 0)
-
-    if len(curr_gps_points_dict) < 2:
-        if len(curr_gps_points_dict) < 1:
-            offset = (2000, 2000, 0)
-            num = 1
-        else:
-            for shot_id in curr_gps_points_dict:
-                offset = tuple(np.subtract(curr_gps_points_dict[shot_id],
-                                           scaled_pdr_shots_dict[shot_id]))
-                num = _shot_id_to_int(shot_id) + num_extrapolation
-
-        for i in range(num):
-            shot_id = _int_to_shot_id(i)
-            pdr_predictions_dict[shot_id] = tuple(map(sum, zip(offset, scaled_pdr_shots_dict[shot_id])))
-    else:
-        all_predictions_dict = update_pdr_global_2d(curr_gps_points_dict, pdr_shots_dict, scale_factor, False)
-
-        sorted_gps_ids = sorted(curr_gps_points_dict.keys(), reverse=True)
-        num = _shot_id_to_int(sorted_gps_ids[0]) + num_extrapolation
-
-        for i in range(num):
-            shot_id = _int_to_shot_id(i)
-            pdr_predictions_dict[shot_id] = all_predictions_dict[shot_id]
-
-    return pdr_predictions_dict
-
-
-def update_pdr_prediction_position(shot_id, reconstruction, data):
-    if data.pdr_shots_exist():
-        if len(reconstruction.shots) < 3:
-            return [0, 0, 0], 999999.0
-
-        # get updated predictions
-        sfm_points_dict = {}
-
-        for shot in reconstruction.shots.values():
-            sfm_points_dict[shot.id] = shot.pose.get_origin()
-
-        pdr_shots_dict = data.load_pdr_shots()
-        scale_factor = data.config['reconstruction_scale_factor']
-
-        return update_pdr_local(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor)
-
-    return [0, 0, 0], 999999.0
-
-
-def update_pdr_prediction_rotation(shot_id, reconstruction, data):
-    """
-    get rotation prior of shot_id based on the closest shots in recon.
-    :param shot_id:
-    :param reconstruction:
-    :param data:
-    :return:
-    """
-    if data.pdr_shots_exist():
-        if len(reconstruction.shots) < 3:
-            return [0, 0, 0], 999999.0
-
-        # get sorted shot ids that are closest to shot_id (in sequence number)
-        sorted_shot_ids = get_closest_shots(shot_id, reconstruction.shots.keys())
-
-        base_shot_id_0 = sorted_shot_ids[0]
-        base_shot_id_1 = sorted_shot_ids[1]
-
-        prediction_0 = rotation_extrapolate(shot_id, base_shot_id_0, reconstruction, data)
-        prediction_1 = rotation_extrapolate(shot_id, base_shot_id_1, reconstruction, data)
-
-        # 0.1 radians is roughly 6 degrees
-        # TODO: put 0.1 in config
-        tolerance = 0.1 * abs(_shot_id_to_int(base_shot_id_0) - _shot_id_to_int(shot_id))
-
-        q_0 = tf.quaternion_from_euler(prediction_0[0], prediction_0[1], prediction_0[2])
-        q_1 = tf.quaternion_from_euler(prediction_1[0], prediction_1[1], prediction_1[2])
-
-        if tf.quaternion_distance(q_0, q_1) > tolerance:
-            return prediction_0, 999999.0
-
-        return prediction_0, tolerance
-
-    return [0, 0, 0], 999999.0
-
-
-def cull_resection_pdr(shot_id, reconstruction, data, bs, Xs, track_ids):
-    """
-    use pdr rotation and position predictions to mask out questionable features before resection
-    :param shot_id:
-    :param reconstruction:
-    :param data:
-    :param bs:
-    :param Xs:
-    :param track_ids:
-    :return: masked bs and Xs
-    """
-    if data.pdr_shots_exist():
-        p, stddev1 = update_pdr_prediction_position(shot_id, reconstruction, data)
-        r, stddev2 = update_pdr_prediction_rotation(shot_id, reconstruction, data)
-
-        if stddev1 <= 100.0 and stddev2 <= 1.0:
-            min_inliers = data.config['resection_min_inliers']
-            threshold = 2*data.config['resection_threshold']
-
-            R = _euler_angles_to_rotation_matrix(r)
-            reprojected_bs = R.dot((Xs - p).T).T
-            reprojected_bs /= np.linalg.norm(reprojected_bs, axis=1)[:, np.newaxis]
-
-            distances = np.linalg.norm(reprojected_bs - bs, axis=1)
-
-            # relax threshold until 90% of features are through
-            # TODO: put 90% in config
-            for i in range(1, 100):
-                mask = distances < i*threshold
-                if int(sum(mask)) > max(len(mask)*0.9, min_inliers):
-                    break
-
-            if int(sum(mask)) < min_inliers:
-                return bs, Xs, track_ids
-
-            logger.debug("culling {}/{} features before resection".format(len(mask)-int(sum(mask)), len(mask)))
-
-            masked_bs = [x for i, x in enumerate(bs) if mask[i]]
-            masked_Xs = [x for i, x in enumerate(Xs) if mask[i]]
-            masked_track_ids = [x for i, x in enumerate(track_ids) if mask[i]]
-
-            return np.array(masked_bs), np.array(masked_Xs), masked_track_ids
-
-    return bs, Xs, track_ids
-
-
-def validate_position(reconstruction, data, shot):
-    p_sfm = shot.pose.get_origin()
-    p_pdr, stddev = update_pdr_prediction_position(shot.id, reconstruction, data)
-
-    p_dist = np.linalg.norm(p_pdr[:2] - p_sfm[:2])
-    if p_dist > stddev*2:
-        logger.debug("validate_position: p_dist {}".format(p_dist))
-
-    return p_dist < stddev*2
-
-
-def validate_rotation(reconstruction, data, shot):
-    r_sfm = _rotation_matrix_to_euler_angles(shot.pose.get_rotation_matrix())
-    r_pdr, stddev = update_pdr_prediction_rotation(shot.id, reconstruction, data)
-
-    q_0 = tf.quaternion_from_euler(r_pdr[0], r_pdr[1], r_pdr[2])
-    q_1 = tf.quaternion_from_euler(r_sfm[0], r_sfm[1], r_sfm[2])
-
-    r_dist = tf.quaternion_distance(q_0, q_1)
-
-    if r_dist > stddev:
-        logger.debug("validate_resection_pdr: r_dist{}".format(r_dist))
-
-    return r_dist < stddev
-
-
-def validate_resection_pdr(reconstruction, data, shot):
-    is_pos_ok = is_rot_ok = True
-    if data.pdr_shots_exist():
-        is_pos_ok = validate_position(reconstruction, data, shot)
-        is_rot_ok = validate_rotation(reconstruction, data, shot)
-
-    return is_pos_ok, is_rot_ok
-
-
-def debug_rotation_prior(reconstruction, data):
-    if len(reconstruction.shots) < 3:
-        return
-
-    dists = []
-    for shot_id in reconstruction.shots:
-        rotation_prior, dop = update_pdr_prediction_rotation(shot_id, reconstruction, data)
-        q_p = tf.quaternion_from_euler(rotation_prior[0], rotation_prior[1], rotation_prior[2])
-        q_s = tf.quaternion_from_matrix(reconstruction.shots[shot_id].pose.get_rotation_matrix())
-
-        #logger.debug("{}, rotation prior/sfm distance is {} degrees".format(shot_id, np.degrees(tf.quaternion_distance(q_p, q_s))))
-        dists.append(np.degrees(tf.quaternion_distance(q_p, q_s)))
-
-    logger.debug("avg prior/sfm diff {} degrees".format(np.mean(np.array(dists))))
-
-
-def scale_reconstruction_to_pdr(reconstruction, data):
-    """
-    scale the reconstruction to pdr predictions
-    """
-    pdr_predictions_dict = data.load_pdr_predictions()
-
-    if pdr_predictions_dict:
-        scale_recon_1(reconstruction, data)
-    else:
-        scale_recon_2(reconstruction, data)
-
-
-def scale_recon_1(reconstruction, data):
-    pdr_predictions_dict = data.load_pdr_predictions()
-
-    ref_shots_dict = {}
-    for shot in reconstruction.shots.values():
-        if pdr_predictions_dict and shot.id in pdr_predictions_dict:
-            ref_shots_dict[shot.id] = pdr_predictions_dict[shot.id][:3]
-
-    two_ref_shots_dict = ref_shots_dict
-    if len(ref_shots_dict) > 2:
-        two_ref_shots_dict, distance = get_farthest_shots(ref_shots_dict)
-
-    transform_reconstruction(reconstruction, two_ref_shots_dict)
-
-    # setting scaled=true will prevent this routine from being called again. we will perform
-    # this scaling operation a couple times at beginning of a reconstruction
-    if len(reconstruction.shots) > 3:
-        reconstruction.alignment.scaled = True
-
-
-def scale_recon_2(reconstruction, data):
-    if not data.pdr_shots_exist():
-        return
-
-    pdr_shots_dict = data.load_pdr_shots()
-
-    X, Xp = [], []
-    onplane, verticals = [], []
-    for shot_id in reconstruction.shots.keys():
-        X.append(reconstruction.shots[shot_id].pose.get_origin())
-        Xp.append(pdr_shots_dict[shot_id][0:3])
-        R = reconstruction.shots[shot_id].pose.get_rotation_matrix()
-        onplane.append(R[0,:])
-        onplane.append(R[2,:])
-        verticals.append(R[1,:])
-
-    X = np.array(X)
-    Xp = np.array(Xp)
-
-    # Estimate ground plane.
-    p = multiview.fit_plane(X - X.mean(axis=0), onplane, verticals)
-    Rplane = multiview.plane_horizontalling_rotation(p)
-    X = Rplane.dot(X.T).T
-
-    # Estimate 2d similarity to align to pdr predictions
-    T = tf.affine_matrix_from_points(X.T[:2], Xp.T[:2], shear=False)
-    s = np.linalg.det(T[:2, :2]) ** 0.5
-    A = np.eye(3)
-    A[:2, :2] = T[:2, :2] / s
-    A = A.dot(Rplane)
-    b = np.array([
-        T[0, 2],
-        T[1, 2],
-        Xp[:, 2].mean() - s * X[:, 2].mean()  # vertical alignment
-    ])
-
-    # Align points.
-    for point in reconstruction.points.values():
-        p = s * A.dot(point.coordinates) + b
-        point.coordinates = p.tolist()
-
-    # Align cameras.
-    for shot in reconstruction.shots.values():
-        R = shot.pose.get_rotation_matrix()
-        t = np.array(shot.pose.translation)
-        Rp = R.dot(A.T)
-        tp = -Rp.dot(b) + s * t
-        try:
-            shot.pose.set_rotation_matrix(Rp)
-            shot.pose.translation = list(tp)
-        except:
-            logger.debug("unable to transform reconstruction!")
-
-
-def align_reconstructions_to_pdr(reconstructions, data):
-    """
-    for any reconstruction that's not aligned with gps, use pdr predictions to align them
-    """
-    reconstructions[:] = [align_reconstruction_to_pdr(recon, data) for recon in reconstructions]
-
-
-def align_reconstruction_to_pdr(reconstruction, data):
-    if not reconstruction.alignment.aligned:
-        reconstruction = direct_align_pdr(data, reconstruction.shots.keys())
-
-    return reconstruction
-
-
-def align_reconstructions_to_hlf(reconstructions, data):
-    # 1. load list of hlf coordinates on floor plan
-    hlf_list = data.load_hlf_list()
-    logger.debug("hlf_list has {} entries".format(len(hlf_list)))
-
-    # 2. load list of images detected with hlf
-    hlf_det_list = data.load_hlf_det_list()
-    logger.debug("hlf_det_list has {} entries".format(len(hlf_det_list)))
-
-    # 3. for each reconstruction, attempt to auto discover gps
-    for recon in reconstructions:
-        logger.debug("recon has {} shots {}".format(len(recon.shots), sorted(recon.shots)))
-
-        det_list = []
-        img_list = []
-        gt_list = []
-
-        # first, scale reconstruction to that of the pdr
-        scale_reconstruction_to_pdr(recon, data)
-
-        # second, get all shot ids in this recon that has hlf detection
-        for shot_id in hlf_det_list:
-            if shot_id in recon.shots:
-                o = recon.shots[shot_id].pose.get_origin()
-                det_list.append([o[0], o[1]])
-                img_list.append(shot_id)
-
-        if len(det_list) < 8:
-            logger.debug("recon has {} door detections, too few to perform alignment".format(len(det_list)))
-            continue
-
-        logger.debug("det_list has {} entries".format(len(det_list)))
-        #logger.debug("img_list {}".format(img_list))
-
-        for i in range(len(det_list)):
-            # change this if we add ground truth manually
-            gt_list.append(-1)
-
-        matches = csfm.run_hlf_matcher(hlf_list, det_list, gt_list,
-                                       data.config['reconstruction_scale_factor'])
-
-        for i in matches.keys():
-            logger.debug("{} => {}".format(img_list[i], hlf_list[matches[i]]))
-
-
-def align_reconstructions_to_pdr_old(reconstructions, data):
-    """
-    attempt to align un-anchored reconstructions """
-    if not data.gps_points_exist():
-        return
-
-    if not data.pdr_shots_exist():
-        return
-
-    # get updated predictions
-    aligned_sfm_points_dict = {}
-
-    for reconstruction in reconstructions:
-        if reconstruction.alignment.aligned:
-            for shot in reconstruction.shots.values():
-                aligned_sfm_points_dict[shot.id] = shot.pose.get_origin()
-
-    gps_points_dict = data.load_topocentric_gps_points()
-    pdr_shots_dict = data.load_pdr_shots()
-    scale_factor = data.config['reconstruction_scale_factor']
-
-    walkthrough_dict = pdr_walkthrough(aligned_sfm_points_dict, pdr_shots_dict)
-
-    for reconstruction in reconstructions:
-        if not reconstruction.alignment.aligned:
-            reconstruction.alignment.aligned = \
-                align_reconstruction_to_pdr_old(reconstruction, walkthrough_dict, gps_points_dict, scale_factor)
-
-
-def align_reconstruction_to_pdr_old(reconstruction, walkthrough_dict, gps_points_dict, scale_factor):
-    """
-    align one partial reconstruction to 'best' pdr predictions
-    """
-    recon_predictions_dict = {}
-    for shot_id in reconstruction.shots:
-        recon_predictions_dict[shot_id] = walkthrough_dict[shot_id]
-
-    # sort shots in the reconstruction by distance value
-    sorted_by_distance_shot_ids = sorted(recon_predictions_dict, key=lambda k: recon_predictions_dict[k][1])
-
-    ref_shots_dict = {}
-    for i in range(len(sorted_by_distance_shot_ids)):
-        shot_id = sorted_by_distance_shot_ids[i]
-
-        if recon_predictions_dict[shot_id][1] < 2:
-            ref_shots_dict[shot_id] = recon_predictions_dict[shot_id][0]
-        elif shot_id in gps_points_dict:
-            ref_shots_dict[shot_id] = gps_points_dict[shot_id]
-            break
-
-    if len(ref_shots_dict) >= 2:
-        two_ref_shots_dict, distance = get_farthest_shots(ref_shots_dict)
-
-        # only do this alignment if the reference shots are far enough away from each other,
-        # or if we have only a few shots in this reconstruction. attempting to do this on
-        # two nearby shots could lead to a lot of distortion
-        if distance > 5/scale_factor or len(reconstruction.shots) < 10:
-            transform_reconstruction(reconstruction, two_ref_shots_dict)
-
-            # debug
-            logger.debug("align_reconstructon_to_pdr: align to shots")
-            for shot_id in two_ref_shots_dict:
-                logger.debug("{}, position={}".format(shot_id, two_ref_shots_dict[shot_id]))
-
-            return True
-
-    # if do alignment based on pdr not doable, we will settle with updating the shots with
-    # latest pdr predictions
-    reposition_reconstruction(reconstruction, recon_predictions_dict)
-    return False
-
-
-def pdr_walk_forward(aligned_sfm_points_dict, pdr_shots_dict):
-    """
-    based on all aligned points, walk forward to predict all unaligned points
-    :param aligned_sfm_points_dict:
-    :param pdr_shots_dict:
-    :return:
-    """
-    walkthrough_dict = {}
-    for shot_id in pdr_shots_dict:
-        walkthrough_dict[shot_id] = [0, 0, 0], 999999
-
-    aligned_shot_ids = sorted(aligned_sfm_points_dict.keys())
-
-    # find first consecutive frames
-    idx = -1
-    for i in range(len(aligned_shot_ids)-1):
-        if _shot_id_to_int(aligned_shot_ids[i]) == _shot_id_to_int(aligned_shot_ids[i+1]) - 1:
-            idx = i
-            break
-
-    if idx != -1:
-        start_idx = _shot_id_to_int(aligned_shot_ids[idx])
-
-        walkthrough_dict[_int_to_shot_id(start_idx)] = aligned_sfm_points_dict[_int_to_shot_id(start_idx)]
-        walkthrough_dict[_int_to_shot_id(start_idx+1)] = aligned_sfm_points_dict[_int_to_shot_id(start_idx+1)]
-
-        for i in range(start_idx, len(pdr_shots_dict)-2):
-            dist_1_id = _int_to_shot_id(i+1)
-            dist_2_id = _int_to_shot_id(i)
-            pred_id = _int_to_shot_id(i+2)
-            if pred_id not in aligned_sfm_points_dict:
-                trust1 = trust2 = 0
-                if dist_1_id in aligned_sfm_points_dict:
-                    dist_1_coords = aligned_sfm_points_dict[dist_1_id]
-                else:
-                    dist_1_coords, trust1 = walkthrough_dict[dist_1_id]
-
-                if dist_2_id in aligned_sfm_points_dict:
-                    dist_2_coords = aligned_sfm_points_dict[dist_2_id]
-                else:
-                    dist_2_coords, trust2 = walkthrough_dict[dist_2_id]
-
-                pdr_info_dist_1 = pdr_shots_dict[dist_1_id]
-                pdr_info = pdr_shots_dict[pred_id]
-
-                delta_heading = tf.delta_heading(np.radians(pdr_info_dist_1[3:6]), np.radians(pdr_info[3:6]))
-                if pdr_info_dist_1[6] > 1e-1:
-                    delta_distance = pdr_info[6] / pdr_info_dist_1[6] * np.linalg.norm(np.array(dist_1_coords)-np.array(dist_2_coords))
-                else:
-                    delta_distance = pdr_info_dist_1[6]
-
-                trust = max(trust1, trust2) + 1
-                walkthrough_dict[pred_id] = position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), trust
-            else:
-                walkthrough_dict[pred_id] = aligned_sfm_points_dict[pred_id], 0
-
-    return walkthrough_dict
-
-
-def pdr_walk_backward(aligned_sfm_points_dict, pdr_shots_dict):
-    """
-    based on all aligned points, walk forward to predict all unaligned points
-    :param aligned_sfm_points_dict:
-    :param pdr_shots_dict:
-    :return:
-    """
-    walkthrough_dict = {}
-    for shot_id in pdr_shots_dict:
-        walkthrough_dict[shot_id] = [0, 0, 0], 999999
-
-    aligned_shot_ids = sorted(aligned_sfm_points_dict.keys(), reverse=True)
-
-    # find first consecutive frames
-    idx = -1
-    for i in range(len(aligned_shot_ids)-1):
-        if _shot_id_to_int(aligned_shot_ids[i]) == _shot_id_to_int(aligned_shot_ids[i+1]) + 1:
-            idx = i
-            break
-
-    if idx != -1:
-        start_idx = _shot_id_to_int(aligned_shot_ids[idx])
-
-        for i in range(start_idx, 1, -1):
-            dist_1_id = _int_to_shot_id(i-1)
-            dist_2_id = _int_to_shot_id(i)
-            pred_id = _int_to_shot_id(i-2)
-            if pred_id not in aligned_sfm_points_dict:
-                trust1 = trust2 = 0
-                if dist_1_id in aligned_sfm_points_dict:
-                    dist_1_coords = aligned_sfm_points_dict[dist_1_id]
-                else:
-                    dist_1_coords, trust1 = walkthrough_dict[dist_1_id]
-
-                if dist_2_id in aligned_sfm_points_dict:
-                    dist_2_coords = aligned_sfm_points_dict[dist_2_id]
-                else:
-                    dist_2_coords, trust2 = walkthrough_dict[dist_2_id]
-
-                pdr_info_dist_1 = pdr_shots_dict[dist_1_id]
-                pdr_info = pdr_shots_dict[pred_id]
-
-                delta_heading = tf.delta_heading(np.radians(pdr_info_dist_1[3:6]), np.radians(pdr_info[3:6]))
-                if pdr_info_dist_1[6] > 1e-1:
-                    delta_distance = pdr_info[6] / pdr_info_dist_1[6] * np.linalg.norm(np.array(dist_1_coords)-np.array(dist_2_coords))
-                else:
-                    delta_distance = pdr_info_dist_1[6]
-
-                trust = max(trust1, trust2) + 1
-                walkthrough_dict[pred_id] = position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), trust
-            else:
-                walkthrough_dict[pred_id] = aligned_sfm_points_dict[pred_id], 0
-
-    return walkthrough_dict
-
-
-def pdr_walkthrough(aligned_sfm_points_dict, pdr_shots_dict):
-    f_dict = pdr_walk_forward(aligned_sfm_points_dict, pdr_shots_dict)
-    b_dict = pdr_walk_backward(aligned_sfm_points_dict, pdr_shots_dict)
-
-    final_dict = {}
-    for shot_id in pdr_shots_dict:
-        f_dist = f_dict[shot_id][1]
-        b_dist = b_dict[shot_id][1]
-
-        if f_dist < b_dist:
-            final_dict[shot_id] = f_dict[shot_id]
-        else:
-            final_dict[shot_id] = b_dict[shot_id]
-
-    return final_dict
-
-
 def position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance):
     """
     update pdr predictions based on extrapolating last SfM position and direction
@@ -776,229 +374,10 @@ def rotation_extrapolate(shot_id, base_shot_id, reconstruction, data):
     return _rotation_matrix_to_euler_angles((delta_rotation.dot(base_sfm_rotation)).T)
 
 
-def transform_reconstruction(reconstruction, ref_shots_dict):
-    """
-    transform recon based on two reference positions
-    :param reconstruction:
-    :param ref_shots_dict:
-    :return:
-    """
-    X, Xp = [], []
-    onplane, verticals = [], []
-    for shot_id in ref_shots_dict:
-        X.append(reconstruction.shots[shot_id].pose.get_origin())
-        Xp.append(ref_shots_dict[shot_id])
-        R = reconstruction.shots[shot_id].pose.get_rotation_matrix()
-        onplane.append(R[0,:])
-        onplane.append(R[2,:])
-        verticals.append(R[1,:])
-
-    X = np.array(X)
-    Xp = np.array(Xp)
-
-    # Estimate ground plane.
-    p = multiview.fit_plane(X - X.mean(axis=0), onplane, verticals)
-    Rplane = multiview.plane_horizontalling_rotation(p)
-    X = Rplane.dot(X.T).T
-
-    # Estimate 2d similarity to align to pdr predictions
-    T = tf.affine_matrix_from_points(X.T[:2], Xp.T[:2], shear=False)
-    s = np.linalg.det(T[:2, :2]) ** 0.5
-    A = np.eye(3)
-    A[:2, :2] = T[:2, :2] / s
-    A = A.dot(Rplane)
-    b = np.array([
-        T[0, 2],
-        T[1, 2],
-        Xp[:, 2].mean() - s * X[:, 2].mean()  # vertical alignment
-    ])
-
-    # Align points.
-    for point in reconstruction.points.values():
-        p = s * A.dot(point.coordinates) + b
-        point.coordinates = p.tolist()
-
-    # Align cameras.
-    for shot in reconstruction.shots.values():
-        R = shot.pose.get_rotation_matrix()
-        t = np.array(shot.pose.translation)
-        Rp = R.dot(A.T)
-        tp = -Rp.dot(b) + s * t
-        try:
-           shot.pose.set_rotation_matrix(Rp)
-           shot.pose.translation = list(tp)
-        except:
-            logger.debug("unable to transform reconstruction!")
-
-
-def reposition_reconstruction(reconstruction, recon_predictions_dict):
-    """
-    reposition reconstruction to pdr positions
-    :param reconstruction:
-    :param recon_predictions_dict:
-    :return:
-    """
-    for shot_id in reconstruction.shots:
-        reconstruction.shots[shot_id].pose.set_origin(recon_predictions_dict[shot_id][0])
-
-
-def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad=True):
-    """
-    *globally* align pdr predictions to GPS points
-
-    use 2 gps points at a time to align pdr predictions
-
-    :param gps_points_dict: gps points in topocentric coordinates
-    :param pdr_shots_dict: position of each shot as predicted by pdr
-    :param scale_factor: reconstruction_scale_factor
-    :param skip_bad: avoid bad alignment sections
-    :return: aligned pdr shot predictions
-    """
-    if len(gps_points_dict) < 2 or len(pdr_shots_dict) < 2:
-        return {}
-
-    # reconstruction_scale_factor is from oiq_config.yaml, and it's feet per pixel.
-    # 0.3048 is meter per foot. 1.0 / (reconstruction_scale_factor * 0.3048) is
-    # therefore pixels/meter, and since pdr output is in meters, it's the
-    # expected scale
-    expected_scale = 1.0 / (scale_factor * 0.3048)
-
-    pdr_predictions_dict = {}
-
-    all_gps_shot_ids = sorted(gps_points_dict.keys())
-    for i in range(len(all_gps_shot_ids) - 1):
-        gps_coords = []
-        pdr_coords = []
-
-        for j in range(2):
-            shot_id = all_gps_shot_ids[i+j]
-            gps_coords.append(gps_points_dict[shot_id])
-            pdr_coords.append([pdr_shots_dict[shot_id][0], pdr_shots_dict[shot_id][1], 0])
-
-        #s, A, b = get_affine_transform_2d(gps_coords, pdr_coords)
-        s, A, b = get_affine_transform_2d_no_numpy(gps_coords, pdr_coords)
-
-        # the closer s is to expected_scale, the better the fit, and the less the deviation
-        deviation = math.fabs(1.0 - s/expected_scale)
-
-        # debugging
-        #[x, y, z] = _rotation_matrix_to_euler_angles(A)
-        #logger.debug("update_pdr_global_2d: deviation=%f, rotation=%f, %f, %f", deviation, np.degrees(x), np.degrees(y), np.degrees(z))
-
-        if skip_bad and not ((0.50 * expected_scale) < s < (2.0 * expected_scale)):
-            logger.debug("s/expected_scale={}, discard".format(s/expected_scale))
-            continue
-
-        start_shot_id = all_gps_shot_ids[i]
-        end_shot_id = all_gps_shot_ids[i+1]
-
-        # in first iteration, we transform pdr from first shot
-        # in last iteration, we transform pdr until last shot
-        if i == 0:
-            start_shot_id = _int_to_shot_id(0)
-
-        if i == len(gps_points_dict)-2:
-            end_shot_id = _int_to_shot_id(len(pdr_shots_dict)-1)
-
-        #new_dict = apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id,
-                                          #s, A, b,
-                                          #deviation, [all_gps_shot_ids[i], all_gps_shot_ids[i+1]])
-        new_dict = apply_affine_transform_no_numpy(pdr_shots_dict, start_shot_id, end_shot_id,
-                                          s, A, b,
-                                          deviation, [all_gps_shot_ids[i], all_gps_shot_ids[i+1]])
-        pdr_predictions_dict.update(new_dict)
-
-    return pdr_predictions_dict
-
-
-def update_pdr_global(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad=True, stride_len=3):
-    """
-    *globally* align pdr predictions to GPS points
-
-    Move a sliding window through the gps points and get stride_len neighboring points at a time;
-    use them to piece-wise affine transform pdr predictions to align with GPS points
-
-    :param gps_points_dict: gps points in topocentric coordinates
-    :param pdr_shots_dict: position of each shot as predicted by pdr
-    :param scale_factor: reconstruction_scale_factor - scale factor feet per pixel
-    :param skip_bad: avoid bad alignment sections
-    :param stride_len: how many gps points are used for each section
-    :return: aligned pdr shot predictions - [x, y, z, dop]
-    """
-    if len(gps_points_dict) < stride_len or len(pdr_shots_dict) < stride_len:
-        logger.info("update_pdr_global: need more gps points. supplied only {}", len(gps_points_dict))
-        return {}
-
-    pdr_predictions_dict = {}
-
-    # reconstruction_scale_factor is from oiq_config.yaml, and it's feet per pixel.
-    # 0.3048 is meter per foot. 1.0 / (reconstruction_scale_factor * 0.3048) is
-    # therefore pixels/meter, and since pdr output is in meters, it's the
-    # expected scale
-    expected_scale = 1.0 / (scale_factor * 0.3048)
-
-    last_deviation = 1.0
-
-    all_gps_shot_ids = sorted(gps_points_dict.keys())
-    first_iteration = True
-    for i in range(len(all_gps_shot_ids) - stride_len + 1):
-        gps_coords = []
-        pdr_coords = []
-        gps_shot_ids = []
-
-        for j in range(stride_len):
-            shot_id = all_gps_shot_ids[i+j]
-            gps_shot_ids.append(shot_id)
-            gps_coords.append(gps_points_dict[shot_id])
-            pdr_coords.append(pdr_shots_dict[shot_id][0:3])
-
-        s, A, b = get_affine_transform(gps_coords, pdr_coords)
-
-        # the closer s is to expected_scale, the better the fit, and the less the deviation
-        ratio = s/expected_scale
-        if ratio > 1.0:
-            ratio = 1/ratio
-
-        # if deviation is very large, skip it
-        deviation = math.fabs(1.0 - ratio)
-        if skip_bad and deviation > 0.5:
-            last_deviation = 1.0
-            continue
-
-        # if x/y rotation is not close to 0, then likely it's 'flipped' and no good
-        [x, y, z] = _rotation_matrix_to_euler_angles(A)
-        logger.debug("update_pdr_global: deviation=%f, rotation=%f, %f, %f", deviation, np.degrees(x), np.degrees(y), np.degrees(z))
-        if skip_bad and (math.fabs(x) > 1.0 or math.fabs(y) > 1.0):
-            last_deviation = 1.0
-            continue
-
-        # based on deviation, we choose different starting pdr shot to transform
-        if deviation < last_deviation:
-            pdr_start_shot_id = gps_shot_ids[0]
-        else:
-            pdr_start_shot_id = gps_shot_ids[1]
-
-        pdr_end_shot_id = _int_to_shot_id(len(pdr_shots_dict)-1)
-
-        if first_iteration:
-            # in first iteration, we transform pdr from first shot
-            pdr_start_shot_id = _int_to_shot_id(0)
-            first_iteration = False
-
-        new_dict = apply_affine_transform(pdr_shots_dict, pdr_start_shot_id, pdr_end_shot_id,
-                                          s, A, b,
-                                          deviation, gps_shot_ids)
-        pdr_predictions_dict.update(new_dict)
-
-        last_deviation = deviation
-
-    return pdr_predictions_dict
-
-
 def update_pdr_local(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor):
     """
     *locally* align pdr predictions to SfM output. the SfM points have been aligned with
-    GPS points
+    GPS points. used with bundle_use_pdr
 
     :param shot_id: update pdr prediction for this shot
     :param sfm_points_dict: sfm point coordinates
@@ -1098,6 +477,294 @@ def update_pdr_local_affine(shot_id, sfm_points_dict, pdr_shots_dict, scale_fact
 
     #logger.info("update_pdr_local_affine: shot_id {}, new prediction {}".format(shot_id, update[shot_id]))
     return update[shot_id][:3], update[shot_id][3]
+
+
+def update_pdr_prediction_position(shot_id, reconstruction, data):
+    if data.pdr_shots_exist():
+        if len(reconstruction.shots) < 3:
+            return [0, 0, 0], 999999.0
+
+        # get updated predictions
+        sfm_points_dict = {}
+
+        for shot in reconstruction.shots.values():
+            sfm_points_dict[shot.id] = shot.pose.get_origin()
+
+        pdr_shots_dict = data.load_pdr_shots()
+        scale_factor = data.config['reconstruction_scale_factor']
+
+        return update_pdr_local(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor)
+
+    return [0, 0, 0], 999999.0
+
+
+def update_pdr_prediction_rotation(shot_id, reconstruction, data):
+    """
+    get rotation prior of shot_id based on the closest shots in recon.
+    :param shot_id:
+    :param reconstruction:
+    :param data:
+    :return:
+    """
+    if data.pdr_shots_exist():
+        if len(reconstruction.shots) < 3:
+            return [0, 0, 0], 999999.0
+
+        # get sorted shot ids that are closest to shot_id (in sequence number)
+        sorted_shot_ids = get_closest_shots(shot_id, reconstruction.shots.keys())
+
+        base_shot_id_0 = sorted_shot_ids[0]
+        base_shot_id_1 = sorted_shot_ids[1]
+
+        prediction_0 = rotation_extrapolate(shot_id, base_shot_id_0, reconstruction, data)
+        prediction_1 = rotation_extrapolate(shot_id, base_shot_id_1, reconstruction, data)
+
+        # 0.1 radians is roughly 6 degrees
+        # TODO: put 0.1 in config
+        tolerance = 0.1 * abs(_shot_id_to_int(base_shot_id_0) - _shot_id_to_int(shot_id))
+
+        q_0 = tf.quaternion_from_euler(prediction_0[0], prediction_0[1], prediction_0[2])
+        q_1 = tf.quaternion_from_euler(prediction_1[0], prediction_1[1], prediction_1[2])
+
+        if tf.quaternion_distance(q_0, q_1) > tolerance:
+            return prediction_0, 999999.0
+
+        return prediction_0, tolerance
+
+    return [0, 0, 0], 999999.0
+
+
+def align_reconstruction_to_pdr(reconstruction, data):
+    """
+    leveling and scaling the reconstructions to pdr
+    """
+    if reconstruction.alignment.aligned:
+        return reconstruction
+
+    if not data.pdr_shots_exist():
+        return reconstruction
+
+    pdr_shots_dict = data.load_pdr_shots()
+
+    X, Xp = [], []
+    onplane, verticals = [], []
+    for shot_id in reconstruction.shots.keys():
+        X.append(reconstruction.shots[shot_id].pose.get_origin())
+        Xp.append(pdr_shots_dict[shot_id][0:3])
+        R = reconstruction.shots[shot_id].pose.get_rotation_matrix()
+        onplane.append(R[0,:])
+        onplane.append(R[2,:])
+        verticals.append(R[1,:])
+
+    X = np.array(X)
+    Xp = np.array(Xp)
+
+    # Estimate ground plane.
+    p = multiview.fit_plane(X - X.mean(axis=0), onplane, verticals)
+    Rplane = multiview.plane_horizontalling_rotation(p)
+    X = Rplane.dot(X.T).T
+
+    # Estimate 2d similarity to align to pdr predictions
+    T = tf.affine_matrix_from_points(X.T[:2], Xp.T[:2], shear=False)
+    s = np.linalg.det(T[:2, :2]) ** 0.5
+    A = np.eye(3)
+    A[:2, :2] = T[:2, :2] / s
+    A = A.dot(Rplane)
+    b = np.array([
+        T[0, 2],
+        T[1, 2],
+        Xp[:, 2].mean() - s * X[:, 2].mean()  # vertical alignment
+    ])
+
+    # Align points.
+    for point in reconstruction.points.values():
+        p = s * A.dot(point.coordinates) + b
+        point.coordinates = p.tolist()
+
+    # Align cameras.
+    for shot in reconstruction.shots.values():
+        R = shot.pose.get_rotation_matrix()
+        t = np.array(shot.pose.translation)
+        Rp = R.dot(A.T)
+        tp = -Rp.dot(b) + s * t
+        try:
+            shot.pose.set_rotation_matrix(Rp)
+            shot.pose.translation = list(tp)
+        except:
+            logger.debug("unable to transform reconstruction!")
+
+    return reconstruction
+
+
+def align_reconstructions_to_pdr(reconstructions, data):
+    """
+    for any reconstruction that's not aligned with gps, use pdr predictions to align them
+    """
+    reconstructions[:] = [align_reconstruction_to_pdr(recon, data) for recon in reconstructions]
+
+
+def align_reconstructions_to_hlf(reconstructions, data):
+    # 1. load list of hlf coordinates on floor plan
+    hlf_list = data.load_hlf_list()
+    logger.debug("hlf_list has {} entries".format(len(hlf_list)))
+
+    # 2. load list of images detected with hlf
+    hlf_det_list = data.load_hlf_det_list()
+    logger.debug("hlf_det_list has {} entries".format(len(hlf_det_list)))
+
+    # 3. for each reconstruction, attempt to auto discover gps
+    for recon in reconstructions:
+        logger.debug("recon has {} shots {}".format(len(recon.shots), sorted(recon.shots)))
+
+        det_list = []
+        img_list = []
+        gt_list = []
+
+        # second, get all shot ids in this recon that has hlf detection
+        for shot_id in hlf_det_list:
+            if shot_id in recon.shots:
+                o = recon.shots[shot_id].pose.get_origin()
+                det_list.append([o[0], o[1]])
+                img_list.append(shot_id)
+
+        if len(det_list) < 8:
+            logger.debug("recon has {} door detections, too few to perform alignment".format(len(det_list)))
+            continue
+
+        logger.debug("det_list has {} entries".format(len(det_list)))
+        #logger.debug("img_list {}".format(img_list))
+
+        for i in range(len(det_list)):
+            # change this if we add ground truth manually
+            gt_list.append(-1)
+
+        matches = csfm.run_hlf_matcher(hlf_list, det_list, gt_list,
+                                       data.config['reconstruction_scale_factor'])
+
+        for i in matches.keys():
+            logger.debug("{} => {}".format(img_list[i], hlf_list[matches[i]]))
+
+
+def update_gps_picker(curr_gps_points_dict, pdr_shots_dict, scale_factor, num_extrapolation):
+    """
+    this routine is intended to be ported and used in gps picker
+
+    globally align pdr path to current set of gps shots. return pdr predictions for
+    the first x + num_extrapolation shots, where x is the largest sequence number in
+    current gps shots.
+
+    when there is no gps point, no alignment is done, instead, this function returns
+    a scaled version of the pdr path, so that gps pickers can see it and easily work
+    with it on the floor plan
+
+    when there is one gps point, no alignment is done, instead, this function simply
+    shifts the pdr path so it overlaps with that single gps point
+
+    :param curr_gps_points:
+    :param pdr_shots_dict:
+    :param scale_factor:
+    :param num_extrapolation:
+    :return:
+    """
+    pdr_predictions_dict = {}
+
+    scaled_pdr_shots_dict = {}
+    for shot_id in pdr_shots_dict:
+        scaled_pdr_shots_dict[shot_id] = (pdr_shots_dict[shot_id][0]/(scale_factor * 0.3048),
+                                          pdr_shots_dict[shot_id][1]/(scale_factor * 0.3048), 0)
+
+    if len(curr_gps_points_dict) < 2:
+        if len(curr_gps_points_dict) < 1:
+            offset = (2000, 2000, 0)
+            num = 1
+        else:
+            for shot_id in curr_gps_points_dict:
+                offset = tuple(np.subtract(curr_gps_points_dict[shot_id],
+                                           scaled_pdr_shots_dict[shot_id]))
+                num = _shot_id_to_int(shot_id) + num_extrapolation
+
+        for i in range(num):
+            shot_id = _int_to_shot_id(i)
+            pdr_predictions_dict[shot_id] = tuple(map(sum, zip(offset, scaled_pdr_shots_dict[shot_id])))
+    else:
+        all_predictions_dict = update_pdr_global_2d(curr_gps_points_dict, pdr_shots_dict, scale_factor, False)
+
+        sorted_gps_ids = sorted(curr_gps_points_dict.keys(), reverse=True)
+        num = _shot_id_to_int(sorted_gps_ids[0]) + num_extrapolation
+
+        for i in range(num):
+            shot_id = _int_to_shot_id(i)
+            pdr_predictions_dict[shot_id] = all_predictions_dict[shot_id]
+
+    return pdr_predictions_dict
+
+
+def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_dict, scale_factor):
+    """
+    this routine is intended to be ported and used in gps picker
+
+    1) for each recon, if there are two or more gps points on shots in that recon, then the recon is
+    aligned to them, two gps points at a time (i.e. in segments).
+
+    2) find the lowest numbered shot n that is not aligned. there are two cases:
+
+        a) there are >= 20 consecutive shots from n onward that are not aligned. in this case, we
+        return the positions of first n-1 (aligned) shots, and position predictions calculated based
+        on the recon that n belongs to, or pdr, or both. specifically:
+
+            i) if there are >= 20 consecutive shots from n onward in this recon, then the predictions
+            are made based on the recon, with the help of pdr for orientation
+
+            ii) if there are < 20 consecutive shots from n onward in this recon, then pdr predictions
+            are used.
+
+            iii) in the rare event that n doesn't belong to any reconstruction, it is ignored, and
+            the process repeats to find the next lowest numbered shot that is not aligned.
+
+        b) there are < 20 consecutive shots after n that are not aligned, i.e. there is a shot m < n+20
+        that is aligned. in this case, we use pdr to predict the positions of shots n through m-1, and
+        consider these shots aligned. this process then repeats, i.e. we proceed to find the next lowest
+        numbered shot that is not aligned.
+
+    :param curr_gps_points_dict:
+    :param reconstructions:
+    :param pdr_shots_dict:
+    :param scale_factor:
+    :return:
+    """
+    num_extrapolation = 20
+
+    pdr_predictions_dict = {}
+
+    scaled_pdr_shots_dict = {}
+    for shot_id in pdr_shots_dict:
+        scaled_pdr_shots_dict[shot_id] = (pdr_shots_dict[shot_id][0]/(scale_factor * 0.3048),
+                                          pdr_shots_dict[shot_id][1]/(scale_factor * 0.3048), 0)
+
+    if len(curr_gps_points_dict) == 0:
+        offset = (2000, 2000, 0)
+        shot_id = _int_to_shot_id(0)
+        pdr_predictions_dict[shot_id] = tuple(map(sum, zip(offset, scaled_pdr_shots_dict[shot_id])))
+    elif len(curr_gps_points_dict) == 1:
+        shot_id = _int_to_shot_id(curr_gps_points_dict.keys()[0])
+        offset = tuple(np.subtract(curr_gps_points_dict[shot_id],
+                                   scaled_pdr_shots_dict[shot_id]))
+        num = _shot_id_to_int(shot_id) + num_extrapolation
+
+        for i in range(num):
+            shot_id = _int_to_shot_id(i)
+            pdr_predictions_dict[shot_id] = tuple(map(sum, zip(offset, scaled_pdr_shots_dict[shot_id])))
+    else:
+        all_predictions_dict = update_pdr_global_2d(curr_gps_points_dict, pdr_shots_dict, scale_factor, False)
+
+        sorted_gps_ids = sorted(curr_gps_points_dict.keys(), reverse=True)
+        num = _shot_id_to_int(sorted_gps_ids[0]) + num_extrapolation
+
+        for i in range(num):
+            shot_id = _int_to_shot_id(i)
+            pdr_predictions_dict[shot_id] = all_predictions_dict[shot_id]
+
+    return pdr_predictions_dict, reconstructions
 
 
 def apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id, s, A, b, deviation, gps_shot_ids=[]):
@@ -1375,5 +1042,3 @@ def _euler_angles_to_rotation_matrix(theta):
     R = np.dot(R_z, np.dot(R_y, R_x))
 
     return R
-
-

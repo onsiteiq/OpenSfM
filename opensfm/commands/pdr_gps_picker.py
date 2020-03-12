@@ -1,4 +1,5 @@
 import os
+import json
 import sys
 import glob
 import logging
@@ -8,6 +9,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.text as text
 
+from opensfm import io
 from opensfm import config
 from opensfm import align_pdr
 
@@ -88,10 +90,11 @@ class LabeledCircle(object):
 
 
 class DragMover(object):
-    def __init__(self, fig, ax, shape, pdr_shots_dict, scale_factor, num_extrapolation):
+    def __init__(self, fig, ax, shape, reconstructions, pdr_shots_dict, scale_factor, num_extrapolation):
         self.fig = fig
         self.ax = ax
         self.shape = shape
+        self.reconstructions = reconstructions
         self.pdr_shots_dict = pdr_shots_dict
         self.scale_factor = scale_factor
         self.num_extrapolation = num_extrapolation
@@ -110,6 +113,11 @@ class DragMover(object):
         self.offset = np.zeros((1, 2))
 
     def on_press(self, event):
+        if event.dblclick:
+            # use double-click event to signal the end of gps picking. save our work
+            save_reconstructions(self.reconstructions)
+            return
+
         # is the press over some shot object
         is_on_shot_obj = False
         for shot_obj in self.shot_objs:
@@ -159,8 +167,13 @@ class DragMover(object):
             if shot_obj.get_is_gps():
                 curr_gps_points_dict[shot_obj.get_shot_id()] = (shot_obj.get_center()[0], shot_obj.get_center()[1], 0)
 
-        pdr_predictions_dict = align_pdr.update_gps_picker(curr_gps_points_dict, self.pdr_shots_dict,
-                                                           self.scale_factor, self.num_extrapolation)
+        if self.num_extrapolation == -1:
+            pdr_predictions_dict, self.reconstructions = \
+                align_pdr.update_gps_picker_hybrid(curr_gps_points_dict, self.reconstructions,
+                                                   self.pdr_shots_dict, self.scale_factor)
+        else:
+            pdr_predictions_dict = align_pdr.update_gps_picker(curr_gps_points_dict, self.pdr_shots_dict,
+                                                               self.scale_factor, self.num_extrapolation)
 
         for shot_obj in self.shot_objs:
             shot_id = shot_obj.get_shot_id()
@@ -216,7 +229,19 @@ def load_pdr_shots(pdr_shots_path):
     return pdr_shots_dict
 
 
-def pdr_gps_picker(plan_path, pdr_shots_path, scale_factor, num_extrapolation):
+def load_reconstructions(recon_file_path):
+    with open(recon_file_path) as fin:
+        reconstructions = io.reconstructions_from_json(json.load(fin))
+
+    return reconstructions
+
+
+def save_reconstructions(reconstructions):
+    with io.open_wt('reconstruction_aligned.json') as fout:
+        io.json_dump(io.reconstructions_to_json(reconstructions), fout, False)
+
+
+def pdr_gps_picker(plan_path, pdr_shots_path, recon_file_path, scale_factor, num_extrapolation):
     """
     main routine to launch gps picker
     """
@@ -226,13 +251,20 @@ def pdr_gps_picker(plan_path, pdr_shots_path, scale_factor, num_extrapolation):
     # load pdr shots
     pdr_shots_dict = load_pdr_shots(pdr_shots_path)
 
+    # load sfm reconstructions
+    reconstructions = load_reconstructions(recon_file_path)
+
     # start drag mover
-    drag_mover = DragMover(fig, ax, shape, pdr_shots_dict, scale_factor, num_extrapolation)
+    drag_mover = DragMover(fig, ax, shape, reconstructions, pdr_shots_dict, scale_factor, num_extrapolation)
 
     plt.show()
 
 
 if __name__ == '__main__':
+    """
+    run pdr_gps_picker with argument -1 to use hybrid (sfm+pdr) gps picker;
+    no argument or argument different than -1 to use pure pdr gps picker
+    """
     if len(sys.argv) > 1:
         pdr_extrapolation_frames = int(sys.argv[1])
     else:
@@ -265,5 +297,13 @@ if __name__ == '__main__':
     else:
         data_config = config.load_config(config_file_paths[0])
 
-    pdr_gps_picker(plan_paths[0], pdr_shots_paths[0],
+    recon_file_paths = []
+    for recon_file_type in ('./reconstruction.json', './osfm/reconstruction.json'):
+        recon_file_paths.extend(glob.glob(recon_file_type))
+
+    if not recon_file_paths or not os.path.exists(recon_file_paths[0]):
+        logger.error("reconstructions not found!")
+        exit(0)
+
+    pdr_gps_picker(plan_paths[0], pdr_shots_paths[0], recon_file_paths[0],
                    data_config['reconstruction_scale_factor'], pdr_extrapolation_frames)
