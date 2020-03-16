@@ -115,8 +115,18 @@ class DragMover(object):
     def on_press(self, event):
         if event.dblclick:
             # use double-click event to signal the end of gps picking. save our work
-            save_reconstructions(self.reconstructions)
-            return
+            if self.num_extrapolation == -1:
+                curr_gps_points_dict = {}
+                for shot_obj in self.shot_objs:
+                    if shot_obj.get_is_gps():
+                        curr_gps_points_dict[shot_obj.get_shot_id()] = (
+                            shot_obj.get_center()[0], shot_obj.get_center()[1], 0)
+
+                self.reconstructions = \
+                    align_pdr.finish_gps_picker_hybrid(curr_gps_points_dict, self.reconstructions,
+                                                       self.pdr_shots_dict, self.scale_factor)
+                save_reconstructions(self.reconstructions)
+                return
 
         # is the press over some shot object
         is_on_shot_obj = False
@@ -168,7 +178,7 @@ class DragMover(object):
                 curr_gps_points_dict[shot_obj.get_shot_id()] = (shot_obj.get_center()[0], shot_obj.get_center()[1], 0)
 
         if self.num_extrapolation == -1:
-            pdr_predictions_dict, self.reconstructions = \
+            pdr_predictions_dict = \
                 align_pdr.update_gps_picker_hybrid(curr_gps_points_dict, self.reconstructions,
                                                    self.pdr_shots_dict, self.scale_factor)
         else:

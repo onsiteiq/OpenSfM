@@ -699,32 +699,13 @@ def update_gps_picker(curr_gps_points_dict, pdr_shots_dict, scale_factor, num_ex
     return pdr_predictions_dict
 
 
-def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_dict, scale_factor):
+def finish_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_dict, scale_factor):
     """
     this routine is intended to be ported and used in gps picker
 
-    1) for each recon, if there are two or more gps points on shots in that recon, then the recon is
-    aligned to them, two gps points at a time (i.e. in segments).
-
-    2) find the lowest numbered shot n that is not aligned. there are two cases:
-
-        a) there are >= 20 consecutive shots from n onward that are not aligned. in this case, we
-        return the positions of first n-1 (aligned) shots, and position predictions calculated based
-        on the recon that n belongs to, or pdr, or both. specifically:
-
-            i) if there are >= 20 consecutive shots from n onward in this recon, then the predictions
-            are made based on the recon, with the help of pdr for orientation
-
-            ii) if there are < 20 consecutive shots from n onward in this recon, then pdr predictions
-            are used.
-
-            iii) in the rare event that n doesn't belong to any reconstruction, it is ignored, and
-            the process repeats to find the next lowest numbered shot that is not aligned.
-
-        b) there are < 20 consecutive shots after n that are not aligned, i.e. there is a shot m < n+20
-        that is aligned. in this case, we use pdr to predict the positions of shots n through m-1, and
-        consider these shots aligned. this process then repeats, i.e. we proceed to find the next lowest
-        numbered shot that is not aligned.
+    after data processor is done gps picking, this routine should be invoked, which will trigger
+    update_gps_picker_hybrid first. for all shots not in an aligned recon, direct alignment will
+    be performed on them and they will be grouped into one 'aligned' recon.
 
     :param curr_gps_points_dict:
     :param reconstructions:
@@ -732,39 +713,73 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
     :param scale_factor:
     :return:
     """
-    num_extrapolation = 20
+    update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_dict, scale_factor)
+    return reconstructions
+
+
+def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_dict, scale_factor):
+    """
+    this routine is intended to be ported and used in gps picker
+
+    this routine facilitates gps picking using a hybrid (sfm+pdr) approach. the goal is to reduce the
+    number of gps points that need to be picked manually. to achieve this goal, pdr is used to fill
+    small holes and gaps (see definitions of 'hole' and 'gap' below).
+
+        def 1: a 'hole' is consecutive frames missing in the middle of a recon. e.g. if a recon contains
+        images 100-150 and 160-200, then 151-159 is a 10 image 'hole'. a hole is considered small if it
+        is less than PDR_TRUST_SIZE long.
+
+        def 2: the 'gap' of an unaligned recon is the min distance of its lowest numbered shot to any
+        aligned shot ahead of it. e.g. if shots 0-200 are aligned, and an unaligned recon has shots
+        230-300, then the 'gap' is 30. a gap is considered small if it is less than PDR_TRUST_SIZE long.
+
+        def 3: an 'aligned recon" is a recon with at least two shots being either gps point or 'trusted
+        shot'.
+
+        def 4: an 'aligned shot' is any shot belonging to an aligned recon, or otherwise is itself a gps
+        point.
+
+        def 5: a 'trusted shot' is a shot very close (distance <3) to an aligned shot.
+
+    algorithm:
+
+    1) for those recons with at least two gps points or trusted shots, we align them so
+    they they become aligned recons. if there are more than two gps points in a recon,
+    alignment is done segment-wise (i.e., two points at a time).
+
+    2) update pdr predictions using aligned shots
+
+    3) start_shot = current_shot = lowest numbered shot that is not aligned
+
+    4) while true:
+
+            a. if current shot is an aligned shot, then shots between start_shot and current_shot-1 are
+            now aligned (because start_shot and current_shot-1 are both 'trusted'). repeat from step 3.
+
+            b. if current shot is in a recon with size > MIN_RECON_SIZE, make predictions for all shots
+            in this recon using pdr, plus predictions for shots between start_shot to current_shot-1,
+            using pdr. break.
+
+            c. if current_shot - start_shot > PDR_TRUST_SIZE, make predictions for PDR_TRUST_SIZE shots
+            from start_shot onward. break.
+
+            d. current_shot++
+
+    5) return all aligned shots and predictions from step 4. predictions from step 4 will be marked and
+    the gps picker UI should present them differently than aligned shots.
+
+    :param curr_gps_points_dict:
+    :param reconstructions:
+    :param pdr_shots_dict:
+    :param scale_factor:
+    :return:
+    """
+    PDR_TRUST_SIZE = 20
+    MIN_RECON_SIZE = 20
 
     pdr_predictions_dict = {}
 
-    scaled_pdr_shots_dict = {}
-    for shot_id in pdr_shots_dict:
-        scaled_pdr_shots_dict[shot_id] = (pdr_shots_dict[shot_id][0]/(scale_factor * 0.3048),
-                                          pdr_shots_dict[shot_id][1]/(scale_factor * 0.3048), 0)
-
-    if len(curr_gps_points_dict) == 0:
-        offset = (2000, 2000, 0)
-        shot_id = _int_to_shot_id(0)
-        pdr_predictions_dict[shot_id] = tuple(map(sum, zip(offset, scaled_pdr_shots_dict[shot_id])))
-    elif len(curr_gps_points_dict) == 1:
-        shot_id = _int_to_shot_id(curr_gps_points_dict.keys()[0])
-        offset = tuple(np.subtract(curr_gps_points_dict[shot_id],
-                                   scaled_pdr_shots_dict[shot_id]))
-        num = _shot_id_to_int(shot_id) + num_extrapolation
-
-        for i in range(num):
-            shot_id = _int_to_shot_id(i)
-            pdr_predictions_dict[shot_id] = tuple(map(sum, zip(offset, scaled_pdr_shots_dict[shot_id])))
-    else:
-        all_predictions_dict = update_pdr_global_2d(curr_gps_points_dict, pdr_shots_dict, scale_factor, False)
-
-        sorted_gps_ids = sorted(curr_gps_points_dict.keys(), reverse=True)
-        num = _shot_id_to_int(sorted_gps_ids[0]) + num_extrapolation
-
-        for i in range(num):
-            shot_id = _int_to_shot_id(i)
-            pdr_predictions_dict[shot_id] = all_predictions_dict[shot_id]
-
-    return pdr_predictions_dict, reconstructions
+    return pdr_predictions_dict
 
 
 def apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id, s, A, b, deviation, gps_shot_ids=[]):
