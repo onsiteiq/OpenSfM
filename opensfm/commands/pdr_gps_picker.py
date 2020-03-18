@@ -123,8 +123,8 @@ class DragMover(object):
                             shot_obj.get_center()[0], shot_obj.get_center()[1], 0)
 
                 self.reconstructions = \
-                    align_pdr.finish_gps_picker_hybrid(curr_gps_points_dict, self.reconstructions,
-                                                       self.pdr_shots_dict, self.scale_factor)
+                    align_pdr.hybrid_align_pdr(curr_gps_points_dict, self.reconstructions,
+                                               self.pdr_shots_dict, self.scale_factor)
                 save_reconstructions(self.reconstructions)
                 return
 

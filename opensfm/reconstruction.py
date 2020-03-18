@@ -24,7 +24,7 @@ from opensfm import types
 from opensfm.align import align_reconstruction, apply_similarity
 from opensfm.align_pdr import init_pdr_predictions, direct_align_pdr, \
     update_pdr_prediction_position, \
-    align_reconstructions_to_pdr, align_reconstructions_to_hlf
+    align_reconstruction_to_pdr, align_reconstructions_to_hlf
 from opensfm.context import parallel_map, current_memory_usage
 from opensfm import transformations as tf
 
@@ -1800,7 +1800,7 @@ def incremental_reconstruction_sequential(data, graph):
                     logger.info(rec_report['stats'])
 
     if reconstructions:
-        align_reconstructions_to_pdr(reconstructions, data)
+        reconstructions[:] = [align_reconstruction_to_pdr(recon, data) for recon in reconstructions]
 
         reconstructions = sorted(reconstructions, key=lambda x: -len(x.shots))
         data.save_reconstruction(reconstructions)
