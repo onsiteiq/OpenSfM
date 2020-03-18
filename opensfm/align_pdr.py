@@ -725,7 +725,7 @@ def update_gps_picker(curr_gps_points_dict, pdr_shots_dict, scale_factor, num_ex
         shot_id = _int_to_shot_id(0)
         pdr_predictions_dict[shot_id] = (2000, 2000, 0)
     elif len(curr_gps_points_dict) == 1:
-        shot_id = curr_gps_points_dict.keys()[0]
+        shot_id = list(curr_gps_points_dict.keys())[0]
         offset = tuple(np.subtract(curr_gps_points_dict[shot_id],
                                    scaled_pdr_shots_dict[shot_id]))
         num = _shot_id_to_int(shot_id) + num_extrapolation
@@ -832,8 +832,37 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
     if len(curr_gps_points_dict) == 0:
         # with no gps point, this routine shouldn't be called. we simply place shot 0 at an arbitrary
         # point for debugging.
-        shot_id = _int_to_shot_id(0)
-        predicted_shots_dict[shot_id] = (2000, 2000, 0)
+        predicted_shots_dict[_int_to_shot_id(0)] = (2000, 2000, 0)
+        return {}, predicted_shots_dict
+    elif len(curr_gps_points_dict) == 1:
+        gps_shot_id = list(curr_gps_points_dict.keys())[0]
+        long_unaligned_recon = None
+
+        for recon in reconstructions:
+            if gps_shot_id in recon.shots and len(recon.shots) > MIN_RECON_SIZE:
+                long_unaligned_recon = recon
+                # break for loop
+                break
+
+        scaled_shots_dict = {}
+        if long_unaligned_recon:
+            for shot_id in long_unaligned_recon.shots:
+                o = long_unaligned_recon.shots[shot_id].pose.get_origin()
+                scaled_shots_dict[shot_id] = (o[0] / (scale_factor * 0.3048),
+                                              o[1] / (scale_factor * 0.3048), 0)
+        else:
+            num = _shot_id_to_int(gps_shot_id) + PDR_TRUST_SIZE
+            for i in range(num):
+                shot_id = _int_to_shot_id(i)
+                scaled_shots_dict[shot_id] = (pdr_shots_dict[shot_id][0] / (scale_factor * 0.3048),
+                                              pdr_shots_dict[shot_id][1] / (scale_factor * 0.3048), 0)
+
+        offset = tuple(np.subtract(curr_gps_points_dict[gps_shot_id],
+                                   scaled_shots_dict[gps_shot_id]))
+
+        for shot_id in scaled_shots_dict:
+            predicted_shots_dict[shot_id] = tuple(map(sum, zip(offset, scaled_shots_dict[shot_id])))
+
         return {}, predicted_shots_dict
 
     # align recons to gps points and/or trusted shots

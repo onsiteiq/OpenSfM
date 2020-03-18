@@ -181,9 +181,11 @@ class DragMover(object):
                 curr_gps_points_dict[shot_obj.get_shot_id()] = (shot_obj.get_center()[0], shot_obj.get_center()[1], 0)
 
         if self.num_extrapolation == -1:
-            pdr_predictions_dict = \
+            aligned_shots_dict, predicted_shots_dict = \
                 align_pdr.update_gps_picker_hybrid(curr_gps_points_dict, self.reconstructions,
                                                    self.pdr_shots_dict, self.scale_factor)
+            predicted_shots_dict.update(aligned_shots_dict)
+            pdr_predictions_dict = predicted_shots_dict
         else:
             pdr_predictions_dict = align_pdr.update_gps_picker(curr_gps_points_dict, self.pdr_shots_dict,
                                                                self.scale_factor, self.num_extrapolation)
@@ -234,10 +236,11 @@ def load_pdr_shots(pdr_shots_path):
 
     with open(pdr_shots_path) as fin:
         for line in fin:
-            (shot_id, x, y, z, roll, pitch, heading, delta_distance) = line.split()
+            (shot_id, x, y, z, roll, pitch, heading, delta_distance, omega_0, omega_1, omega_2) = line.split()
             pdr_shots_dict[shot_id] = (float(x), float(y), float(z),
                                        float(roll), float(pitch), float(heading),
-                                       float(delta_distance))
+                                       float(delta_distance),
+                                       float(omega_0), float(omega_1), float(omega_2))
 
     return pdr_shots_dict
 
@@ -285,7 +288,7 @@ if __name__ == '__main__':
 
     # floor plan
     plan_paths = []
-    for plan_type in ('./*FLOOR*.png', './*ROOF*.png'):
+    for plan_type in ('./*FLOOR*.png', './*ROOF*.png', './*GARAGE*.png'):
         plan_paths.extend(glob.glob(plan_type))
 
     if not plan_paths or not os.path.exists(plan_paths[0]):
