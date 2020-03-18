@@ -114,7 +114,10 @@ class DragMover(object):
 
     def on_press(self, event):
         if event.dblclick:
-            # use double-click event to signal the end of gps picking. save our work
+            # use double-click event to signal the end of gps picking. save our work.
+            # this is for debugging only. in practice we would call hybrid_align from
+            # sfm pipeline. so neither the hybrid_align_pdr function, or the function
+            # save_reconstructions need to be ported to javascript
             if self.num_extrapolation == -1:
                 curr_gps_points_dict = {}
                 for shot_obj in self.shot_objs:

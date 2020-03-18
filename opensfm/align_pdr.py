@@ -635,31 +635,32 @@ def align_reconstructions_to_hlf(reconstructions, data):
             logger.debug("{} => {}".format(img_list[i], hlf_list[matches[i]]))
 
 
-def align_reconstruction_to_gps(gps_points_dict, reconstruction):
+def align_reconstruction(anchor_points_dict, reconstruction):
     """
-    align reconstruction to GPS points. used with hybrid gps picking
+    align reconstruction to anchor points. used with hybrid gps picking
 
-    alignment is done segment-wise, using 2 gps points at a time
+    anchor points are either gps points/trusted shots, or pdr points. alignment is done segment-wise,
+    using 2 gps points at a time
 
-    :param gps_points_dict:
+    :param anchor_points_dict:
     :param reconstruction:
     :return:
     """
-    aligned_shots_dict = {}
-    all_gps_shot_ids = sorted(gps_points_dict.keys())
-    for i in range(len(all_gps_shot_ids) - 1):
-        gps_coords = []
+    modified_shots_dict = {}
+    all_anchor_shot_ids = sorted(anchor_points_dict.keys())
+    for i in range(len(all_anchor_shot_ids) - 1):
+        anchor_coords = []
         recon_coords = []
 
         for j in range(2):
-            shot_id = all_gps_shot_ids[i+j]
-            gps_coords.append(gps_points_dict[shot_id])
+            shot_id = all_anchor_shot_ids[i+j]
+            anchor_coords.append(anchor_points_dict[shot_id])
             recon_coords.append(reconstruction.shots[shot_id].pose.get_origin())
 
-        s, A, b = get_affine_transform_2d_no_numpy(gps_coords, recon_coords)
+        s, A, b = get_affine_transform_2d_no_numpy(anchor_coords, recon_coords)
 
-        start_shot_id = all_gps_shot_ids[i]
-        end_shot_id = all_gps_shot_ids[i+1]
+        start_shot_id = all_anchor_shot_ids[i]
+        end_shot_id = all_anchor_shot_ids[i+1]
 
         # in first iteration, we transform from first shot of recon
         # in last iteration, we transform until last shot of recon
@@ -667,7 +668,7 @@ def align_reconstruction_to_gps(gps_points_dict, reconstruction):
         if i == 0:
             start_shot_id = shot_ids[0]
 
-        if i == len(gps_points_dict)-2:
+        if i == len(anchor_points_dict)-2:
             end_shot_id = shot_ids[-1]
 
         new_dict = {}
@@ -687,9 +688,9 @@ def align_reconstruction_to_gps(gps_points_dict, reconstruction):
                 Xp = [i * s + j for i, j in zip(A_dot_X, b)]
                 new_dict[shot_id] = [Xp[0], Xp[1], Xp[2]]
 
-        aligned_shots_dict.update(new_dict)
+        modified_shots_dict.update(new_dict)
 
-    return aligned_shots_dict
+    return modified_shots_dict
 
 
 def update_gps_picker(curr_gps_points_dict, pdr_shots_dict, scale_factor, num_extrapolation):
@@ -866,7 +867,7 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
                 # combine trusted shots with gps points
                 recon_trusted_shots.update(recon_gps_points)
 
-                shots_dict = align_reconstruction_to_gps(recon_trusted_shots, recon)
+                shots_dict = align_reconstruction(recon_trusted_shots, recon)
                 aligned_shots_dict.update(shots_dict)
 
                 # update pdr predictions based on aligned shots so far
@@ -917,7 +918,13 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
             for i in range(start_shot_idx, current_shot_idx):
                 predicted_shots_dict[_int_to_shot_id(i)] = pdr_predictions_dict[_int_to_shot_id(i)]
 
-            # then add long reconstruction to predicted shots
+            # then align the long reconstruction to pdr and add to predicted shots
+            anchor_points = {}
+            anchor_points[_int_to_shot_id(current_shot_idx)] = pdr_predictions_dict[_int_to_shot_id(current_shot_idx)]
+            anchor_points[_int_to_shot_id(current_shot_idx+1)] = pdr_predictions_dict[_int_to_shot_id(current_shot_idx+1)]
+            new_dict = align_reconstruction(anchor_points, long_unaligned_recon)
+            predicted_shots_dict.update(new_dict)
+
             # break while loop
             break
 
