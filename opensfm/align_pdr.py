@@ -53,6 +53,9 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad
             gps_coords.append(gps_points_dict[shot_id])
             pdr_coords.append([pdr_shots_dict[shot_id][0], pdr_shots_dict[shot_id][1], 0])
 
+        if pdr_coords[0] == pdr_coords[1]:
+            continue
+
         #s, A, b = get_affine_transform_2d(gps_coords, pdr_coords)
         s, A, b = get_affine_transform_2d_no_numpy(gps_coords, pdr_coords)
 
@@ -865,6 +868,8 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
 
         return {}, predicted_shots_dict
 
+    logger.debug("test 0, # of gps {}".format(len(curr_gps_points_dict)))
+
     # align recons to gps points and/or trusted shots
     while True:
         can_align = False
@@ -912,13 +917,14 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
     # make predictions
     while True:
         # find first unaligned shot
-        for i in range(len(pdr_shots_dict) + 1):
-            if _int_to_shot_id(i) not in aligned_shots_dict and _int_to_shot_id(i) not in curr_gps_points_dict:
+        for i in range(len(pdr_shots_dict)+1):
+            if (_int_to_shot_id(i) not in aligned_shots_dict) and (_int_to_shot_id(i) not in curr_gps_points_dict):
                 # break for loop
                 break
 
         if i == len(pdr_shots_dict):
             # all shots have been aligned
+            logger.debug("test 1, all shots aligned")
             return aligned_shots_dict, {}
 
         start_shot_idx = i
