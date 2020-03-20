@@ -868,7 +868,10 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
 
         return {}, predicted_shots_dict
 
-    logger.debug("test 0, # of gps {}".format(len(curr_gps_points_dict)))
+    # we modify the alignment flag each time we invoke this routine.
+    # so return the flag to default first.
+    for recon in reconstructions:
+        recon.alignment.aligned = False
 
     # align recons to gps points and/or trusted shots
     while True:
@@ -914,21 +917,21 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
         if not can_align:
             break
 
+    # find first unaligned shot
+    for i in range(len(pdr_shots_dict) + 1):
+        if (_int_to_shot_id(i) not in aligned_shots_dict) and (_int_to_shot_id(i) not in curr_gps_points_dict):
+            # break for loop
+            break
+
+    if i == len(pdr_shots_dict):
+        # all shots have been aligned
+        return aligned_shots_dict, {}
+
+    start_shot_idx = i
+    current_shot_idx = start_shot_idx + 1
+
     # make predictions
     while True:
-        # find first unaligned shot
-        for i in range(len(pdr_shots_dict)+1):
-            if (_int_to_shot_id(i) not in aligned_shots_dict) and (_int_to_shot_id(i) not in curr_gps_points_dict):
-                # break for loop
-                break
-
-        if i == len(pdr_shots_dict):
-            # all shots have been aligned
-            logger.debug("test 1, all shots aligned")
-            return aligned_shots_dict, {}
-
-        start_shot_idx = i
-        current_shot_idx = start_shot_idx + 1
 
         if _int_to_shot_id(current_shot_idx) in aligned_shots_dict:
             # start_shot and current_shot-1 are trusted shots. pdr predictions in between are counted as align shots
@@ -939,11 +942,23 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
             pdr_predictions_dict = update_pdr_global_2d(aligned_shots_dict, pdr_shots_dict, scale_factor, False)
 
             # continue to find lowest numbered unaligned shot
+            for i in range(current_shot_idx + 1, len(pdr_shots_dict) + 1):
+                if (_int_to_shot_id(i) not in aligned_shots_dict) and (_int_to_shot_id(i) not in curr_gps_points_dict):
+                    # break for loop
+                    break
+
+            if i == len(pdr_shots_dict):
+                # all shots have been aligned
+                return aligned_shots_dict, {}
+
+            start_shot_idx = i
+            current_shot_idx = start_shot_idx + 1
             continue
 
         long_unaligned_recon = None
         for recon in reconstructions:
-            if not recon.alignment.aligned and len(recon.shots) > MIN_RECON_SIZE and _int_to_shot_id(current_shot_idx):
+            if _int_to_shot_id(current_shot_idx) in recon.shots and \
+                    len(recon.shots) > MIN_RECON_SIZE and not recon.alignment.aligned:
                 long_unaligned_recon = recon
                 # break for loop
                 break
@@ -954,16 +969,16 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
                 predicted_shots_dict[_int_to_shot_id(i)] = pdr_predictions_dict[_int_to_shot_id(i)]
 
             # then align the long reconstruction to pdr and add to predicted shots
-            anchor_points = {}
-            anchor_points[_int_to_shot_id(current_shot_idx)] = pdr_predictions_dict[_int_to_shot_id(current_shot_idx)]
-            anchor_points[_int_to_shot_id(current_shot_idx+1)] = pdr_predictions_dict[_int_to_shot_id(current_shot_idx+1)]
+            all_recon_shot_ids = sorted(long_unaligned_recon.shots.keys())
+            anchor_points = {all_recon_shot_ids[0]: pdr_predictions_dict[all_recon_shot_ids[0]],
+                             all_recon_shot_ids[1]: pdr_predictions_dict[all_recon_shot_ids[1]]}
             new_dict = align_reconstruction(anchor_points, long_unaligned_recon)
             predicted_shots_dict.update(new_dict)
 
             # break while loop
             break
 
-        if current_shot_idx - start_shot_idx >= PDR_TRUST_SIZE:
+        if current_shot_idx >= len(pdr_shots_dict) or current_shot_idx - start_shot_idx >= PDR_TRUST_SIZE:
             for i in range(start_shot_idx, current_shot_idx):
                 predicted_shots_dict[_int_to_shot_id(i)] = pdr_predictions_dict[_int_to_shot_id(i)]
 

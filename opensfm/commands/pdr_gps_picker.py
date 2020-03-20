@@ -288,7 +288,7 @@ if __name__ == '__main__':
 
     # floor plan
     plan_paths = []
-    for plan_type in ('./*FLOOR*.png', './*ROOF*.png', './*GARAGE*.png'):
+    for plan_type in ('./*FLOOR*.png', './*ROOF*.png', './*GARAGE*.png', './*.png'):
         plan_paths.extend(glob.glob(plan_type))
 
     if not plan_paths or not os.path.exists(plan_paths[0]):
