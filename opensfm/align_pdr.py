@@ -873,6 +873,10 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
     for recon in reconstructions:
         recon.alignment.aligned = False
 
+    # init pdr predictions
+    if len(curr_gps_points_dict) >= 2:
+        pdr_predictions_dict = update_pdr_global_2d(curr_gps_points_dict, pdr_shots_dict, scale_factor, False)
+
     # align recons to gps points and/or trusted shots
     while True:
         can_align = False
