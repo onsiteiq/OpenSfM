@@ -25,7 +25,7 @@ class LabeledCircle(object):
 
     circle_color = 'g'
     circle_color_gps = 'r'
-    circle_color_selected = 'y'
+    circle_color_prediction = 'y'
 
     text_size = 4
     text_size_gps = 6
@@ -54,9 +54,9 @@ class LabeledCircle(object):
             self.circle.set_color(self.circle_color_gps)
             self.circle.set_radius(self.circle_radius_gps)
 
-    def set_selected(self, is_selected):
-        if is_selected:
-            self.circle.set_color(self.circle_color_selected)
+    def set_is_prediction(self, is_prediction):
+        if is_prediction:
+            self.circle.set_color(self.circle_color_prediction)
         elif self.is_gps:
             self.circle.set_color(self.circle_color_gps)
         else:
@@ -109,6 +109,7 @@ class DragMover(object):
 
         self.currently_selecting = False
         self.currently_dragging = False
+        self.currently_updating = False
         self.selected_shot_obj = None
         self.offset = np.zeros((1, 2))
 
@@ -160,7 +161,8 @@ class DragMover(object):
 
     def on_motion(self, event):
         if self.currently_dragging:
-            self.update(event)
+            if not self.currently_updating:
+                self.update(event)
 
     def place_shot_0(self):
         shot_obj = LabeledCircle(str(0).zfill(10) + ".jpg", (self.shape[1]/2, self.shape[0]/2, 0))
@@ -170,6 +172,8 @@ class DragMover(object):
         self.fig.canvas.draw_idle()
 
     def update(self, event=None):
+        self.currently_updating = True
+
         if event:
             new_centers = np.array([event.xdata, event.ydata])+self.offset
             self.selected_shot_obj.set_center(new_centers[0])
@@ -184,35 +188,60 @@ class DragMover(object):
             aligned_shots_dict, predicted_shots_dict = \
                 align_pdr.update_gps_picker_hybrid(curr_gps_points_dict, self.reconstructions,
                                                    self.pdr_shots_dict, self.scale_factor)
-            predicted_shots_dict.update(aligned_shots_dict)
-            pdr_predictions_dict = predicted_shots_dict
+
+            for shot_id in aligned_shots_dict:
+                found_existing = False
+                for shot_obj in self.shot_objs:
+                    if shot_id == shot_obj.get_shot_id():
+                        shot_obj.set_center(aligned_shots_dict[shot_id])
+                        shot_obj.set_is_prediction(False)
+                        found_existing = True
+                        break
+
+                if not found_existing:
+                    shot_obj = LabeledCircle(shot_id, aligned_shots_dict[shot_id])
+                    shot_obj.show(self.ax)
+                    shot_obj.set_is_prediction(False)
+                    self.shot_objs.append(shot_obj)
+
+            for shot_id in predicted_shots_dict:
+                found_existing = False
+                for shot_obj in self.shot_objs:
+                    if shot_id == shot_obj.get_shot_id():
+                        shot_obj.set_center(predicted_shots_dict[shot_id])
+                        shot_obj.set_is_prediction(True)
+                        found_existing = True
+                        break
+
+                if not found_existing:
+                    shot_obj = LabeledCircle(shot_id, predicted_shots_dict[shot_id])
+                    shot_obj.show(self.ax)
+                    shot_obj.set_is_prediction(True)
+                    self.shot_objs.append(shot_obj)
         else:
             pdr_predictions_dict = align_pdr.update_gps_picker(curr_gps_points_dict, self.pdr_shots_dict,
                                                                self.scale_factor, self.num_extrapolation)
 
-        for shot_obj in self.shot_objs:
-            shot_id = shot_obj.get_shot_id()
+            for shot_obj in self.shot_objs:
+                shot_id = shot_obj.get_shot_id()
 
-            if shot_id in pdr_predictions_dict:
-                shot_obj.set_center(pdr_predictions_dict[shot_id])
-                del pdr_predictions_dict[shot_id]
+                if shot_id in pdr_predictions_dict:
+                    shot_obj.set_center(pdr_predictions_dict[shot_id])
+                    del pdr_predictions_dict[shot_id]
 
-        for shot_id in pdr_predictions_dict:
-            shot_obj = LabeledCircle(shot_id, pdr_predictions_dict[shot_id])
-            shot_obj.show(self.ax)
-            self.shot_objs.append(shot_obj)
+            for shot_id in pdr_predictions_dict:
+                shot_obj = LabeledCircle(shot_id, pdr_predictions_dict[shot_id])
+                shot_obj.show(self.ax)
+                self.shot_objs.append(shot_obj)
 
         self.fig.canvas.draw_idle()
+        self.currently_updating = False
 
     def select_shot_obj(self, shot_obj):
         self.deselect_shot_obj()
-
         self.selected_shot_obj = shot_obj
-        self.selected_shot_obj.set_selected(True)
 
     def deselect_shot_obj(self):
-        for shot_obj in self.shot_objs:
-            shot_obj.set_selected(False)
         self.selected_shot_obj = None
 
 
