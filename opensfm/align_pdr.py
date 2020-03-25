@@ -331,6 +331,24 @@ def direct_align_pdr(data, target_images=None):
     return reconstruction
 
 
+def hybrid_align_pdr(curr_gps_points_dict, reconstructions, pdr_shots_dict, scale_factor):
+    """
+    this routine is intended to be run after gps picking is complete
+
+    after data processor is done gps picking, this routine should be invoked, which will trigger
+    update_gps_picker_hybrid first. for all shots not in an aligned recon, direct alignment will
+    be performed on them and they will be grouped into one 'aligned' recon.
+
+    :param curr_gps_points_dict:
+    :param reconstructions:
+    :param pdr_shots_dict:
+    :param scale_factor:
+    :return:
+    """
+    update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_dict, scale_factor)
+    return reconstructions
+
+
 def position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance):
     """
     update pdr predictions based on extrapolating last SfM position and direction
@@ -749,24 +767,6 @@ def update_gps_picker(curr_gps_points_dict, pdr_shots_dict, scale_factor, num_ex
     return pdr_predictions_dict
 
 
-def hybrid_align_pdr(curr_gps_points_dict, reconstructions, pdr_shots_dict, scale_factor):
-    """
-    this routine is intended to be ported and used in gps picker
-
-    after data processor is done gps picking, this routine should be invoked, which will trigger
-    update_gps_picker_hybrid first. for all shots not in an aligned recon, direct alignment will
-    be performed on them and they will be grouped into one 'aligned' recon.
-
-    :param curr_gps_points_dict:
-    :param reconstructions:
-    :param pdr_shots_dict:
-    :param scale_factor:
-    :return:
-    """
-    update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_dict, scale_factor)
-    return reconstructions
-
-
 def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_dict, scale_factor):
     """
     this routine is intended to be ported and used in gps picker
@@ -827,7 +827,7 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
     PDR_TRUST_SIZE = 20
     MIN_RECON_SIZE = 20
 
-    aligned_shots_dict = {}
+    aligned_shots_dict = curr_gps_points_dict.copy()
     predicted_shots_dict = {}
 
     pdr_predictions_dict = {}
@@ -923,12 +923,13 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
 
     # find first unaligned shot
     for i in range(len(pdr_shots_dict) + 1):
-        if (_int_to_shot_id(i) not in aligned_shots_dict) and (_int_to_shot_id(i) not in curr_gps_points_dict):
+        if _int_to_shot_id(i) not in aligned_shots_dict:
             # break for loop
             break
 
     if i == len(pdr_shots_dict):
         # all shots have been aligned
+        logger.debug("all shots aligned")
         return aligned_shots_dict, {}
 
     start_shot_idx = i
@@ -947,12 +948,13 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
 
             # continue to find lowest numbered unaligned shot
             for i in range(current_shot_idx + 1, len(pdr_shots_dict) + 1):
-                if (_int_to_shot_id(i) not in aligned_shots_dict) and (_int_to_shot_id(i) not in curr_gps_points_dict):
+                if _int_to_shot_id(i) not in aligned_shots_dict:
                     # break for loop
                     break
 
             if i == len(pdr_shots_dict):
                 # all shots have been aligned
+                logger.debug("all shots aligned")
                 return aligned_shots_dict, {}
 
             start_shot_idx = i
