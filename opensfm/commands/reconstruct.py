@@ -5,7 +5,6 @@ import json
 from opensfm import dataset
 from opensfm import io
 from opensfm import reconstruction
-from opensfm.align_pdr import align_reconstructions_to_hlf
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +19,9 @@ class Command:
         parser.add_argument('--excluded-images', nargs = '*', help = 'ids/names of images to exclude' )
         parser.add_argument('--remove-image-subset', help = 'JSON file specifying a subset of images to remove' )
         parser.add_argument('--image-subset', help = 'JSON file specifying a subset of images to reprocess' )
-        parser.add_argument('--direct-align', help = 'Direct alignment of an image subset', action='store_true' )
-        
+        parser.add_argument('--direct-align', help = 'Alignment to gps points using PDR', action='store_true' )
+        parser.add_argument('--hybrid-align', help = 'Alignment to gps points using SfM+PDR', action='store_true' )
+
     def run(self, args):
         
         start = time.time()
@@ -113,21 +113,20 @@ class Command:
             data.save_reconstruction( reconstructions )
             return
 
-        # Run the incremental reconstruction
-        
         if args.direct_align:
+            # Run alignment, pdr only
             if data.pdr_shots_exist():
                 report = reconstruction.direct_align_reconstruction_pdr( data )
             else:
                 report = reconstruction.direct_align_reconstruction( data )
 
-            '''
-            if data.reconstruction_exists():
-                reconstructions = data.load_reconstruction()
-                align_reconstructions_to_hlf(reconstructions, data)
-            '''
+        elif args.hybrid_align:
+            # Run alignment, sfm+pdr
+            if data.reconstruction_exists() and data.pdr_shots_exist():
+                report = reconstruction.hybrid_align_reconstruction_pdr( data )
 
         else:
+            # Run incremental reconstruction, or alignment (direct_align which pdr only
             graph = data.load_tracks_graph()
             if data.pdr_shots_exist():
                 report, reconstructions = reconstruction. \

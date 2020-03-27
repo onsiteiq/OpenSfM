@@ -22,9 +22,8 @@ from opensfm import tracking
 from opensfm import multiview
 from opensfm import types
 from opensfm.align import align_reconstruction, apply_similarity
-from opensfm.align_pdr import init_pdr_predictions, direct_align_pdr, \
-    update_pdr_prediction_position, \
-    align_reconstruction_to_pdr, align_reconstructions_to_hlf
+from opensfm.align_pdr import init_pdr_predictions, direct_align_pdr, hybrid_align_pdr, align_reconstruction_to_pdr
+from opensfm.align_pdr import update_pdr_prediction_position
 from opensfm.context import parallel_map, current_memory_usage
 from opensfm import transformations as tf
 
@@ -1533,6 +1532,21 @@ def grow_reconstruction(data, graph, graph_inliers, reconstruction, images, gcp)
     align_reconstruction(reconstruction, gcp, config)
     paint_reconstruction(data, graph, reconstruction)
     return reconstruction, report
+
+
+def hybrid_align_reconstruction_pdr( data ):
+
+    target_images = data.config.get('target_images', [])
+
+    report = {}
+    report['reconstructions'] = []
+    rec_report = {}
+    report['reconstructions'].append(rec_report)
+    rec_report['subset'] = target_images
+
+    data.save_reconstruction([hybrid_align_pdr(data)])
+
+    return report
 
 
 def direct_align_reconstruction_pdr( data ):
