@@ -102,6 +102,14 @@ def match_unwrap_args(args):
     log.setup()
     im1, candidates, ctx = args
 
+    try:
+        if ctx.data.matches_exists(im1):
+            logger.info('Skip recomputing matches for image {}'.format(im1))
+            im1_matches = ctx.data.load_matches(im1)
+            return im1, im1_matches
+    except IOError:
+        logger.info('Error loading matches for image {}'.format(im1))
+
     need_words = 'WORDS' in ctx.data.config['matcher_type']
     need_index = 'FLANN' in ctx.data.config['matcher_type']
 

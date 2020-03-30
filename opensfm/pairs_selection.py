@@ -357,14 +357,14 @@ def ordered_pairs(pairs, images_ref):
         per_image[im2].append(im1)
 
     ordered = set()
-    remaining = set(images_ref)
+    remaining = sorted(set(images_ref))
     if len(remaining) > 0:
         next_image = remaining.pop()
         while next_image:
             im1 = next_image
             next_image = None
 
-            for im2 in per_image[im1]:
+            for im2 in sorted(per_image[im1]):
                 if (im2, im1) not in ordered:
                     ordered.add((im1, im2))
                     if not next_image and im2 in remaining:

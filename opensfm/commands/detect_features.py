@@ -31,7 +31,7 @@ class Command:
         arguments = [(image, data) for image in images]
 
         start = timer()
-        processes = data.config['processes']
+        processes = data.config['feature_processes']
         parallel_map(detect, arguments, processes, 1)
         end = timer()
         with open(data.profile_log(), 'a') as fout:
