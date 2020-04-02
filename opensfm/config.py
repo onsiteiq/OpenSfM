@@ -13,7 +13,7 @@ feature_min_frames: 4000      # If fewer frames are detected, sift_peak_threshol
 feature_process_size: 2048    # Resize the image if its size is larger than specified. Set to -1 for original size
 feature_use_adaptive_suppression: no
 feature_use_superpoint: yes   # If yes, generate 'super point' features
-feature_process_size_superpoint: 1280   
+feature_process_size_superpoint: 640   
 
 # Params for SIFT
 sift_peak_threshold: 0.1     # Smaller value -> more features

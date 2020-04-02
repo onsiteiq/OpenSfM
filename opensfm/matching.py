@@ -14,6 +14,8 @@ from opensfm import multiview
 from opensfm import pairs_selection
 from opensfm import feature_loading
 from opensfm import filtering
+from opensfm import features
+from opensfm.commands import superpoint
 
 
 logger = logging.getLogger(__name__)
@@ -119,8 +121,17 @@ def match_unwrap_args(args):
     m1 = feature_loader.load_masks(ctx.data, im1)
     camera1 = ctx.cameras[ctx.exifs[im1]['camera']]
 
-    f1_filtered = f1 if m1 is None else f1[m1]
-    i1 = feature_loader.load_features_index(ctx.data, im1, f1_filtered) if need_index else None
+    if ctx.data.config['feature_use_superpoint']:
+        f1_filtered = f1 if m1 is None else f1[m1]
+        i1 = feature_loader.load_features_index(ctx.data, im1, f1_filtered) if need_index else None
+    else:
+        m1 = None
+        p1_s, f1_s, _ = superpoint.load_features(im1)
+        if p1_s is not None:
+            p1 = np.concatenate((p1, p1_s), axis=0)
+            f1 = np.concatenate((f1, f1_s), axis=0)
+
+        i1 = features.build_flann_index(f1, ctx.data.config) if need_index else None
 
     for im2 in candidates:
         p2, f2, _ = feature_loader.load_points_features_colors(ctx.data, im2)
@@ -128,8 +139,17 @@ def match_unwrap_args(args):
         m2 = feature_loader.load_masks(ctx.data, im2)
         camera2 = ctx.cameras[ctx.exifs[im2]['camera']]
 
-        f2_filtered = f2 if m2 is None else f2[m2]
-        i2 = feature_loader.load_features_index(ctx.data, im2, f2_filtered) if need_index else None
+        if ctx.data.config['feature_use_superpoint']:
+            f2_filtered = f2 if m2 is None else f2[m2]
+            i2 = feature_loader.load_features_index(ctx.data, im2, f2_filtered) if need_index else None
+        else:
+            m2 = None
+            p2_s, f2_s, _ = superpoint.load_features(im2)
+            if p2_s is not None:
+                p2 = np.concatenate((p2, p2_s), axis=0)
+                f2 = np.concatenate((f2, f2_s), axis=0)
+
+            i2 = features.build_flann_index(f2, ctx.data.config) if need_index else None
 
         T, rmatches = match(im1, im2, camera1, camera2,
                            p1, p2, f1, f2, w1, w2,

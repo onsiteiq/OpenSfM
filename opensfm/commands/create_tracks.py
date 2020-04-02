@@ -1,13 +1,15 @@
+import numpy as np
 import logging
 from timeit import default_timer as timer
 
 from collections import defaultdict
 from networkx.algorithms import bipartite
 
-from opensfm import dataset
 from opensfm import io
 from opensfm import tracking
+from opensfm import dataset
 from opensfm import filtering
+from opensfm.commands import superpoint
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,14 @@ class Command:
 
         start = timer()
         features, colors = tracking.load_features(data, data.images())
+
+        if data.config['feature_use_superpoint']:
+            for im in features:
+                p_s, f_s, c_s = superpoint.load_features(im)
+                if p_s is not None:
+                    features[im] = np.concatenate((features[im], p_s), axis=0)
+                    colors[im] = np.concatenate((colors[im], c_s), axis=0)
+
         features_end = timer()
         matches = tracking.load_matches(data, data.images())
         matches_end = timer()
@@ -32,6 +42,7 @@ class Command:
         matches = filtering.loop_filter(data, data.images(), features, matches, pairs)
         filter_end = timer()
 
+        '''
         # debugging
         edges = defaultdict(list)
         for i in data.images():
@@ -42,6 +53,7 @@ class Command:
                     edges[i].append(im1)
         for i in sorted(edges.keys()):
             logger.debug("{} has edges with {}".format(i, sorted(edges[i])))
+        '''
 
         graph = tracking.create_tracks_graph(features, colors, matches,
                                              data.config)

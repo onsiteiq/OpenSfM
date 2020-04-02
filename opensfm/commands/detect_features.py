@@ -11,6 +11,7 @@ from opensfm import io
 from opensfm import log
 from opensfm import types
 from opensfm.commands import undistort
+from opensfm.commands import superpoint
 from opensfm.context import parallel_map
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,12 @@ class Command:
 
         start = timer()
         processes = data.config['feature_processes']
+
+        # generate 'super point' features if flag is on
+        if data.config['feature_use_superpoint']:
+            size_w = data.config['feature_process_size_superpoint']
+            superpoint.gen_ss(size_w, processes)
+
         parallel_map(detect, arguments, processes, 1)
         end = timer()
         with open(data.profile_log(), 'a') as fout:
@@ -97,6 +104,7 @@ def resized_image(image, config):
         return image
 
 ######################################
+
 
 def detect(args):
     log.setup()

@@ -118,6 +118,7 @@ class Command:
             if data.pdr_shots_exist():
                 report = reconstruction.direct_align_reconstruction_pdr( data )
             else:
+                # legacy code
                 report = reconstruction.direct_align_reconstruction( data )
 
         elif args.hybrid_align:
@@ -126,7 +127,7 @@ class Command:
                 report = reconstruction.hybrid_align_reconstruction_pdr( data )
 
         else:
-            # Run incremental reconstruction, or alignment (direct_align which pdr only
+            # Run incremental reconstruction
             graph = data.load_tracks_graph()
             if data.pdr_shots_exist():
                 report, reconstructions = reconstruction. \

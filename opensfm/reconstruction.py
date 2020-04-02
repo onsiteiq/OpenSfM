@@ -1765,8 +1765,8 @@ def incremental_reconstruction_sequential(data, graph):
     report['reconstructions'] = []
 
     full_images = list(set(images))
-
     full_images.sort()
+    num_full_images = len(full_images)
 
     image_groups = []
 
@@ -1834,7 +1834,7 @@ def incremental_reconstruction_sequential(data, graph):
                     if abs(r.shots[shot_id].pose.get_origin()[2]) > uneven_images_thresh:
                         uneven_images.append(shot_id)
 
-        coverage = int(100 * num_aligned / len(full_images))
+        coverage = int(100 * num_aligned / num_full_images)
         logger.info("{} partial reconstructions in total. {}% images aligned".format(len(reconstructions), coverage))
 
         if len(uneven_images) > 0:

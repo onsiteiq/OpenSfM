@@ -731,8 +731,9 @@ def detect(args):
     pts, desc, heatmap = fe.run(grayimg)
     pts, desc = remove_border_points(img, pts, desc, border_size=6)
 
-    # Add points and descriptors to the tracker.
-    tracker.update(pts, desc)
+    if display:
+        # Add points and descriptors to the tracker.
+        tracker.update(pts, desc)
 
     norm_pts = normalized_image_coordinates(pts.T, img.shape[1], img.shape[0])
 
@@ -740,6 +741,7 @@ def detect(args):
     colors = [img[int(round(pt[1])), int(round(pt[0]))] for pt in pts.T]
     colors = np.array(colors)
 
+    '''
     # compute magnitude and direction for feature matching using Opensfm
     # grayimg is normalized to 0-1 and laplacian will return an error if used.
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -754,51 +756,59 @@ def detect(args):
         points.append([norm_pts.T[i][0], norm_pts.T[i][1], mag[i], dir[i]])
     #points = np.array(points, dtype=np.uint8)
     points = np.array(points)
+    '''
+
+    # adding mag and dir to the pts(x,y)
+    points = []
+    for i in range(len(norm_pts.T)):
+        points.append([norm_pts.T[i][0], norm_pts.T[i][1], 0.004])
+
+    points = np.array(points)
 
     desc = desc.T
     points, desc, colors = vs.convert_points(points, desc, colors)
 
     end1 = time.time()
 
-    # Get tracks for points which were match successfully across all frames.
-    tracks = tracker.get_tracks(min_length)
-
-    # Primary output - Show point tracks overlayed on top of input image.
-    out1 = img.copy()
-
-    for pt in pts.T:
-        pt1 = (int(round(pt[0])), int(round(pt[1])))
-        cv2.circle(out1, pt1, 1, (0, 255, 0), -1, lineType=16)
-    # cv2.putText(out1, 'Raw Point Detections', font_pt, font, font_sc, font_clr, lineType=16)
-
-    # Extra output -- Show current point detections.
-    out2 = img.copy()
-    tracks[:, 1] /= float(fe.nn_thresh)  # Normalize track scores to [0,1].
-    tracker.draw_tracks(out2, tracks)
-    if show_extra:
-        cv2.putText(out2, 'Point Tracks', font_pt, font, font_sc, font_clr, lineType=16)
-
-    # Extra output -- Show the point confidence heatmap.
-    if heatmap is not None:
-        min_conf = 0.001
-        heatmap[heatmap < min_conf] = min_conf
-        heatmap = -np.log(heatmap)
-        heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min() + .00001)
-        out3 = myjet[np.round(np.clip(heatmap*10, 0, 9)).astype('int'), :]
-        out3 = (out3*255).astype('uint8')
-    else:
-        out3 = np.zeros_like(out2)
-    cv2.putText(out3, 'Raw Point Confidences', font_pt, font, font_sc, font_clr, lineType=16)
-
-    # Resize final output.
-    if show_extra:
-        out = np.hstack((out1, out2, out3))
-        out = cv2.resize(out, (3*display_scale*size_w, display_scale*size_h))
-    else:
-        out = cv2.resize(out1, (display_scale*size_w, display_scale*size_h))
-
-    # Display visualization image to screen.
     if display:
+        # Get tracks for points which were match successfully across all frames.
+        tracks = tracker.get_tracks(min_length)
+
+        # Primary output - Show point tracks overlayed on top of input image.
+        out1 = img.copy()
+
+        for pt in pts.T:
+            pt1 = (int(round(pt[0])), int(round(pt[1])))
+            cv2.circle(out1, pt1, 1, (0, 255, 0), -1, lineType=16)
+        # cv2.putText(out1, 'Raw Point Detections', font_pt, font, font_sc, font_clr, lineType=16)
+
+        # Extra output -- Show current point detections.
+        out2 = img.copy()
+        tracks[:, 1] /= float(fe.nn_thresh)  # Normalize track scores to [0,1].
+        tracker.draw_tracks(out2, tracks)
+        if show_extra:
+            cv2.putText(out2, 'Point Tracks', font_pt, font, font_sc, font_clr, lineType=16)
+
+        # Extra output -- Show the point confidence heatmap.
+        if heatmap is not None:
+            min_conf = 0.001
+            heatmap[heatmap < min_conf] = min_conf
+            heatmap = -np.log(heatmap)
+            heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min() + .00001)
+            out3 = myjet[np.round(np.clip(heatmap*10, 0, 9)).astype('int'), :]
+            out3 = (out3*255).astype('uint8')
+        else:
+            out3 = np.zeros_like(out2)
+        cv2.putText(out3, 'Raw Point Confidences', font_pt, font, font_sc, font_clr, lineType=16)
+
+        # Resize final output.
+        if show_extra:
+            out = np.hstack((out1, out2, out3))
+            out = cv2.resize(out, (3*display_scale*size_w, display_scale*size_h))
+        else:
+            out = cv2.resize(out1, (display_scale*size_w, display_scale*size_h))
+
+        # Display visualization image to screen.
         cv2.imshow(win, out)
         #key = cv2.waitKey(waitkey) & 0xFF
         #if key == ord('q'):
@@ -874,7 +884,8 @@ def gen_ss(W, processes):
   parallel_map(detect, arguments, processes)
 
   # Close any remaining windows.
-  cv2.destroyAllWindows()
+  if display:
+      cv2.destroyAllWindows()
 
   print('.. finished Extracting Super Points.')
 
