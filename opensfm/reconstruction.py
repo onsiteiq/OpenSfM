@@ -836,7 +836,179 @@ def resect(data, graph, graph_inliers, reconstruction, shot_id,
         bundle_single_view(graph_inliers, reconstruction, shot_id, data)
         return True, report
     else:
+        return resect_structureless(data, graph, reconstruction, shot_id)
+
+
+def resect_structureless(data, graph, reconstruction, shot_id):
+    """
+    Try resecting using structureless resection and adding a shot to the reconstruction.
+
+    Return:
+        True on success.
+    """
+
+    # Find a the image in the reconstruction with the most shared
+    # tracks (assumed minimum 2 images to create a track) to select
+    # as our image one for Structureless Resection
+
+    image_one = None
+    # Image correspondences for relative motion computation betweein image and image_one
+    pr = p1r = None
+    max_common_tracks = 0
+
+    # reload common_tracks - we do structureless resection rarely so this shouldn't be
+    # too bad on performance
+    tracks, images = tracking.tracks_and_images(graph)
+    common_tracks = tracking.all_common_tracks(graph, tracks)
+
+    for image_a in reconstruction.shots.keys():
+        if image_a != shot_id:
+
+            tracks, pcur, pa = get_common_tracks(shot_id, image_a, common_tracks)
+
+            num_tracks = len(tracks)
+            if num_tracks > max_common_tracks:
+                max_common_tracks = num_tracks
+                image_one = image_a
+                pr = pcur
+                p1r = pa
+
+    logger.info('image: ' + shot_id)
+    logger.info('image_one: ' + str(image_one))
+
+    image_two = None
+
+    if image_one is not None:
+        # If we've found a suitable image one then choose an image two.
+        # The image within the reconstruction that has the most common
+        # tracks with the candidate image and image one
+
+        # Image correspondences for absolute motion computation for image translation using
+        # image_one and image_two known (R,t) and the relative motion between image and
+        # image_one
+        pa = p2a = None
+        max_common_to_both = 0
+        for image_b in reconstruction.shots.keys():
+            if image_b != shot_id and image_b != image_one:
+
+                tracks02, pcur02, pb02 = get_common_tracks(shot_id, image_b, common_tracks)
+                tracks01, pcur01, pb01 = get_common_tracks(image_one, image_b, common_tracks)
+
+                num_common_to_both = len(set(tracks01).intersection(set(tracks02)))
+
+                if num_common_to_both > max_common_to_both:
+                    max_common_to_both = num_common_to_both
+                    image_two = image_b
+                    pa = pcur02
+                    p2a = pb02
+
+    logger.info('image_two: ' + str(image_two))
+
+    if image_one is None:
+        return False, {'num_common_points_one': 0, 'num_common_points_two': 0, 'relative_result': "Failure"}
+    elif image_two is None:
+        return False, {'num_common_points_one': len(pr), 'num_common_points_two': 0, 'relative_result': "Failure"}
+
+    logger.info("Computing relative motion with {} and {}".format(shot_id, image_one))
+
+    report = {
+        'image_pair_relative': (shot_id, image_one),
+        'num_common_points_one': len(pr),
+        'num_common_points_two': len(p2a),
+    }
+
+    cameras = data.load_camera_models()
+    camera = cameras[data.load_exif(shot_id)['camera']]
+    camera1 = cameras[data.load_exif(image_one)['camera']]
+
+    threshold = data.config['five_point_algo_threshold']
+    min_inliers = data.config['five_point_algo_min_inliers']
+
+    R_rel, t, inliers, report['image_one_relative'] = \
+        two_view_reconstruction_general(pr, p1r, camera, camera1, threshold)
+
+    R_rel = cv2.Rodrigues(R_rel)[0]
+
+    logger.info("Two-view relative inliers: {} / {}".format(len(inliers), len(pr)))
+
+    if len(inliers) <= 5:
+        report['relative_result'] = "Could not find relative motion"
+        logger.info(report['relative_result'])
         return False, report
+
+    report['relative_result'] = "Success"
+
+    logger.info("Computing absolute motion with {}, {} and {}".format(shot_id, image_one, image_two))
+
+    shot1 = reconstruction.shots[image_one]
+
+    R1 = shot1.pose.get_rotation_matrix()
+    o1 = shot1.pose.get_origin()
+
+    b0_cam = camera.pixel_bearing_many(pa)
+
+    camera2 = cameras[data.load_exif(image_two)['camera']]
+    shot2 = reconstruction.shots[image_two]
+
+    R2 = shot2.pose.get_rotation_matrix()
+    o2 = shot2.pose.get_origin()
+    b2_cam = camera2.pixel_bearing_many(p2a)
+
+    b2_wrld = np.dot(b2_cam, R2.T)
+
+    # The combination of shot one rotation and the relative rotation to the shot being considered.
+    R0 = np.dot(R1, R_rel)
+
+    # Translation is an unscaled unit vector in world coordinates.
+    t = R1.T.dot(t)
+
+    t /= np.linalg.norm(t)
+
+    # print( "Resect Structureless R0: " + str(R0) )
+    # print( "Resect Structureless t (in): " + str(t) )
+    # print( "Resect Structureless rod: " +str( cv2.Rodrigues(R0)[0].ravel() ) )
+
+    threshold = data.config['resection_threshold']
+
+    # Due to row major (OpenCV) to column major (Eigen) take the transpose of R0. t is a direction in world coordinates
+    # so it should be uneffected.
+
+    T = pyopengv.absolute_pose_onept_ransac(b0_cam, b2_wrld, o1, o2, R0.T, t, 1 - np.cos(threshold), 1000, 0.999)
+
+    # print( "Resect Structureless t (out): " + str(T[:, 3]) )
+
+    # Failure is indicated by a translation value of the zero vector
+    if np.array_equal(T[:, 3], np.zeros(3)):
+        report['absolute_result'] = "Could not find absolute translation"
+        logger.info("Structureless resection failed (could not find absolute translation) with {}, {} and {}".format(shot_id, image_one, image_two))
+        logger.info(report['absolute_result'])
+        return False, report
+
+    report['absolute_result'] = "Success"
+
+    try:
+        R = T[:, :3].T
+        t = -R.dot(T[:, 3])
+        shot = types.Shot()
+        shot.id = shot_id
+        shot.camera = camera
+        shot.pose = types.Pose()
+        shot.pose.set_rotation_matrix(R)
+        shot.pose.translation = t
+        shot.metadata = get_image_metadata(data, shot_id)
+
+        bundle_single_view(graph, reconstruction, shot, data)
+        reconstruction.add_shot(shot)
+    except:
+        logger.info("Structureless resection failed (exception) with {}, {} and {}".format(shot_id, image_one, image_two))
+        return False, report
+
+    logger.info("Structureless resection successful with {}, {} and {}".format(shot_id, image_one, image_two))
+    return True, report
+
+
+def get_common_tracks(image_a, image_b, common_tracks):
+    return common_tracks.get(tuple(sorted([image_a, image_b])), ([], [], []))
 
 
 def get_resection_min_inliers(data, graph, reconstruction, shot_id, track_ids, inliers, ninliers):
