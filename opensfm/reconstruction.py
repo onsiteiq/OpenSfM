@@ -1033,9 +1033,9 @@ def resect_structureless( data, graph, common_tracks, reconstruction, shot_id ):
     
     t /= np.linalg.norm(t)
     
-    #print( "Resect Structureless R0: " + str(R0) )
-    #print( "Resect Structureless t (in): " + str(t) )
-    #print( "Resect Structureless rod: " +str( cv2.Rodrigues(R0)[0].ravel() ) )
+    print( "Resect Structureless R0: " + str(R0) )
+    print( "Resect Structureless t (in): " + str(t) )
+    print( "Resect Structureless rod: " +str( cv2.Rodrigues(R0)[0].ravel() ) )
     
     threshold = data.config['resection_threshold']
     
@@ -1044,7 +1044,9 @@ def resect_structureless( data, graph, common_tracks, reconstruction, shot_id ):
     
     T = pyopengv.absolute_pose_onept_ransac( b0_cam, b2_wrld, o1, o2, R0.T, t, 1 - np.cos(threshold), 1000, 0.999 )
     
-    #print( "Resect Structureless t (out): " + str(T[:, 3]) )
+    print( "Resect Structureless t (out): " + str(T[:, 3]) )
+    
+    input( 'Press enter to continue...' )
     
     # Failure is indicated by a translation value of the zero vector
     if np.array_equal( T[:, 3], np.zeros(3) ):
