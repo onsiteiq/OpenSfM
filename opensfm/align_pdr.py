@@ -825,6 +825,45 @@ def align_reconstruction_segments(reconstruction, recon_gps_points):
     return reconstruction
 
 
+def get_origin_no_numpy_opencv(rotation, translation):
+    def S(n):
+        return [[0, -n[2], n[1]],
+                [n[2], 0, -n[0]],
+                [-n[1], n[0], 0]]
+
+    def S_sq(n):
+        return [[-n[1]**2-n[2]**2, n[0]*n[1], n[0]*n[2]],
+                [n[0]*n[1], -n[0]**2-n[2]**2, n[1]*n[2]],
+                [n[0]*n[2], n[1]*n[2], -n[0]**2-n[1]**2]]
+
+    def norm(r):
+        return math.sqrt(r[0]**2+r[1]**2+r[2]**2)
+
+    def eye():
+        return [[1, 0, 0],
+                [0, 1, 0],
+                [0, 0, 1]]
+
+    theta = norm(rotation)
+    if theta > 1e-30:
+        n = rotation/theta
+        tmp1 = [[j * math.sin(theta) for j in i] for i in S(n)]
+        tmp2 = [[j * (1-math.cos(theta)) for j in i] for i in S_sq(n)]
+    else:
+        theta2 = theta**2
+        tmp1 = [[j * (1-theta2/6.) for j in i] for i in S(rotation)]
+        tmp2 = [[j * (0.5-theta2/24.) for j in i] for i in S_sq(rotation)]
+
+    eye = eye()
+    tmp = [[sum(x) for x in zip(tmp1[i], tmp2[i])] for i in range(3)]
+    R = [[sum(x) for x in zip(eye[i], tmp[i])] for i in range(3)]
+
+    origin = [-R[0][0] * translation[0] - R[1][0] * translation[1] - R[2][0] * translation[2],
+              -R[0][1] * translation[0] - R[1][1] * translation[1] - R[2][1] * translation[2],
+              -R[0][2] * translation[0] - R[1][2] * translation[1] - R[2][2] * translation[2]]
+    return origin
+
+
 def align_reconstruction_no_numpy(reconstruction, anchor_points_dict):
     """
     align reconstruction to anchor points. to be ported and used in gps picker
@@ -847,7 +886,10 @@ def align_reconstruction_no_numpy(reconstruction, anchor_points_dict):
         for j in range(2):
             shot_id = all_anchor_shot_ids[i+j]
             anchor_coords.append(anchor_points_dict[shot_id])
-            recon_coords.append(reconstruction.shots[shot_id].pose.get_origin())
+            o = get_origin_no_numpy_opencv(reconstruction.shots[shot_id].pose.rotation,
+                                           reconstruction.shots[shot_id].pose.translation)
+
+            recon_coords.append(o)
 
         s, A, b = get_affine_transform_2d_no_numpy(anchor_coords, recon_coords)
 
@@ -873,7 +915,8 @@ def align_reconstruction_no_numpy(reconstruction, anchor_points_dict):
             shot_id = _int_to_shot_id(i)
 
             if shot_id in reconstruction.shots:
-                X = reconstruction.shots[shot_id].pose.get_origin()
+                X = get_origin_no_numpy_opencv(reconstruction.shots[shot_id].pose.rotation,
+                                               reconstruction.shots[shot_id].pose.translation)
                 A_dot_X = [A[0][0] * X[0] + A[0][1] * X[1] + A[0][2] * X[2],
                            A[1][0] * X[0] + A[1][1] * X[1] + A[1][2] * X[2],
                            A[2][0] * X[0] + A[2][1] * X[1] + A[2][2] * X[2]]
