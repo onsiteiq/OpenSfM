@@ -404,6 +404,8 @@ def direct_shot_neighbors(graph, reconstruction, shot_ids,
     """Reconstructed shots sharing reconstructed points with a shot set."""
     points = set()
     for shot_id in shot_ids:
+        if shot_id not in graph:
+            continue
         for track_id in graph[shot_id]:
             if track_id in reconstruction.points:
                 points.add(track_id)
@@ -996,12 +998,12 @@ def resect_structureless(data, graph, reconstruction, shot_id):
         shot.pose.set_rotation_matrix(R)
         shot.pose.translation = t
         shot.metadata = get_image_metadata(data, shot_id)
-
-        bundle_single_view(graph, reconstruction, shot, data)
-        reconstruction.add_shot(shot)
     except:
         logger.info("Structureless resection failed (exception) with {}, {} and {}".format(shot_id, image_one, image_two))
         return False, report
+
+    reconstruction.add_shot(shot)
+    bundle_single_view(graph, reconstruction, shot_id, data)
 
     logger.info("Structureless resection successful with {}, {} and {}".format(shot_id, image_one, image_two))
     return True, report
