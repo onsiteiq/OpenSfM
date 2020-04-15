@@ -375,6 +375,7 @@ def hybrid_align_pdr(data, target_images=None):
         if len(recon_gps_points) >= 2:
             align_reconstruction_segments(recon, recon_gps_points)
             recon.alignment.aligned = True
+            recon.alignment.num_correspondences = len(recon_gps_points)
 
             aligned_recons.append(recon)
 
@@ -439,6 +440,9 @@ def hybrid_align_pdr(data, target_images=None):
         direct_align_recon.add_shot(shot)
 
     if len(direct_align_recon.shots) > 0:
+        direct_align_recon.alignment.aligned = True
+        direct_align_recon.alignment.num_correspondences = len(direct_align_recon.shots)
+
         aligned_recons.append(direct_align_recon)
 
     return aligned_recons
@@ -756,9 +760,6 @@ def align_reconstruction_segments(reconstruction, recon_gps_points):
     align reconstruction to gps points. if more than 2 gps points, alignment is done segment-wise,
     i.e. two 2 gps points are used at a time. affect shot pose only, not points
     """
-    if reconstruction.alignment.aligned:
-        return reconstruction
-
     gps_shot_ids = sorted(recon_gps_points.keys())
     for i in range(len(gps_shot_ids) - 1):
         X, Xp = [], []

@@ -722,6 +722,13 @@ def detect(args):
     # get the filename to be used for filepath to store the features.
     fname = vs.listing[idx][-14:]
 
+    # skip if npz file already exists
+    npz_file = fname + '.npz'
+    npz_outfile = os.path.join(write_dir, npz_file)
+    if os.path.isfile(npz_outfile):
+        print("Skip recomputing superpoint features for %s" % fname)
+        return
+
     # Get a new image.
     img, grayimg, status = vs.get_frame(idx)
     if status is False:
@@ -820,8 +827,6 @@ def detect(args):
 
     # save the features
     if write:
-        npz_file = fname + '.npz'
-        npz_outfile = os.path.join(write_dir, npz_file)
         save_features(npz_outfile, points, desc, colors)
         print('Saving features to %s' % npz_outfile)
 

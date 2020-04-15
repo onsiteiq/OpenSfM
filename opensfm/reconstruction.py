@@ -808,7 +808,7 @@ def resect(data, graph, graph_inliers, reconstruction, shot_id,
     inliers = np.linalg.norm(reprojected_bs - bs, axis=1) < threshold
     ninliers = int(sum(inliers))
 
-    min_inliers = get_resection_min_inliers(data, graph, reconstruction, shot_id, ids, inliers, ninliers)
+    #min_inliers = get_resection_min_inliers(data, graph, reconstruction, shot_id, ids, inliers, ninliers)
 
     #logger.info("{} resection inliers: {} / {}, threshod {}".format(
         #shot_id, ninliers, len(bs), min_inliers))
@@ -839,6 +839,31 @@ def resect(data, graph, graph_inliers, reconstruction, shot_id,
         return True, report
     else:
         return resect_structureless(data, graph, reconstruction, shot_id)
+
+
+def rotation_close_to_preint(im1, im2, two_view_rel_rot, pdr_shots_dict):
+    """
+    compare relative rotation of robust matching to that of imu gyro preintegration,
+    if they are not close, it is considered to be an erroneous epipoar geometry
+    """
+    # calculate relative rotation from preintegrated gyro input
+    preint_im1_rot = cv2.Rodrigues(np.asarray([pdr_shots_dict[im1][7], pdr_shots_dict[im1][8], pdr_shots_dict[im1][9]]))[0]
+    preint_im2_rot = cv2.Rodrigues(np.asarray([pdr_shots_dict[im2][7], pdr_shots_dict[im2][8], pdr_shots_dict[im2][9]]))[0]
+    preint_rel_rot = np.dot(preint_im2_rot, preint_im1_rot.T)
+
+    # convert this rotation from sensor frame to camera frame
+    b_to_c = np.asarray([1, 0, 0, 0, 0, -1, 0, 1, 0]).reshape(3, 3)
+    preint_rel_rot = cv2.Rodrigues(b_to_c.dot(cv2.Rodrigues(preint_rel_rot)[0].ravel()))[0]
+
+    diff_rot = np.dot(preint_rel_rot, two_view_rel_rot.T)
+    geo_diff = np.linalg.norm(cv2.Rodrigues(diff_rot)[0].ravel())
+
+    if geo_diff < math.pi/6.0:
+        logger.debug("{} {} preint/robust geodesic {} within threshold".format(im1, im2, geo_diff))
+        return True
+    else:
+        logger.debug("{} {} preint/robust geodesic {} exceeds threshold".format(im1, im2, geo_diff))
+        return False
 
 
 def resect_structureless(data, graph, reconstruction, shot_id):
@@ -911,6 +936,8 @@ def resect_structureless(data, graph, reconstruction, shot_id):
     elif image_two is None:
         return False, {'num_common_points_one': len(pr), 'num_common_points_two': 0, 'relative_result': "Failure"}
 
+    logger.info('num of common points 0/1={}, 0/2={}, 0/1/2={}'.format(len(pr), len(pa), max_common_to_both))
+
     logger.info("Computing relative motion with {} and {}".format(shot_id, image_one))
 
     report = {
@@ -979,8 +1006,18 @@ def resect_structureless(data, graph, reconstruction, shot_id):
 
     # print( "Resect Structureless t (out): " + str(T[:, 3]) )
 
+    pdr_shots_dict = data.load_pdr_shots()
+    R = T[:, :3].T
+    logger.info("test 0")
+    rel1 = np.dot(R.T, R1)
+    rotation_close_to_preint(shot_id, image_one, rel1, pdr_shots_dict)
+    logger.info("test 1")
+    rel2 = np.dot(R.T, R2)
+    rotation_close_to_preint(shot_id, image_two, rel2, pdr_shots_dict)
+
+
     # Failure is indicated by a translation value of the zero vector
-    if np.array_equal(T[:, 3], np.zeros(3)):
+    if np.allclose(T[:, 3], np.zeros(3)):
         report['absolute_result'] = "Could not find absolute translation"
         logger.info("Structureless resection failed (could not find absolute translation) with {}, {} and {}".format(shot_id, image_one, image_two))
         logger.info(report['absolute_result'])
@@ -1718,7 +1755,7 @@ def hybrid_align_reconstruction_pdr( data ):
     report['reconstructions'].append(rec_report)
     rec_report['subset'] = target_images
 
-    data.save_reconstruction([hybrid_align_pdr(data)])
+    data.save_reconstruction(hybrid_align_pdr(data))
 
     return report
 
