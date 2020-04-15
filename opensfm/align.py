@@ -2,7 +2,6 @@
 
 import operator
 import logging
-import math
 from collections import defaultdict
 from itertools import combinations
 
@@ -26,65 +25,6 @@ def align_reconstruction(reconstruction, gcp, config):
             reconstruction.alignment.aligned = True
 
 
-def align_reconstruction_segments(reconstruction, gcp, config, stride_len=6):
-    """
-    same as align_reconstruction but one segment (stride_len gps points) at a time,
-    stride_len must >= 2
-    """
-    gps_shots = []
-    for shot in reconstruction.shots.values():
-        if shot.metadata.gps_dop != 999999.0:
-            gps_shots.append(shot)
-
-    filtered_gps_shots = get_filtered_shots(gps_shots, config)
-
-    if len(filtered_gps_shots) <= stride_len:
-        align_reconstruction(reconstruction, gcp, config)
-        return
-
-    filtered_gps_shots_dict = {}
-    for shot in filtered_gps_shots:
-        filtered_gps_shots_dict[shot.id] = shot
-
-    all_shot_ids = sorted(filtered_gps_shots_dict.keys())
-    num_of_strides = len(all_shot_ids) // stride_len
-    align_method = config['align_method']
-    for i in range(num_of_strides):
-        next_shots = []
-        for j in range(stride_len):
-            next_shots.append(filtered_gps_shots_dict[all_shot_ids[i*stride_len+j]])
-
-        if i == num_of_strides - 1:
-            left = len(all_shot_ids) - num_of_strides*stride_len
-            for k in range(left):
-                next_shots.append(filtered_gps_shots_dict[all_shot_ids[num_of_strides*stride_len + k]])
-
-        res = None
-        if align_method == 'orientation_prior':
-            res = get_sab_2d(next_shots, config)
-        elif align_method == 'naive':
-            res = get_sab_3d(reconstruction, next_shots, gcp, config)
-        elif align_method == 'naive_and_orientation_prior':
-            res = get_sab_3d(reconstruction, next_shots, gcp, config)
-            if not res:
-                res = get_sab_2d(next_shots, config)
-
-        if res:
-            s, A, b = res
-
-            if i == 0:
-                start_shot_ind = 0
-            else:
-                start_shot_ind = _shot_id_to_int(all_shot_ids[i*stride_len-1]) + 1
-
-            if i == num_of_strides - 1:
-                end_shot_ind = 999999
-            else:
-                end_shot_ind = _shot_id_to_int(all_shot_ids[(i+1)*stride_len-1])
-
-            apply_similarity_segment(reconstruction, start_shot_ind, end_shot_ind, s, A, b)
-
-
 def apply_similarity(reconstruction, s, A, b):
     """Apply a similarity (y = s A x + b) to a reconstruction.
 
@@ -106,22 +46,6 @@ def apply_similarity(reconstruction, s, A, b):
         tp = -Rp.dot(b) + s * t
         shot.pose.set_rotation_matrix(Rp)
         shot.pose.translation = list(tp)
-
-
-def apply_similarity_segment(reconstruction, start_shot_ind, end_shot_ind, s, A, b):
-    """
-    applies similarity transform to shots between start/end_shot_id in
-    the reconstruction. affect shot pose only, not points
-    """
-    logger.debug("apply_similarity_segment: start/end shot index {} {}".format(start_shot_ind, end_shot_ind))
-    for shot in reconstruction.shots.values():
-        if start_shot_ind <= _shot_id_to_int(shot.id) <= end_shot_ind:
-            R = shot.pose.get_rotation_matrix()
-            t = np.array(shot.pose.translation)
-            Rp = R.dot(A.T)
-            tp = -Rp.dot(b) + s * t
-            shot.pose.set_rotation_matrix(Rp)
-            shot.pose.translation = list(tp)
 
 
 def align_reconstruction_similarity(reconstruction, gcp, config):
