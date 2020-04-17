@@ -760,14 +760,19 @@ def align_reconstruction_segments(reconstruction, recon_gps_points):
     align reconstruction to gps points. if more than 2 gps points, alignment is done segment-wise,
     i.e. two 2 gps points are used at a time. affect shot pose only, not points
     """
+    origins = {}
+    for shot_id in recon_gps_points:
+        origins[shot_id] = reconstruction.shots[shot_id].pose.get_origin()
+
     gps_shot_ids = sorted(recon_gps_points.keys())
+
     for i in range(len(gps_shot_ids) - 1):
         X, Xp = [], []
         onplane, verticals = [], []
 
         for j in range(2):
             shot_id = gps_shot_ids[i+j]
-            X.append(reconstruction.shots[shot_id].pose.get_origin())
+            X.append(origins[shot_id])
             Xp.append(recon_gps_points[shot_id])
 
             R = reconstruction.shots[shot_id].pose.get_rotation_matrix()
@@ -804,7 +809,7 @@ def align_reconstruction_segments(reconstruction, recon_gps_points):
         if i == 0:
             start_shot_id = shot_ids[0]
 
-        if i == len(recon_gps_points)-2:
+        if i == len(gps_shot_ids)-2:
             end_shot_id = shot_ids[-1]
 
         start_index = _shot_id_to_int(start_shot_id)
