@@ -2030,27 +2030,6 @@ def incremental_reconstruction_sequential(data, graph):
         reconstructions = sorted(reconstructions, key=lambda x: -len(x.shots))
         data.save_reconstruction(reconstructions)
 
-        uneven_images = []
-        uneven_images_thresh = 3 / data.config['reconstruction_scale_factor']
-
-        num_aligned = 0
-        for k, r in enumerate(reconstructions):
-            logger.info("Reconstruction {}: {} images, {} points, aligned = {}, num_corrs = {},".format(
-                k, len(r.shots), len(r.points), r.alignment.aligned, r.alignment.num_correspondences))
-
-            if r.alignment.aligned:
-                num_aligned += len(r.shots)
-
-                for shot_id in r.shots:
-                    if abs(r.shots[shot_id].pose.get_origin()[2]) > uneven_images_thresh:
-                        uneven_images.append(shot_id)
-
-        coverage = int(100 * num_aligned / num_full_images)
-        logger.info("{} partial reconstructions in total. {}% images aligned".format(len(reconstructions), coverage))
-
-        if len(uneven_images) > 0:
-            logger.info("{} images may not be level: {}".format(len(uneven_images), uneven_images))
-
     chrono.lap('compute_reconstructions')
     report['wall_times'] = dict(chrono.lap_times())
     report['not_reconstructed_images'] = list(remaining_images)

@@ -373,11 +373,8 @@ def hybrid_align_pdr(data, target_images=None):
                 recon_gps_points[shot_id] = curr_gps_points_dict[shot_id]
 
         if len(recon_gps_points) >= 2:
-            align_reconstruction_segments(recon, recon_gps_points)
-            recon.alignment.aligned = True
-            recon.alignment.num_correspondences = len(recon_gps_points)
-
-            aligned_recons.append(recon)
+            aligned_recon = align_reconstruction_segments(data, recon, recon_gps_points)
+            aligned_recons.append(aligned_recon)
 
     # for shots that are not in aligned recons at this point, we throw them in a new recon. the
     # camera poses are calculated using the same method as direct align
@@ -444,6 +441,21 @@ def hybrid_align_pdr(data, target_images=None):
         direct_align_recon.alignment.num_correspondences = len(direct_align_recon.shots)
 
         aligned_recons.append(direct_align_recon)
+
+    uneven_images = []
+    uneven_images_thresh = 6 / data.config['reconstruction_scale_factor']
+
+    for k, r in enumerate(aligned_recons):
+        logger.info("Reconstruction {}: {} images, {} points, aligned = {}, num_corrs = {},".format(
+            k, len(r.shots), len(r.points), r.alignment.aligned, r.alignment.num_correspondences))
+
+        for shot_id in r.shots:
+            if abs(r.shots[shot_id].pose.get_origin()[2]) > uneven_images_thresh:
+                logger.info("{} has z = {}".format(shot_id, r.shots[shot_id].pose.get_origin()[2]))
+                uneven_images.append(shot_id)
+
+    if len(uneven_images) > 0:
+        logger.info("{} images may not be level: {}".format(len(uneven_images), uneven_images))
 
     return aligned_recons
 
@@ -755,14 +767,22 @@ def align_reconstructions_to_hlf(reconstructions, data):
             logger.debug("{} => {}".format(img_list[i], hlf_list[matches[i]]))
 
 
-def align_reconstruction_segments(reconstruction, recon_gps_points):
+def align_reconstruction_segments(data, reconstruction, recon_gps_points):
     """
     align reconstruction to gps points. if more than 2 gps points, alignment is done segment-wise,
     i.e. two 2 gps points are used at a time. affect shot pose only, not points
     """
-    origins = {}
-    for shot_id in recon_gps_points:
-        origins[shot_id] = reconstruction.shots[shot_id].pose.get_origin()
+    cameras = data.load_camera_models()
+
+    aligned_reconstruction = types.Reconstruction()
+    aligned_reconstruction.cameras = cameras
+
+    '''
+    for shot_id in reconstruction.shots:
+        if _next_shot_id(shot_id) in reconstruction.shots:
+            diff = abs(reconstruction.shots[shot_id].pose.get_origin()[2] - reconstruction.shots[_next_shot_id(shot_id)].pose.get_origin()[2])
+            logger.info("{} has z diff = {}".format(shot_id, diff))
+    '''
 
     gps_shot_ids = sorted(recon_gps_points.keys())
 
@@ -772,7 +792,7 @@ def align_reconstruction_segments(reconstruction, recon_gps_points):
 
         for j in range(2):
             shot_id = gps_shot_ids[i+j]
-            X.append(origins[shot_id])
+            X.append(reconstruction.shots[shot_id].pose.get_origin())
             Xp.append(recon_gps_points[shot_id])
 
             R = reconstruction.shots[shot_id].pose.get_rotation_matrix()
@@ -818,17 +838,28 @@ def align_reconstruction_segments(reconstruction, recon_gps_points):
         # Align cameras.
         for shot in reconstruction.shots.values():
             if start_index <= _shot_id_to_int(shot.id) <= end_index:
+                camera = cameras[data.load_exif(shot.id)['camera']]
+
+                new_shot = types.Shot()
+                new_shot.id = shot.id
+                new_shot.camera = camera
+                new_shot.pose = types.Pose()
+
                 R = shot.pose.get_rotation_matrix()
                 t = np.array(shot.pose.translation)
                 Rp = R.dot(A.T)
                 tp = -Rp.dot(b) + s * t
                 try:
-                    shot.pose.set_rotation_matrix(Rp)
-                    shot.pose.translation = list(tp)
+                    new_shot.pose.set_rotation_matrix(Rp)
+                    new_shot.pose.translation = list(tp)
                 except:
                     logger.debug("unable to transform reconstruction!")
 
-    return reconstruction
+                aligned_reconstruction.add_shot(new_shot)
+
+    aligned_reconstruction.alignment.aligned = True
+    aligned_reconstruction.alignment.num_correspondences = len(recon_gps_points)
+    return aligned_reconstruction
 
 
 def get_origin_no_numpy_opencv(rotation, translation):
