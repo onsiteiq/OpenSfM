@@ -838,7 +838,8 @@ def resect(data, graph, graph_inliers, reconstruction, shot_id,
         bundle_single_view(graph_inliers, reconstruction, shot_id, data)
         return True, report
     else:
-        return resect_structureless(data, graph, reconstruction, shot_id)
+        #return resect_structureless(data, graph, reconstruction, shot_id)
+        return False, report
 
 
 def rotation_close_to_preint(im1, im2, two_view_rel_rot, pdr_shots_dict):
@@ -2047,14 +2048,14 @@ def incremental_reconstruction_sequential(data, graph):
 
 
 def remove_bad_frames(reconstructions):
-    uneven_images = []
-    suspicious_images = []
-
     height_thresh = 1.0
     distance_thresh = 2.0
 
     for k, r in enumerate(reconstructions):
         logger.info("Reconstruction {}: {} images".format(k, len(r.shots)))
+
+        uneven_images = []
+        suspicious_images = []
 
         for shot_id in r.shots:
             if abs(r.shots[shot_id].pose.get_origin()[2]) > height_thresh:
