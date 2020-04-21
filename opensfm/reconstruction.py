@@ -1977,7 +1977,6 @@ def incremental_reconstruction_sequential(data, graph):
 
     full_images = list(set(images))
     full_images.sort()
-    num_full_images = len(full_images)
 
     image_groups = []
 
@@ -2027,6 +2026,17 @@ def incremental_reconstruction_sequential(data, graph):
     if reconstructions:
         reconstructions[:] = [align_reconstruction_to_pdr(recon, data) for recon in reconstructions]
 
+        # remove frames from recons that are obviously wrong
+        remove_bad_frames(data, reconstructions)
+
+        cnt_large_recon = 0
+        for recon in reconstructions:
+            if len(recon.shots) > 100:
+                cnt_large_recon += len(recon.shots)
+
+        ratio_large_recon = cnt_large_recon / len(full_images)
+        logger.info("{}% images in large recon".format(int(100*ratio_large_recon)))
+
         reconstructions = sorted(reconstructions, key=lambda x: -len(x.shots))
         data.save_reconstruction(reconstructions)
 
@@ -2034,6 +2044,38 @@ def incremental_reconstruction_sequential(data, graph):
     report['wall_times'] = dict(chrono.lap_times())
     report['not_reconstructed_images'] = list(remaining_images)
     return report, reconstructions
+
+
+def remove_bad_frames(data, reconstructions):
+    uneven_images = []
+    suspicious_images = []
+
+    height_thresh = 3 / data.config['reconstruction_scale_factor']
+    distance_thresh = 5 / data.config['reconstruction_scale_factor']
+
+    for k, r in enumerate(reconstructions):
+        logger.info("Reconstruction {}: {} images".format(k, len(r.shots)))
+
+        for shot_id in r.shots:
+            if abs(r.shots[shot_id].pose.get_origin()[2]) > height_thresh:
+                uneven_images.append(shot_id)
+                continue
+
+            next_shot_id = _next_shot_id(shot_id)
+            prev_shot_id = _prev_shot_id(shot_id)
+            if next_shot_id in r.shots and prev_shot_id in r.shots:
+                d1 = np.linalg.norm(r.shots[next_shot_id].pose.get_origin() - r.shots[shot_id].pose.get_origin())
+                d2 = np.linalg.norm(r.shots[prev_shot_id].pose.get_origin() - r.shots[shot_id].pose.get_origin())
+                if d1 > distance_thresh and d2 > distance_thresh:
+                    suspicious_images.append(shot_id)
+
+        for shot_id in uneven_images:
+            logger.info("removing uneven image: {}".format(shot_id))
+            r.shots.pop(shot_id, None)
+
+        for shot_id in suspicious_images:
+            logger.info("removing suspicious image: {}".format(shot_id))
+            r.shots.pop(shot_id, None)
 
 
 def breakup_reconstruction(graph, reconstruction):
