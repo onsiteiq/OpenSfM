@@ -2027,7 +2027,7 @@ def incremental_reconstruction_sequential(data, graph):
         reconstructions[:] = [align_reconstruction_to_pdr(recon, data) for recon in reconstructions]
 
         # remove frames from recons that are obviously wrong
-        remove_bad_frames(data, reconstructions)
+        remove_bad_frames(reconstructions)
 
         cnt_large_recon = 0
         for recon in reconstructions:
@@ -2046,12 +2046,12 @@ def incremental_reconstruction_sequential(data, graph):
     return report, reconstructions
 
 
-def remove_bad_frames(data, reconstructions):
+def remove_bad_frames(reconstructions):
     uneven_images = []
     suspicious_images = []
 
-    height_thresh = 3 / data.config['reconstruction_scale_factor']
-    distance_thresh = 5 / data.config['reconstruction_scale_factor']
+    height_thresh = 1.0
+    distance_thresh = 2.0
 
     for k, r in enumerate(reconstructions):
         logger.info("Reconstruction {}: {} images".format(k, len(r.shots)))
