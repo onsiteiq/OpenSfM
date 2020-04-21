@@ -20,7 +20,7 @@ logging.getLogger("opensfm.align_pdr").setLevel(logging.DEBUG)
 
 
 class LabeledCircle(object):
-    circle_radius = 30
+    circle_radius = 20
     circle_radius_gps = 50
 
     circle_color = 'g'

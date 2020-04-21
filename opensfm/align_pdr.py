@@ -373,11 +373,8 @@ def hybrid_align_pdr(data, target_images=None):
                 recon_gps_points[shot_id] = curr_gps_points_dict[shot_id]
 
         if len(recon_gps_points) >= 2:
-            align_reconstruction_segments(recon, recon_gps_points)
-            recon.alignment.aligned = True
-            recon.alignment.num_correspondences = len(recon_gps_points)
-
-            aligned_recons.append(recon)
+            aligned_recon = align_reconstruction_segments(data, recon, recon_gps_points)
+            aligned_recons.append(aligned_recon)
 
     # for shots that are not in aligned recons at this point, we throw them in a new recon. the
     # camera poses are calculated using the same method as direct align
@@ -755,14 +752,15 @@ def align_reconstructions_to_hlf(reconstructions, data):
             logger.debug("{} => {}".format(img_list[i], hlf_list[matches[i]]))
 
 
-def align_reconstruction_segments(reconstruction, recon_gps_points):
+def align_reconstruction_segments(data, reconstruction, recon_gps_points):
     """
     align reconstruction to gps points. if more than 2 gps points, alignment is done segment-wise,
     i.e. two 2 gps points are used at a time. affect shot pose only, not points
     """
-    origins = {}
-    for shot_id in recon_gps_points:
-        origins[shot_id] = reconstruction.shots[shot_id].pose.get_origin()
+    cameras = data.load_camera_models()
+
+    aligned_reconstruction = types.Reconstruction()
+    aligned_reconstruction.cameras = cameras
 
     gps_shot_ids = sorted(recon_gps_points.keys())
 
@@ -772,7 +770,7 @@ def align_reconstruction_segments(reconstruction, recon_gps_points):
 
         for j in range(2):
             shot_id = gps_shot_ids[i+j]
-            X.append(origins[shot_id])
+            X.append(reconstruction.shots[shot_id].pose.get_origin())
             Xp.append(recon_gps_points[shot_id])
 
             R = reconstruction.shots[shot_id].pose.get_rotation_matrix()
@@ -818,17 +816,28 @@ def align_reconstruction_segments(reconstruction, recon_gps_points):
         # Align cameras.
         for shot in reconstruction.shots.values():
             if start_index <= _shot_id_to_int(shot.id) <= end_index:
+                camera = cameras[data.load_exif(shot.id)['camera']]
+
+                new_shot = types.Shot()
+                new_shot.id = shot.id
+                new_shot.camera = camera
+                new_shot.pose = types.Pose()
+
                 R = shot.pose.get_rotation_matrix()
                 t = np.array(shot.pose.translation)
                 Rp = R.dot(A.T)
                 tp = -Rp.dot(b) + s * t
                 try:
-                    shot.pose.set_rotation_matrix(Rp)
-                    shot.pose.translation = list(tp)
+                    new_shot.pose.set_rotation_matrix(Rp)
+                    new_shot.pose.translation = list(tp)
                 except:
                     logger.debug("unable to transform reconstruction!")
 
-    return reconstruction
+                aligned_reconstruction.add_shot(new_shot)
+
+    aligned_reconstruction.alignment.aligned = True
+    aligned_reconstruction.alignment.num_correspondences = len(recon_gps_points)
+    return aligned_reconstruction
 
 
 def get_origin_no_numpy_opencv(rotation, translation):
@@ -1050,8 +1059,6 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
     aligned_shots_dict = curr_gps_points_dict.copy()
     predicted_shots_dict = {}
 
-    pdr_predictions_dict = {}
-
     if len(curr_gps_points_dict) == 0:
         # with no gps point, this routine shouldn't be called. we simply place shot 0 at an arbitrary
         # point for debugging.
@@ -1117,12 +1124,12 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
 
                 if recon_shot_ids[0] not in curr_gps_points_dict and \
                         _prev_shot_id(recon_shot_ids[0]) in aligned_shots_dict:
-                    recon_trusted_shots[recon_shot_ids[0]] = pdr_predictions_dict[recon_shot_ids[0]]
+                    recon_trusted_shots[recon_shot_ids[0]] = pdr_predictions_dict[recon_shot_ids[0]][:3]
                     curr_gps_points_dict[recon_shot_ids[0]] = recon_trusted_shots[recon_shot_ids[0]]
 
                 if recon_shot_ids[-1] not in curr_gps_points_dict and \
                         _next_shot_id(recon_shot_ids[-1]) in aligned_shots_dict:
-                    recon_trusted_shots[recon_shot_ids[-1]] = pdr_predictions_dict[recon_shot_ids[-1]]
+                    recon_trusted_shots[recon_shot_ids[-1]] = pdr_predictions_dict[recon_shot_ids[-1]][:3]
                     curr_gps_points_dict[recon_shot_ids[-1]] = recon_trusted_shots[recon_shot_ids[-1]]
 
             if len(recon_gps_points) + len(recon_trusted_shots) >= 2:
@@ -1163,7 +1170,7 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
         if _int_to_shot_id(current_shot_idx) in aligned_shots_dict:
             # start_shot and current_shot-1 are trusted shots. pdr predictions in between are counted as align shots
             for i in range(start_shot_idx, current_shot_idx):
-                aligned_shots_dict[_int_to_shot_id(i)] = pdr_predictions_dict[_int_to_shot_id(i)]
+                aligned_shots_dict[_int_to_shot_id(i)] = pdr_predictions_dict[_int_to_shot_id(i)][:3]
 
             logger.debug("filled hole {}-{}".format(start_shot_idx, current_shot_idx-1))
 
@@ -1198,13 +1205,13 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
             logger.debug("long unaligned recon found, current_shot_idx = {}".format(current_shot_idx))
             # first use pdr to fill the gap
             for i in range(start_shot_idx, current_shot_idx):
-                predicted_shots_dict[_int_to_shot_id(i)] = pdr_predictions_dict[_int_to_shot_id(i)]
+                predicted_shots_dict[_int_to_shot_id(i)] = pdr_predictions_dict[_int_to_shot_id(i)][:3]
 
             logger.debug("filled gap {}-{}".format(start_shot_idx, current_shot_idx-1))
             # then align the long reconstruction to pdr and add to predicted shots
             all_recon_shot_ids = sorted(long_unaligned_recon.shots.keys())
-            anchor_points = {all_recon_shot_ids[0]: pdr_predictions_dict[all_recon_shot_ids[0]],
-                             all_recon_shot_ids[1]: pdr_predictions_dict[all_recon_shot_ids[1]]}
+            anchor_points = {all_recon_shot_ids[0]: pdr_predictions_dict[all_recon_shot_ids[0]][:3],
+                             all_recon_shot_ids[1]: pdr_predictions_dict[all_recon_shot_ids[1]][:3]}
             new_dict = align_reconstruction_no_numpy(long_unaligned_recon, anchor_points)
             predicted_shots_dict.update(new_dict)
 
@@ -1213,7 +1220,7 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
 
         if current_shot_idx >= len(pdr_shots_dict) or current_shot_idx - start_shot_idx >= PDR_TRUST_SIZE:
             for i in range(start_shot_idx, current_shot_idx):
-                predicted_shots_dict[_int_to_shot_id(i)] = pdr_predictions_dict[_int_to_shot_id(i)]
+                predicted_shots_dict[_int_to_shot_id(i)] = pdr_predictions_dict[_int_to_shot_id(i)][:3]
 
             logger.debug("pdr prediction {}-{}".format(start_shot_idx, current_shot_idx-1))
 
