@@ -358,7 +358,7 @@ def hybrid_align_pdr(data, target_images=None):
     reconstructions = data.load_reconstruction()
 
     aligned_shots_dict, _ = \
-        update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_dict, scale_factor)
+        update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_dict, scale_factor, -1)
 
     # now align recons that has 2 or more gps points (and trusted shots if any). the difference
     # of alignment below and that of align_reconstruction_no_numpy is that we calculate the
@@ -996,7 +996,7 @@ def update_gps_picker(curr_gps_points_dict, pdr_shots_dict, scale_factor, num_ex
     return pdr_predictions_dict
 
 
-def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_dict, scale_factor):
+def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_dict, scale_factor, num_extrapolation):
     """
     this routine is intended to be ported and used in gps picker
 
@@ -1051,10 +1051,17 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
     :param reconstructions:
     :param pdr_shots_dict:
     :param scale_factor:
+    :param num_extrapolation:
     :return:
     """
     PDR_TRUST_SIZE = 20
     MIN_RECON_SIZE = 20
+
+    if num_extrapolation != -1:
+        sorted_gps_ids = sorted(curr_gps_points_dict.keys(), reverse=True)
+        max_shot_idx = _shot_id_to_int(sorted_gps_ids[0]) + num_extrapolation
+    else:
+        max_shot_idx = 999999
 
     aligned_shots_dict = curr_gps_points_dict.copy()
     predicted_shots_dict = {}
@@ -1093,6 +1100,7 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
         for shot_id in scaled_shots_dict:
             predicted_shots_dict[shot_id] = tuple(map(sum, zip(offset, scaled_shots_dict[shot_id])))
 
+        limit_predictions(predicted_shots_dict, max_shot_idx)
         return {}, predicted_shots_dict
 
     # we modify the alignment flag each time we invoke this routine.
@@ -1125,12 +1133,10 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
                 if recon_shot_ids[0] not in curr_gps_points_dict and \
                         _prev_shot_id(recon_shot_ids[0]) in aligned_shots_dict:
                     recon_trusted_shots[recon_shot_ids[0]] = pdr_predictions_dict[recon_shot_ids[0]][:3]
-                    curr_gps_points_dict[recon_shot_ids[0]] = recon_trusted_shots[recon_shot_ids[0]]
 
                 if recon_shot_ids[-1] not in curr_gps_points_dict and \
                         _next_shot_id(recon_shot_ids[-1]) in aligned_shots_dict:
                     recon_trusted_shots[recon_shot_ids[-1]] = pdr_predictions_dict[recon_shot_ids[-1]][:3]
-                    curr_gps_points_dict[recon_shot_ids[-1]] = recon_trusted_shots[recon_shot_ids[-1]]
 
             if len(recon_gps_points) + len(recon_trusted_shots) >= 2:
                 # combine trusted shots with gps points
@@ -1159,6 +1165,7 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
     if i == len(pdr_shots_dict):
         # all shots have been aligned
         logger.debug("all shots aligned")
+        limit_predictions(aligned_shots_dict, max_shot_idx)
         return aligned_shots_dict, {}
 
     start_shot_idx = i
@@ -1187,6 +1194,7 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
             if i == len(pdr_shots_dict):
                 # all shots have been aligned
                 logger.debug("all shots aligned")
+                limit_predictions(aligned_shots_dict, max_shot_idx)
                 return aligned_shots_dict, {}
 
             start_shot_idx = i
@@ -1230,7 +1238,15 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
         current_shot_idx += 1
         logger.debug("curr shot idx={}".format(current_shot_idx))
 
+    limit_predictions(aligned_shots_dict, max_shot_idx)
+    limit_predictions(predicted_shots_dict, max_shot_idx)
     return aligned_shots_dict, predicted_shots_dict
+
+
+def limit_predictions(shots_dict, max_shot_idx):
+    to_delete = [shot_id for shot_id in shots_dict if _shot_id_to_int(shot_id) > max_shot_idx]
+    for shot_id in to_delete:
+        del shots_dict[shot_id]
 
 
 def apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id, s, A, b, deviation, gps_shot_ids=[]):

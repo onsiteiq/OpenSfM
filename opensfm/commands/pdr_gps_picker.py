@@ -128,7 +128,7 @@ class DragMover(object):
 
                 self.reconstructions = \
                     align_pdr.hybrid_align_pdr(curr_gps_points_dict, self.reconstructions,
-                                               self.pdr_shots_dict, self.scale_factor)
+                                               self.pdr_shots_dict, self.scale_factor, -1)
                 save_reconstructions(self.reconstructions)
                 return
 
@@ -187,7 +187,7 @@ class DragMover(object):
         if self.num_extrapolation == -1:
             aligned_shots_dict, predicted_shots_dict = \
                 align_pdr.update_gps_picker_hybrid(curr_gps_points_dict, self.reconstructions,
-                                                   self.pdr_shots_dict, self.scale_factor)
+                                                   self.pdr_shots_dict, self.scale_factor, 100)
 
             for shot_id in aligned_shots_dict:
                 found_existing = False
