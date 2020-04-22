@@ -1000,12 +1000,83 @@ def resect_structureless(data, graph, reconstruction, shot_id):
 
     threshold = data.config['resection_threshold']
 
-    # Due to row major (OpenCV) to column major (Eigen) take the transpose of R0. t is a direction in world coordinates
-    # so it should be uneffected.
+    bs, Xs, ids = [], [], []
+    for track in graph[shot_id]:
+        if track in reconstruction.points:
+            x = graph[track][shot_id]['feature']
+            b = camera.pixel_bearing(x)
+            bs.append(b)
+            Xs.append(reconstruction.points[track].coordinates)
+            ids.append(track)
+    bs = np.array(bs)
+    Xs = np.array(Xs)
 
-    T = pyopengv.absolute_pose_onept_ransac(b0_cam, b2_wrld, o1, o2, R0.T, t, 1 - np.cos(threshold), 1000, 0.999)
+    # Start by using relative motion for rotation and then estimate translation direction
+    # and magnitude using triangulated track points.
 
-    # print( "Resect Structureless t (out): " + str(T[:, 3]) )
+    twopt_success = True
+
+    if len(bs) < 2:
+        report['absolute_result_twopt'] = "Could not find absolute translation"
+        twopt_success = False
+    
+    else:
+    
+        T = pyopengv.absolute_pose_twopt_ransac( bs, Xs, R0.T, 1 - np.cos(threshold), 1000, 0.999 )
+        
+        R2pt = T[:, :3]
+        t2pt = T[:, 3]
+
+        reprojected_bs = R2pt.T.dot((Xs - t2pt).T).T
+        reprojected_bs /= np.linalg.norm(reprojected_bs, axis=1)[:, np.newaxis]
+
+        inliers = np.linalg.norm(reprojected_bs - bs, axis=1) < threshold
+        ninliers = int(sum(inliers))
+
+        report['num_inliers_twopt'] = ninliers
+        
+        if ninliers < 4:
+            report['absolute_result_twopt'] = "Could not find absolute translation"
+            logger.info("Resection twopt failed with {}, {} and {}. Number of Inliers: {}".format(shot_id, image_one, image_two, str(ninliers)) )
+            twopt_success = False
+        else:
+            report['absolute_result_twopt'] = "Success"
+            logger.info("Resection twopt succeeded with {}, {} and {}. Number of Inliers: {}".format(shot_id, image_one, image_two, str(ninliers)) )
+    
+    # If the two point algorithm doesn't succeed try the one point algorithm using triangulated track points
+    
+    onept_success = True
+    
+    if not twopt_success:
+    
+        T = pyopengv.absolute_pose_onept_ransac(bs, Xs, o1, R0.T, t, 1 - np.cos(threshold), 1000, 0.999)
+        
+        # Assess success here. For now we mandate a couple of inliers and try to be strict since we
+        # have structureless as a backup.
+        
+        if np.allclose(T[:, 3], np.zeros(3)):
+            report['absolute_result_onept'] = "Could not find absolute translation"
+            onept_success = False
+            logger.info("Resection onept failed with {}, {} and {}".format(shot_id, image_one, image_two))
+        else:
+            report['absolute_result_onept'] = "Success"
+            logger.info("Resection onept succeeded with {}, {} and {}".format(shot_id, image_one, image_two))
+        
+    if not onept_success:
+    
+        # Due to row major (OpenCV) to column major (Eigen) take the transpose of R0. t is a direction in world coordinates
+        # so it should be uneffected.
+
+        T = pyopengv.absolute_pose_onept_structureless_ransac(b0_cam, b2_wrld, o1, o2, R0.T, t, 1 - np.cos(threshold), 1000, 0.999)
+
+        # Failure is indicated by a translation value of the zero vector
+        if np.allclose(T[:, 3], np.zeros(3)):
+            report['absolute_result_onept_structureless'] = "Could not find absolute translation"
+            logger.info("Structureless resection failed with {}, {} and {}".format(shot_id, image_one, image_two))
+            return False, report
+        else:
+            logger.info("Structureless resection succeeded with {}, {} and {}".format(shot_id, image_one, image_two))
+            report['absolute_result_onept_structureless'] = "Success"
 
     pdr_shots_dict = data.load_pdr_shots()
     R = T[:, :3].T
@@ -1015,17 +1086,7 @@ def resect_structureless(data, graph, reconstruction, shot_id):
     logger.info("test 1")
     rel2 = np.dot(R.T, R2)
     rotation_close_to_preint(shot_id, image_two, rel2, pdr_shots_dict)
-
-
-    # Failure is indicated by a translation value of the zero vector
-    if np.allclose(T[:, 3], np.zeros(3)):
-        report['absolute_result'] = "Could not find absolute translation"
-        logger.info("Structureless resection failed (could not find absolute translation) with {}, {} and {}".format(shot_id, image_one, image_two))
-        logger.info(report['absolute_result'])
-        return False, report
-
-    report['absolute_result'] = "Success"
-
+    
     try:
         R = T[:, :3].T
         t = -R.dot(T[:, 3])
@@ -1043,7 +1104,7 @@ def resect_structureless(data, graph, reconstruction, shot_id):
     reconstruction.add_shot(shot)
     bundle_single_view(graph, reconstruction, shot_id, data)
 
-    logger.info("Structureless resection successful with {}, {} and {}".format(shot_id, image_one, image_two))
+    logger.info("Resection successful with {}, {} and {}".format(shot_id, image_one, image_two))
     return True, report
 
 
