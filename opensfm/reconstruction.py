@@ -2145,7 +2145,7 @@ def remove_bad_frames(reconstructions):
             empty_recons.append(r)
 
     for r in empty_recons:
-        reconstructions.pop(r)
+        reconstructions.remove(r)
 
 
 def breakup_reconstruction(graph, reconstruction):
