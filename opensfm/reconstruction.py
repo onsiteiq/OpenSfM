@@ -2039,6 +2039,7 @@ def incremental_reconstruction_sequential(data, graph):
 
     full_images = list(set(images))
     full_images.sort()
+    cnt_images = len(full_images)
 
     image_groups = []
 
@@ -2096,7 +2097,7 @@ def incremental_reconstruction_sequential(data, graph):
             if len(recon.shots) > 100:
                 cnt_large_recon += len(recon.shots)
 
-        ratio_large_recon = cnt_large_recon / len(full_images)
+        ratio_large_recon = cnt_large_recon / cnt_images
         logger.info("{}% images in large recon".format(int(100*ratio_large_recon)))
 
         reconstructions = sorted(reconstructions, key=lambda x: -len(x.shots))
@@ -2112,6 +2113,7 @@ def remove_bad_frames(reconstructions):
     height_thresh = 1.0
     distance_thresh = 2.0
 
+    empty_recons = []
     for k, r in enumerate(reconstructions):
         logger.info("Reconstruction {}: {} images".format(k, len(r.shots)))
 
@@ -2138,6 +2140,12 @@ def remove_bad_frames(reconstructions):
         for shot_id in suspicious_images:
             logger.info("removing suspicious image: {}".format(shot_id))
             r.shots.pop(shot_id, None)
+
+        if len(r.shots) == 0:
+            empty_recons.append(r)
+
+    for r in empty_recons:
+        reconstructions.pop(r)
 
 
 def breakup_reconstruction(graph, reconstruction):
