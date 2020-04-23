@@ -1057,12 +1057,6 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
     PDR_TRUST_SIZE = 20
     MIN_RECON_SIZE = 20
 
-    if num_extrapolation != -1:
-        sorted_gps_ids = sorted(curr_gps_points_dict.keys(), reverse=True)
-        max_shot_idx = _shot_id_to_int(sorted_gps_ids[0]) + num_extrapolation
-    else:
-        max_shot_idx = 999999
-
     aligned_shots_dict = curr_gps_points_dict.copy()
     predicted_shots_dict = {}
 
@@ -1100,8 +1094,7 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
         for shot_id in scaled_shots_dict:
             predicted_shots_dict[shot_id] = tuple(map(sum, zip(offset, scaled_shots_dict[shot_id])))
 
-        limit_predictions(predicted_shots_dict, max_shot_idx)
-        return {}, predicted_shots_dict
+        return limit_predictions({}, predicted_shots_dict, curr_gps_points_dict, num_extrapolation)
 
     # we modify the alignment flag each time we invoke this routine.
     # so return the flag to default first.
@@ -1161,12 +1154,12 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
             # break for loop
             break
 
-    logger.debug("first unaligned = {}".format(i))
     if i == len(pdr_shots_dict):
         # all shots have been aligned
         logger.debug("all shots aligned")
-        limit_predictions(aligned_shots_dict, max_shot_idx)
-        return aligned_shots_dict, {}
+        return limit_predictions(aligned_shots_dict, {}, curr_gps_points_dict, num_extrapolation)
+
+    logger.debug("first unaligned = {}".format(i))
 
     start_shot_idx = i
     current_shot_idx = start_shot_idx + 1
@@ -1194,8 +1187,7 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
             if i == len(pdr_shots_dict):
                 # all shots have been aligned
                 logger.debug("all shots aligned")
-                limit_predictions(aligned_shots_dict, max_shot_idx)
-                return aligned_shots_dict, {}
+                return limit_predictions(aligned_shots_dict, {}, curr_gps_points_dict, num_extrapolation)
 
             start_shot_idx = i
             current_shot_idx = start_shot_idx + 1
@@ -1238,15 +1230,47 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
         current_shot_idx += 1
         logger.debug("curr shot idx={}".format(current_shot_idx))
 
-    limit_predictions(aligned_shots_dict, max_shot_idx)
-    limit_predictions(predicted_shots_dict, max_shot_idx)
-    return aligned_shots_dict, predicted_shots_dict
+    return limit_predictions(aligned_shots_dict, predicted_shots_dict, curr_gps_points_dict, num_extrapolation)
 
 
-def limit_predictions(shots_dict, max_shot_idx):
-    to_delete = [shot_id for shot_id in shots_dict if _shot_id_to_int(shot_id) > max_shot_idx]
+def limit_predictions(aligned_shots_dict, predicted_shots_dict, curr_gps_points_dict, num_extrapolation):
+    """
+    put each shots into one of two dictionaries, based on whether it is before or after last gps point.
+    number of shots after the last gps points are limited to num_extrapolation.
+
+    :param aligned_shots_dict:
+    :param predicted_shots_dict:
+    :param curr_gps_points_dict:
+    :param num_extrapolation:
+    :return:
+    """
+    last_gps_idx = _shot_id_to_int(sorted(curr_gps_points_dict.keys(), reverse=True)[0])
+
+    if num_extrapolation != -1:
+        max_shot_idx = last_gps_idx + num_extrapolation
+    else:
+        max_shot_idx = 999999
+
+    before_dict = {}
+    after_dict = {}
+
+    for shot_id in aligned_shots_dict:
+        if _shot_id_to_int(shot_id) <= last_gps_idx:
+            before_dict[shot_id] = aligned_shots_dict[shot_id]
+        else:
+            after_dict[shot_id] = aligned_shots_dict[shot_id]
+
+    for shot_id in predicted_shots_dict:
+        if _shot_id_to_int(shot_id) <= last_gps_idx:
+            before_dict[shot_id] = predicted_shots_dict[shot_id]
+        else:
+            after_dict[shot_id] = predicted_shots_dict[shot_id]
+
+    to_delete = [shot_id for shot_id in after_dict if _shot_id_to_int(shot_id) > max_shot_idx]
     for shot_id in to_delete:
-        del shots_dict[shot_id]
+        del after_dict[shot_id]
+
+    return before_dict, after_dict
 
 
 def apply_affine_transform(pdr_shots_dict, start_shot_id, end_shot_id, s, A, b, deviation, gps_shot_ids=[]):
