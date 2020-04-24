@@ -1008,6 +1008,7 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
     :return:
     """
     PDR_TRUST_SIZE = 20
+    MIN_RECON_SIZE = 100
 
     aligned_shots_dict = curr_gps_points_dict.copy()
 
@@ -1019,7 +1020,7 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
         gps_shot_id = list(curr_gps_points_dict.keys())[0]
 
         scaled_shots_dict = {}
-        num = _shot_id_to_int(gps_shot_id) + PDR_TRUST_SIZE
+        num = min(len(pdr_shots_dict) - 1, _shot_id_to_int(gps_shot_id) + 50)
         for i in range(num):
             shot_id = _int_to_shot_id(i)
             scaled_shots_dict[shot_id] = (pdr_shots_dict[shot_id][0] / (scale_factor * 0.3048),
@@ -1047,7 +1048,7 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
     while True:
         can_align = False
         for recon in reconstructions:
-            if recon.alignment.aligned:
+            if recon.alignment.aligned or len(recon.shots) < MIN_RECON_SIZE:
                 continue
 
             recon_gps_points = {}
