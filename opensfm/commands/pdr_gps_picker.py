@@ -184,37 +184,37 @@ class DragMover(object):
             if shot_obj.get_is_gps():
                 curr_gps_points_dict[shot_obj.get_shot_id()] = (shot_obj.get_center()[0], shot_obj.get_center()[1], 0)
 
-        if self.num_extrapolation == -1:
-            aligned_shots_dict, predicted_shots_dict = \
+        if self.num_extrapolation >= 100:
+            before_dict, after_dict = \
                 align_pdr.update_gps_picker_hybrid(curr_gps_points_dict, self.reconstructions,
-                                                   self.pdr_shots_dict, self.scale_factor, 100)
+                                                   self.pdr_shots_dict, self.scale_factor, self.num_extrapolation)
 
-            for shot_id in aligned_shots_dict:
+            for shot_id in before_dict:
                 found_existing = False
                 for shot_obj in self.shot_objs:
                     if shot_id == shot_obj.get_shot_id():
-                        shot_obj.set_center(aligned_shots_dict[shot_id])
+                        shot_obj.set_center(before_dict[shot_id])
                         shot_obj.set_is_prediction(False)
                         found_existing = True
                         break
 
                 if not found_existing:
-                    shot_obj = LabeledCircle(shot_id, aligned_shots_dict[shot_id])
+                    shot_obj = LabeledCircle(shot_id, before_dict[shot_id])
                     shot_obj.show(self.ax)
                     shot_obj.set_is_prediction(False)
                     self.shot_objs.append(shot_obj)
 
-            for shot_id in predicted_shots_dict:
+            for shot_id in after_dict:
                 found_existing = False
                 for shot_obj in self.shot_objs:
                     if shot_id == shot_obj.get_shot_id():
-                        shot_obj.set_center(predicted_shots_dict[shot_id])
+                        shot_obj.set_center(after_dict[shot_id])
                         shot_obj.set_is_prediction(True)
                         found_existing = True
                         break
 
                 if not found_existing:
-                    shot_obj = LabeledCircle(shot_id, predicted_shots_dict[shot_id])
+                    shot_obj = LabeledCircle(shot_id, after_dict[shot_id])
                     shot_obj.show(self.ax)
                     shot_obj.set_is_prediction(True)
                     self.shot_objs.append(shot_obj)
