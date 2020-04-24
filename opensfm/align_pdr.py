@@ -1125,9 +1125,12 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
     before_dict = {}
     after_dict = {}
 
-    for shot_id in aligned_shots_dict:
-        if _shot_id_to_int(shot_id) <= last_gps_idx:
+    for idx in range(last_gps_idx+1):
+        shot_id = _int_to_shot_id(idx)
+        if shot_id in aligned_shots_dict:
             before_dict[shot_id] = aligned_shots_dict[shot_id]
+        else:
+            before_dict[shot_id] = pdr_predictions_dict[shot_id]
 
     curr_shot_idx = last_gps_idx + 1
     num_pdr_predictions = 0
