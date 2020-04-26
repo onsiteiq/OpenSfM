@@ -351,30 +351,68 @@ def hybrid_align_pdr(data, target_images=None):
             reflla['latitude'], reflla['longitude'], reflla['altitude'])
         curr_gps_points_dict[key] = [x, y, z]
 
-    # we run through the same procedure as in hybrid gps picking process, the purpose of this
-    # is to augment curr_gps_points_dict with 'trusted shots'
+    # now align recons that has 2 or more gps points (and trusted shots if any). we run through the same
+    # procedure as in hybrid gps picking process, so that the output will be identical. only difference
+    # is that align_reconstruction_segments below calculates the full camera pose, as opposed to position
+    # only in align_reconstruction_no_numpy.
     scale_factor = data.config['reconstruction_scale_factor']
     pdr_shots_dict = data.load_pdr_shots()
     reconstructions = data.load_reconstruction()
 
-    aligned_shots_dict, _ = \
-        update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_dict, scale_factor, -1)
+    MIN_RECON_SIZE = 100
 
-    # now align recons that has 2 or more gps points (and trusted shots if any). the difference
-    # of alignment below and that of align_reconstruction_no_numpy is that we calculate the
-    # full camera pose as opposed to position only.
     aligned_recons = []
-    for recon in reconstructions:
-        recon_gps_points = {}
+    aligned_shots_dict = curr_gps_points_dict.copy()
 
-        # match gps points to this recon
-        for shot_id in recon.shots:
-            if shot_id in curr_gps_points_dict:
-                recon_gps_points[shot_id] = curr_gps_points_dict[shot_id]
+    # init pdr predictions
+    pdr_predictions_dict = update_pdr_global_2d(curr_gps_points_dict, pdr_shots_dict, scale_factor, False)
 
-        if len(recon_gps_points) >= 2:
-            aligned_recon = align_reconstruction_segments(data, recon, recon_gps_points)
-            aligned_recons.append(aligned_recon)
+    # align recons to gps points and/or trusted shots
+    while True:
+        can_align = False
+        for recon in reconstructions:
+            if recon.alignment.aligned or len(recon.shots) < MIN_RECON_SIZE:
+                continue
+
+            recon_gps_points = {}
+            recon_trusted_shots = {}
+
+            # match gps points to this recon
+            for shot_id in recon.shots:
+                if shot_id in curr_gps_points_dict:
+                    recon_gps_points[shot_id] = curr_gps_points_dict[shot_id]
+
+            # find trusted shots on this recon if not enough gps points
+            if len(recon_gps_points) < 2:
+                recon_shot_ids = sorted(recon.shots)
+
+                if recon_shot_ids[0] not in curr_gps_points_dict and \
+                        _prev_shot_id(recon_shot_ids[0]) in aligned_shots_dict:
+                    recon_trusted_shots[recon_shot_ids[0]] = pdr_predictions_dict[recon_shot_ids[0]][:3]
+
+                if recon_shot_ids[-1] not in curr_gps_points_dict and \
+                        _next_shot_id(recon_shot_ids[-1]) in aligned_shots_dict:
+                    recon_trusted_shots[recon_shot_ids[-1]] = pdr_predictions_dict[recon_shot_ids[-1]][:3]
+
+            if len(recon_gps_points) + len(recon_trusted_shots) >= 2:
+                # combine trusted shots with gps points
+                recon_trusted_shots.update(recon_gps_points)
+
+                aligned_recon = align_reconstruction_segments(data, recon, recon_trusted_shots)
+                aligned_recons.append(aligned_recon)
+
+                for shot_id in aligned_recon.shots:
+                    aligned_shots_dict[shot_id] = aligned_recon.shots[shot_id].pose.get_origin()
+
+                # update pdr predictions based on aligned shots so far
+                pdr_predictions_dict = update_pdr_global_2d(aligned_shots_dict, pdr_shots_dict, scale_factor, False)
+
+                recon.alignment.aligned = True
+                can_align = True
+                break
+
+        if not can_align:
+            break
 
     # for shots that are not in aligned recons at this point, we throw them in a new recon. the
     # camera poses are calculated using the same method as direct align
@@ -1131,7 +1169,7 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
         if shot_id in aligned_shots_dict:
             before_dict[shot_id] = aligned_shots_dict[shot_id]
         else:
-            before_dict[shot_id] = pdr_predictions_dict[shot_id]
+            before_dict[shot_id] = pdr_predictions_dict[shot_id][:3]
 
     curr_shot_idx = last_gps_idx + 1
     num_pdr_predictions = 0
@@ -1142,7 +1180,7 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
             after_dict[shot_id] = aligned_shots_dict[shot_id]
             num_pdr_predictions = 0
         else:
-            after_dict[shot_id] = pdr_predictions_dict[shot_id]
+            after_dict[shot_id] = pdr_predictions_dict[shot_id][:3]
             num_pdr_predictions += 1
             if num_pdr_predictions >= PDR_TRUST_SIZE:
                 break
