@@ -63,7 +63,9 @@ def match_images(data, ref_images, cand_images):
     ctx.data = data
     ctx.cameras = ctx.data.load_camera_models()
     ctx.exifs = exifs
-    ctx.pdr_shots_dict = ctx.data.load_pdr_shots()
+    ctx.pdr_shots_dict = None
+    if ctx.data.pdr_shots_exist():
+        ctx.pdr_shots_dict = ctx.data.load_pdr_shots()
     args = list(match_arguments(per_image, ctx))
 
     # Perform all pair matchings in parallel
