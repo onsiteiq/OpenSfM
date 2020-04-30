@@ -66,6 +66,18 @@ class DataSet(object):
         """List of file names of all images in the dataset."""
         return self.image_list
 
+    def is_sequential(self):
+        for file_name in self.image_list:
+            file_name_no_ext = file_name.split(".")[0]
+            if len(file_name_no_ext) != 10:
+                return False
+
+            for c in file_name_no_ext:
+                if not c.isdigit():
+                    return False
+
+        return True
+
     def _image_file(self, image):
         """Path to the image file."""
         return self.image_files[image]

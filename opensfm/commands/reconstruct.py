@@ -129,7 +129,7 @@ class Command:
         else:
             # Run incremental reconstruction
             graph = data.load_tracks_graph()
-            if data.pdr_shots_exist():
+            if data.is_sequential():
                 report, reconstructions = reconstruction. \
                     incremental_reconstruction_sequential(data, graph)
             else:

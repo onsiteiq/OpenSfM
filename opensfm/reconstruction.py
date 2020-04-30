@@ -1078,14 +1078,16 @@ def resect_structureless(data, graph, reconstruction, shot_id):
             logger.info("Structureless resection succeeded with {}, {} and {}".format(shot_id, image_one, image_two))
             report['absolute_result_onept_structureless'] = "Success"
 
-    pdr_shots_dict = data.load_pdr_shots()
-    R = T[:, :3].T
-    logger.info("test 0")
-    rel1 = np.dot(R.T, R1)
-    rotation_close_to_preint(shot_id, image_one, rel1, pdr_shots_dict)
-    logger.info("test 1")
-    rel2 = np.dot(R.T, R2)
-    rotation_close_to_preint(shot_id, image_two, rel2, pdr_shots_dict)
+    # debugging
+    if data.pdr_shots_exist():
+        pdr_shots_dict = data.load_pdr_shots()
+        R = T[:, :3].T
+        logger.info("test 0")
+        rel1 = np.dot(R.T, R1)
+        rotation_close_to_preint(shot_id, image_one, rel1, pdr_shots_dict)
+        logger.info("test 1")
+        rel2 = np.dot(R.T, R2)
+        rotation_close_to_preint(shot_id, image_two, rel2, pdr_shots_dict)
     
     try:
         R = T[:, :3].T
@@ -2062,7 +2064,8 @@ def incremental_reconstruction_sequential(data, graph):
         image_groups.append( full_images )
 
     # load pdr data and globally align with gps points, if any
-    init_pdr_predictions(data)
+    if data.pdr_shots_exist():
+        init_pdr_predictions(data)
 
     # select as seed the pair with largest number of common tracks
     for remaining_images in image_groups:
@@ -2087,10 +2090,12 @@ def incremental_reconstruction_sequential(data, graph):
                     logger.info(rec_report['stats'])
 
     if reconstructions:
-        reconstructions[:] = [align_reconstruction_to_pdr(recon, data) for recon in reconstructions]
+        if data.pdr_shots_exist():
+            # level and scale recons to pdr
+            reconstructions[:] = [align_reconstruction_to_pdr(recon, data) for recon in reconstructions]
 
-        # remove frames from recons that are obviously wrong
-        remove_bad_frames(reconstructions)
+            # remove frames from recons that are obviously wrong according to pdr
+            remove_bad_frames(reconstructions)
 
         cnt_large_recon = 0
         for recon in reconstructions:
