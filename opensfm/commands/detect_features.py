@@ -138,7 +138,7 @@ def detect(args):
         # For spherical cameras create an undistorted image for the purposes of
         # feature finding (and later matching).
             
-        max_size = data.config.get('feature_process_size', -1)
+        max_size = data.config.get('ai_process_size', -1)
         if max_size == -1:
             max_size = img.shape[1]
             
@@ -195,11 +195,12 @@ def detect(args):
 
             #data.save_undistorted_image(subshot.id, undistorted)
 
-        #data.save_undistorted_image(subshot.id, undist_img)
+        data.save_undistorted_image(image.split(".")[0], undist_img)
 
         # We might consider combining a user supplied mask here as well
 
         # TODO fix mask
+        undist_img = resized_image(undist_img, data.config)
         p_unsorted, f_unsorted, c_unsorted = features.extract_features(undist_img, data.config, None)
 
         # Visualize the features on the unfolded cube
