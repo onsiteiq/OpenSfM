@@ -83,7 +83,7 @@ def camera_id_(make, model, width, height, projection_type, focal):
 
 def extract_exif_from_file( fileobj, data ):
 
-    if data.config['use_exif_template']:
+    if data.config['exif_template_mode'] == 'custom' :
             
         return data.load_exif_template()
         
@@ -94,7 +94,13 @@ def extract_exif_from_file( fileobj, data ):
         else:
             exif_data = EXIF(fileobj)
 
-        d = exif_data.extract_exif()
+        d = exif_data.extract_exif(data.config.get('ignore_exif_geo',False))
+        
+        if data.config['exif_template_mode'] == 'hybrid':
+        
+            template = data.load_exif_template()
+            
+            d['projection_type'] = template['projection_type']
         
         return d
 
@@ -260,7 +266,7 @@ class EXIF:
                 return timestamp
         return 0.0
 
-    def extract_exif(self):
+    def extract_exif(self, ignore_geo = False):
         width, height = self.extract_image_size()
         projection_type = self.extract_projection_type()
         focal_35, focal_ratio = self.extract_focal()
@@ -279,6 +285,8 @@ class EXIF:
             'capture_time': capture_time,
             'gps': geo
         }
+        if ignore_geo:
+            del d['gps']
         d['camera'] = camera_id(d)
         return d
 
@@ -389,6 +397,21 @@ def camera_from_exif_metadata(metadata, data):
         camera.p1 = calib['p1']
         camera.p2 = calib['p2']
         camera.k3 = calib['k3']
+        camera.focal_prior = calib['focal']
+        camera.k1_prior = calib['k1']
+        camera.k2_prior = calib['k2']
+        return camera
+    elif pt == 'fisheye':
+        calib = (hard_coded_calibration(metadata)
+                 or focal_ratio_calibration(metadata)
+                 or default_calibration(data))
+        camera = types.FisheyeCamera()
+        camera.id = metadata['camera']
+        camera.width = metadata['width']
+        camera.height = metadata['height']
+        camera.focal = calib['focal']
+        camera.k1 = calib['k1']
+        camera.k2 = calib['k2']
         camera.focal_prior = calib['focal']
         camera.k1_prior = calib['k1']
         camera.k2_prior = calib['k2']

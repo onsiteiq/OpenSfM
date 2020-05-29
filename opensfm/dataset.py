@@ -109,6 +109,17 @@ class DataSet(object):
         io.mkdir_p(self._undistorted_image_path())
         cv2.imwrite(self._undistorted_image_file(image), array[:, :, ::-1])
 
+    def _full_mosaic_path(self):
+        return os.path.join(self.data_path, 'full_mosaics')
+
+    def _full_mosaic_file(self, image):
+        """Path of undistorted version of an image."""
+        return os.path.join(self._full_mosaic_path(), image + '.jpg')
+
+    def save_full_mosaic_image(self, image, array):
+        io.mkdir_p(self._full_mosaic_path())
+        cv2.imwrite(self._full_mosaic_file(image), array[:, :, ::-1])
+
     def _load_mask_list(self):
         """Load mask list from mask_list.txt or list masks/ folder."""
         mask_list_file = os.path.join(self.data_path, 'mask_list.txt')
