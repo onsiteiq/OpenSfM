@@ -2108,6 +2108,10 @@ def incremental_reconstruction_sequential(data, graph):
         reconstructions = sorted(reconstructions, key=lambda x: -len(x.shots))
         data.save_reconstruction(reconstructions)
 
+        # for gps picker tool, because it doesn't need point cloud, we save the reconstructions without points.
+        # this cuts down the time it needs to download and parse.
+        data.save_reconstruction_no_point(reconstructions)
+
     chrono.lap('compute_reconstructions')
     report['wall_times'] = dict(chrono.lap_times())
     report['not_reconstructed_images'] = list(remaining_images)

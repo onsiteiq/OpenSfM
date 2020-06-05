@@ -622,6 +622,13 @@ class DataSet(object):
         with io.open_wt(self._reconstruction_file(filename)) as fout:
             io.json_dump(io.reconstructions_to_json(reconstruction), fout, minify)
 
+    def save_reconstruction_no_point(self, reconstruction, minify=False):
+        with io.open_wt(self._reconstruction_file('reconstruction_no_point.json')) as fout:
+            objs = io.reconstructions_to_json(reconstruction)
+            for obj in objs:
+                obj['points'] = {}
+            io.json_dump(objs, fout, minify)
+
     def load_undistorted_reconstruction(self):
         return self.load_reconstruction(
             filename='undistorted_reconstruction.json')
