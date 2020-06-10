@@ -199,9 +199,8 @@ def detect(args):
 
         # We might consider combining a user supplied mask here as well
 
-        # TODO fix mask
         undist_img = resized_image(undist_img, data.config)
-        p_unsorted, f_unsorted, c_unsorted = features.extract_features(undist_img, data.config, None)
+        p_unsorted, f_unsorted, c_unsorted = features.extract_features(undist_img, data.config, undist_mask)
 
         # Visualize the features on the unfolded cube
         # --------------------------------------------------------------
