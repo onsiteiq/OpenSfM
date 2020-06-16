@@ -33,6 +33,8 @@ class Command:
 
         start = timer()
         processes = data.config['feature_processes']
+        
+        logger.info( 'Num feature processes: {}'.format( str(processes) ) )
 
         # generate 'super point' features if flag is on
         if data.config['feature_use_superpoint']:
@@ -96,9 +98,13 @@ def resized_image(image, config):
     """Resize image to feature_process_size."""
     max_size = config.get('feature_process_size', -1)
     h, w, _ = image.shape
+    
     size = max(w, h)
     if 0 < max_size < size:
         dsize = w * max_size // size, h * max_size // size
+        
+        logger.info( 'Feature process imaged resized: w - {} h - {}'.format( str(dsize[0]), str(dsize[1]) ) )
+        
         return cv2.resize(image, dsize=dsize, interpolation=cv2.INTER_AREA)
     else:
         return image

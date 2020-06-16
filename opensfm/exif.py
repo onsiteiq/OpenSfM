@@ -83,7 +83,7 @@ def camera_id_(make, model, width, height, projection_type, focal):
 
 def extract_exif_from_file( fileobj, data ):
 
-    if data.config['exif_template_mode'] == 'custom' :
+    if data.config.get('exif_template_mode', 'custom' ) == 'custom' :
             
         return data.load_exif_template()
         
