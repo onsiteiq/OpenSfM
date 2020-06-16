@@ -629,6 +629,14 @@ class DataSet(object):
                 obj['points'] = {}
             io.json_dump(objs, fout, minify)
 
+    def _recon_quality_path(self):
+        return os.path.join(self.data_path, 'recon_quality.txt')
+
+    def save_recon_quality(self, recon_quality):
+        """Save recon quality 0-100 to a file."""
+        with io.open_wt(self._recon_quality_path()) as fout:
+            return fout.write("recon_quality_factor " + recon_quality)
+
     def load_undistorted_reconstruction(self):
         return self.load_reconstruction(
             filename='undistorted_reconstruction.json')

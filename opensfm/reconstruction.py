@@ -2097,20 +2097,27 @@ def incremental_reconstruction_sequential(data, graph):
             # remove frames from recons that are obviously wrong according to pdr
             remove_bad_frames(reconstructions)
 
-        cnt_large_recon = 0
-        for recon in reconstructions:
-            if len(recon.shots) > 100:
-                cnt_large_recon += len(recon.shots)
-
-        ratio_large_recon = cnt_large_recon / cnt_images
-        logger.info("{}% images in large recon".format(int(100*ratio_large_recon)))
-
         reconstructions = sorted(reconstructions, key=lambda x: -len(x.shots))
         data.save_reconstruction(reconstructions)
 
         # for gps picker tool, because it doesn't need point cloud, we save the reconstructions without points.
         # this cuts down the time it needs to download and parse.
         data.save_reconstruction_no_point(reconstructions)
+
+        # for gps picker tool, calculate and save a recon quality factor. pdr/hybrid will be based on it.
+        if cnt_images <= 100:
+            if len(reconstructions) == 1:
+                quality_factor = 100
+            else:
+                quality_factor = 0
+        else:
+            cnt_large_recon = 0
+            for recon in reconstructions:
+                if len(recon.shots) > 100:
+                    cnt_large_recon += len(recon.shots)
+
+            quality_factor = int(100 * cnt_large_recon / cnt_images)
+        data.save_recon_quality(str(quality_factor))
 
     chrono.lap('compute_reconstructions')
     report['wall_times'] = dict(chrono.lap_times())
