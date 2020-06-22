@@ -79,7 +79,7 @@ def equi_to_unfolded_cube(args):
 
         # For spherical cameras create an undistorted image (feature finding and/or AI purposes)
         
-        max_size = data.config.get('feature_process_size', -1)
+        max_size = data.config.get( 'ai_process_size', 4096 )
         if max_size == -1:
             max_size = img.shape[1]
         
