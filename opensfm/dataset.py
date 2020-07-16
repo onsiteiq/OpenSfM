@@ -7,13 +7,13 @@ import pickle
 import gzip
 import glob
 
-import cv2
 import numpy as np
 import six
 
 from opensfm import io
 from opensfm import config
 from opensfm import context
+from opensfm import geo
 from opensfm import tracking
 from opensfm import features
 from opensfm import upright
@@ -26,7 +26,7 @@ class DataSet(object):
     """Accessors to the main input and output data.
 
     Data include input images, masks, and segmentation as well
-    temporary data such as feature and matches and the final
+    temporary data such as features and matches and the final
     reconstructions.
 
     All data is stored inside a single folder with a specific subfolder
@@ -94,6 +94,10 @@ class DataSet(object):
         """
         return io.imread(self._image_file(image))
 
+    def image_size(self, image):
+        """Height and width of the image."""
+        return io.image_size(self._image_file(image))
+
     def _undistorted_image_path(self):
         return os.path.join(self.data_path, 'undistorted')
 
@@ -106,8 +110,13 @@ class DataSet(object):
         return io.imread(self._undistorted_image_file(image))
 
     def save_undistorted_image(self, image, array):
+        """Save undistorted image pixels."""
         io.mkdir_p(self._undistorted_image_path())
-        cv2.imwrite(self._undistorted_image_file(image), array[:, :, ::-1])
+        io.imwrite(self._undistorted_image_file(image), array)
+        
+    def undistorted_image_size(self, image):
+        """Height and width of the undistorted image."""
+        return io.image_size(self._undistorted_image_file(image))
 
     def _full_mosaic_path(self):
         return os.path.join(self.data_path, 'full_mosaics')
@@ -118,13 +127,14 @@ class DataSet(object):
 
     def save_full_mosaic_image(self, image, array):
         io.mkdir_p(self._full_mosaic_path())
-        cv2.imwrite(self._full_mosaic_file(image), array[:, :, ::-1])
+        io.imwrite(self._full_mosaic_file(image))
+
 
     def _load_mask_list(self):
         """Load mask list from mask_list.txt or list masks/ folder."""
         mask_list_file = os.path.join(self.data_path, 'mask_list.txt')
         if os.path.isfile(mask_list_file):
-            with open(mask_list_file) as fin:
+            with io.open_rt(mask_list_file) as fin:
                 lines = fin.read().splitlines()
             self._set_mask_list(lines)
         else:
@@ -134,44 +144,42 @@ class DataSet(object):
         """Load image mask if it exists, otherwise return None."""
         if image in self.mask_files:
             mask_path = self.mask_files[image]
-            mask = cv2.imread(mask_path)
+            mask = io.imread(mask_path, grayscale=True)
             if mask is None:
                 raise IOError("Unable to load mask for image {} "
                               "from file {}".format(image, mask_path))
-            if len(mask.shape) == 3:
-                mask = mask.max(axis=2)
         else:
             mask = None
         return mask
 
     def load_features_mask(self, image, feat):
-         """Load a feature-wise mask if it exists, otherwise return None.
+        """Load a feature-wise mask if it exists, otherwise return None.
 
-         This mask is used when performing features matching.
-         """
-         if feat is None or len(feat) == 0:
-             return np.array([], dtype=bool)
+        This mask is used when performing features matching.
+        """
+        if feat is None or len(feat) == 0:
+            return np.array([], dtype=bool)
 
-         mask_image = self.load_combined_mask(image)
-         if mask_image is None:
-             logger.debug('No segmentation for {}, no features masked.'.format(image))
-             return np.ones((feat.shape[0],), dtype=bool)
+        mask_image = self.load_combined_mask(image)
+        if mask_image is None:
+            logger.debug('No segmentation for {}, no features masked.'.format(image))
+            return np.ones((feat.shape[0],), dtype=bool)
 
-         exif = self.load_exif(image)
-         width = exif["width"]
-         height = exif["height"]
-         orientation = exif["orientation"]
+        exif = self.load_exif(image)
+        width = exif["width"]
+        height = exif["height"]
+        orientation = exif["orientation"]
 
-         new_height, new_width = mask_image.shape
-         ps = upright.opensfm_to_upright(feat, width, height, orientation,
-                                         new_width=new_width, new_height=new_height).astype(int)
-         mask = mask_image[ps[:, 1], ps[:, 0]]
+        new_height, new_width = mask_image.shape
+        ps = upright.opensfm_to_upright(feat, width, height, orientation,
+                                        new_width=new_width, new_height=new_height).astype(int)
+        mask = mask_image[ps[:, 1], ps[:, 0]]
 
-         n_removed = len(mask) - np.sum(mask)
-         logger.debug('Masking {} / {} ({:.2f}) features for {}'.format(
-             n_removed, len(mask), n_removed / len(mask), image))
+        n_removed = len(mask) - np.sum(mask)
+        logger.debug('Masking {} / {} ({:.2f}) features for {}'.format(
+                    n_removed, len(mask), n_removed / len(mask), image))
 
-         return np.array(mask, dtype=bool)
+        return np.array(mask, dtype=bool)
 
     def _undistorted_mask_path(self):
         return os.path.join(self.data_path, 'undistorted_masks')
@@ -186,12 +194,49 @@ class DataSet(object):
 
     def load_undistorted_mask(self, image):
         """Load undistorted mask pixels as a numpy array."""
-        return io.imread(self._undistorted_mask_file(image))
+        return io.imread(self._undistorted_mask_file(image), grayscale=True)
 
     def save_undistorted_mask(self, image, array):
         """Save the undistorted image mask."""
         io.mkdir_p(self._undistorted_mask_path())
-        cv2.imwrite(self._undistorted_mask_file(image), array)
+        io.imwrite(self._undistorted_mask_file(image), array)
+
+    def _detection_path(self):
+        return os.path.join(self.data_path, 'detections')
+
+    def _detection_file(self, image):
+        return os.path.join(self._detection_path(), image + '.png')
+
+    def load_detection(self, image):
+        """Load image detection if it exists, otherwise return None."""
+        detection_file = self._detection_file(image)
+        if os.path.isfile(detection_file):
+            detection = io.imread(detection_file, grayscale=True)
+        else:
+            detection = None
+        return detection
+
+    def _undistorted_detection_path(self):
+        return os.path.join(self.data_path, 'undistorted_detections')
+
+    def _undistorted_detection_file(self, image):
+        """Path of undistorted version of a detection."""
+        return os.path.join(self._undistorted_detection_path(), image + '.png')
+
+    def undistorted_detection_exists(self, image):
+        """Check if the undistorted detection file exists."""
+        return os.path.isfile(self._undistorted_detection_file(image))
+
+    def load_undistorted_detection(self, image):
+        """Load an undistorted image detection."""
+        detection = io.imread(self._undistorted_detection_file(image),
+                              grayscale=True)
+        return detection
+
+    def save_undistorted_detection(self, image, array):
+        """Save the undistorted image detection."""
+        io.mkdir_p(self._undistorted_detection_path())
+        io.imwrite(self._undistorted_detection_file(image), array)
 
     def _segmentation_path(self):
         return os.path.join(self.data_path, 'segmentations')
@@ -200,12 +245,10 @@ class DataSet(object):
         return os.path.join(self._segmentation_path(), image + '.png')
 
     def load_segmentation(self, image):
-        """Load image segmentation if it exitsts, otherwise return None."""
+        """Load image segmentation if it exists, otherwise return None."""
         segmentation_file = self._segmentation_file(image)
         if os.path.isfile(segmentation_file):
-            segmentation = cv2.imread(segmentation_file)
-            if len(segmentation.shape) == 3:
-                segmentation = segmentation.max(axis=2)
+            segmentation = io.imread(segmentation_file, grayscale=True)
         else:
             segmentation = None
         return segmentation
@@ -223,15 +266,14 @@ class DataSet(object):
 
     def load_undistorted_segmentation(self, image):
         """Load an undistorted image segmentation."""
-        segmentation = cv2.imread(self._undistorted_segmentation_file(image))
-        if len(segmentation.shape) == 3:
-            segmentation = segmentation.max(axis=2)
+        segmentation = io.imread(self._undistorted_segmentation_file(image),
+                                 grayscale=True)
         return segmentation
 
     def save_undistorted_segmentation(self, image, array):
         """Save the undistorted image segmentation."""
         io.mkdir_p(self._undistorted_segmentation_path())
-        cv2.imwrite(self._undistorted_segmentation_file(image), array)
+        io.imwrite(self._undistorted_segmentation_file(image), array)
 
     def segmentation_ignore_values(self, image):
         """List of label values to ignore.
@@ -349,16 +391,20 @@ class DataSet(object):
     def pruned_depthmap_exists(self, image):
         return os.path.isfile(self._depthmap_file(image, 'pruned.npz'))
 
-    def save_pruned_depthmap(self, image, points, normals, colors, labels):
+    def save_pruned_depthmap(self, image, points, normals, colors, labels, detections):
         io.mkdir_p(self._depthmap_path())
         filepath = self._depthmap_file(image, 'pruned.npz')
         np.savez_compressed(filepath,
                             points=points, normals=normals,
-                            colors=colors, labels=labels)
+                            colors=colors, labels=labels,
+                            detections=detections)
 
     def load_pruned_depthmap(self, image):
         o = np.load(self._depthmap_file(image, 'pruned.npz'))
-        return o['points'], o['normals'], o['colors'], o['labels']
+        if 'detections' not in o:
+            return o['points'], o['normals'], o['colors'], o['labels'], np.zeros(o['labels'].shape)
+        else:
+            return o['points'], o['normals'], o['colors'], o['labels'], o['detections']
 
     def _is_image_file(self, filename):
         extensions = {'jpg', 'jpeg', 'png', 'tif', 'tiff', 'pgm', 'pnm', 'gif'}
@@ -476,11 +522,11 @@ class DataSet(object):
         return os.path.join(self._feature_path(), image + '.features.npz')
 
     def _feature_file_legacy(self, image):
-         """
-         Return path of a legacy feature file for specified image
-         :param image: Image name, with extension (i.e. 123.jpg)
-         """
-         return os.path.join(self._feature_path(), image + '.npz')
+        """
+        Return path of a legacy feature file for specified image
+        :param image: Image name, with extension (i.e. 123.jpg)
+        """
+        return os.path.join(self._feature_path(), image + '.npz')
 
     def _save_features(self, filepath, points, descriptors, colors=None):
         io.mkdir_p(self._feature_path())
@@ -488,11 +534,11 @@ class DataSet(object):
 
     def features_exist(self, image):
         return os.path.isfile(self._feature_file(image)) or\
-             os.path.isfile(self._feature_file_legacy(image))
+            os.path.isfile(self._feature_file_legacy(image))
 
     def load_features(self, image):
         if os.path.isfile(self._feature_file_legacy(image)):
-             return features.load_features(self._feature_file_legacy(image), self.config)
+            return features.load_features(self._feature_file_legacy(image), self.config)
         return features.load_features(self._feature_file(image), self.config)
 
     def save_features(self, image, points, descriptors, colors):
@@ -510,7 +556,7 @@ class DataSet(object):
 
     def load_feature_index(self, image, features):
         if not self.feature_index_exists(image):
-             raise IOError("FLANN index file for {} doesn't exists.".format(image))
+            raise IOError("FLANN index file for {} doesn't exists.".format(image))
         index = context.flann_Index()
         index.load(features, self._feature_index_file(image))
         return index
@@ -585,8 +631,11 @@ class DataSet(object):
 
     def load_tracks_graph(self, filename=None):
         """Return graph (networkx data structure) of tracks"""
-        with open(self._tracks_graph_file(filename)) as fin:
+        with io.open_rt(self._tracks_graph_file(filename)) as fin:
             return tracking.load_tracks_graph(fin)
+
+    def tracks_exists(self, filename=None):
+        return os.path.isfile(self._tracks_graph_file(filename))
 
     def save_tracks_graph(self, graph, filename=None):
         with io.open_wt(self._tracks_graph_file(filename)) as fout:
@@ -614,8 +663,8 @@ class DataSet(object):
         return os.path.isfile(self._reconstruction_file(filename))
 
     def load_reconstruction(self, filename=None):
-        with open(self._reconstruction_file(filename)) as fin:
-            reconstructions = io.reconstructions_from_json(json.load(fin))
+        with io.open_rt(self._reconstruction_file(filename)) as fin:
+            reconstructions = io.reconstructions_from_json(io.json_load(fin))
         return reconstructions
 
     def save_reconstruction(self, reconstruction, filename=None, minify=False):
@@ -678,6 +727,12 @@ class DataSet(object):
         with io.open_rt(self._reference_lla_path()) as fin:
             return io.json_load(fin)
 
+    def load_reference(self):
+        """Load reference as a topocentric converter."""
+        lla = self.load_reference_lla()
+        return geo.TopocentricConverter(
+            lla['latitude'], lla['longitude'], lla['altitude'])
+
     def reference_lla_exists(self):
         return os.path.isfile(self._reference_lla_path())
 
@@ -739,7 +794,7 @@ class DataSet(object):
 
     def load_report(self, path):
         """Load a report file as a string."""
-        with open(os.path.join(self._report_path(), path)) as fin:
+        with io.open_rt(os.path.join(self._report_path(), path)) as fin:
             return fin.read()
 
     def save_report(self, report_str, path):
@@ -819,10 +874,13 @@ class DataSet(object):
         self.pdr_predictions_dict = pdr_predictions_dict
 
     def _ground_control_points_file(self):
-        return os.path.join(self.data_path, 'gcp_list.txt')
+        return os.path.join(self.data_path, 'ground_control_points.json')
 
     def ground_control_points_exist(self):
         return os.path.isfile(self._ground_control_points_file())
+
+    def _gcp_list_file(self):
+        return os.path.join(self.data_path, 'gcp_list.txt')
 
     def load_ground_control_points(self):
         """Load ground control points.
@@ -830,16 +888,20 @@ class DataSet(object):
         It uses reference_lla to convert the coordinates
         to topocentric reference frame.
         """
-        # As a backup in case the images are not present get the names from the exif metadata files
-        images = self.images()
-        if not images:
-            images = self.image_names_from_exif()
+        exif = {image: self.load_exif(image) for image in self.images()}
+        reference = self.load_reference()
 
-        exif = { image: self.load_exif(image) for image in images }
+        gcp = []
+        if os.path.isfile(self._gcp_list_file()):
+            with io.open_rt(self._gcp_list_file()) as fin:
+                gcp = io.read_gcp_list(fin, reference, exif)
 
-        with open(self._ground_control_points_file()) as fin:
-            return io.read_ground_control_points_list(
-                fin, self.load_reference_lla(), exif)
+        pcs = []
+        if os.path.isfile(self._ground_control_points_file()):
+            with io.open_rt(self._ground_control_points_file()) as fin:
+                pcs = io.read_ground_control_points(fin, reference)
+
+        return gcp + pcs
 
     def _hlf_list_file(self):
         return os.path.join(self.data_path, 'hlf_list.txt')

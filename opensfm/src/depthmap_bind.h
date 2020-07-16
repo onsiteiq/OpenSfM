@@ -1,6 +1,7 @@
+#pragma once
 
 #include "types.h"
-#include "depthmap.cc"
+#include "depthmap.h"
 
 
 namespace csfm {
@@ -24,23 +25,33 @@ class DepthmapEstimatorWrapper {
     de_.SetPatchMatchIterations(n);
   }
 
+  void SetPatchSize(int size) {
+    de_.SetPatchSize(size);
+  }
+
   void SetMinPatchSD(float sd) {
     de_.SetMinPatchSD(sd);
   }
 
   py::object ComputePatchMatch() {
+    py::gil_scoped_release release;
+
     DepthmapEstimatorResult result;
     de_.ComputePatchMatch(&result);
     return ComputeReturnValues(result);
   }
 
   py::object ComputePatchMatchSample() {
+    py::gil_scoped_release release;
+
     DepthmapEstimatorResult result;
     de_.ComputePatchMatchSample(&result);
     return ComputeReturnValues(result);
   }
 
   py::object ComputeBruteForce() {
+    py::gil_scoped_release release;
+
     DepthmapEstimatorResult result;
     de_.ComputeBruteForce(&result);
     return ComputeReturnValues(result);
@@ -79,6 +90,8 @@ class DepthmapCleanerWrapper {
   }
 
   py::object Clean() {
+    py::gil_scoped_release release;
+
     cv::Mat depth;
     dc_.Clean(&depth);
     return py_array_from_data(depth.ptr<float>(0), depth.rows, depth.cols);
@@ -101,20 +114,25 @@ class DepthmapPrunerWrapper {
                pyarray_f depth,
                pyarray_f plane,
                pyarray_uint8 color,
-               pyarray_uint8 label) {
+               pyarray_uint8 label,
+               pyarray_uint8 detection) {
     dp_.AddView(K.data(), R.data(), t.data(),
                 depth.data(), plane.data(),
                 color.data(), label.data(),
+                detection.data(),
                 depth.shape(1), depth.shape(0));
   }
 
   py::object Prune() {
+    py::gil_scoped_release release;
+
     std::vector<float> points;
     std::vector<float> normals;
     std::vector<unsigned char> colors;
     std::vector<unsigned char> labels;
+    std::vector<unsigned char> detections;
 
-    dp_.Prune(&points, &normals, &colors, &labels);
+    dp_.Prune(&points, &normals, &colors, &labels, &detections);
 
     py::list retn;
     int n = int(points.size()) / 3;
@@ -122,6 +140,7 @@ class DepthmapPrunerWrapper {
     retn.append(py_array_from_data(&normals[0], n, 3));
     retn.append(py_array_from_data(&colors[0], n, 3));
     retn.append(py_array_from_data(&labels[0], n));
+    retn.append(py_array_from_data(&detections[0], n));
     return retn;
   }
 

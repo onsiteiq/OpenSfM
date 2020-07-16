@@ -22,7 +22,7 @@ enum {
   BA_SHOT_NUM_PARAMS
 };
 
-enum PositionConstraintType{
+enum PositionConstraintType {
   X = 0x1,
   Y = 0x2,
   Z = 0x4,
@@ -218,20 +218,6 @@ struct BAPointPositionPrior {
   double std_deviation;
 };
 
-struct BAGcpWorldObservation {
-  BAPoint *point;
-  double coordinates[3];
-  bool has_altitude;
-};
-
-struct BAGcpImageObservation {
-  BACamera *camera;
-  BAShot *shot;
-  BAPoint *point;
-  double coordinates[2];
-};
-
-
 struct BARelativeMotion {
   BARelativeMotion(const std::string &reconstruction_i,
                    const std::string &shot_i,
@@ -347,6 +333,7 @@ struct BAAbsolutePosition {
   BAShot *shot;
   Eigen::Vector3d position;
   double std_deviation;
+  std::string std_deviation_group;
 };
 
 struct BAAbsoluteUpVector {
@@ -440,11 +427,6 @@ class BundleAdjuster {
   void AddPoint(const std::string &id, 
                 const Eigen::Vector3d& position,
                 bool constant);
-  void AddGcpPoint(const std::string &id,
-                   double x,
-                   double y,
-                   double z,
-                   bool constant);
 
   // averaging constraints
 
@@ -480,18 +462,6 @@ class BundleAdjuster {
       double z,
       double std_deviation);
 
-  void AddGcpWorldObservation(
-      const std::string &point,
-      double x,
-      double y,
-      double z,
-      bool has_altitude);
-  void AddGcpImageObservation(
-      const std::string &shot,
-      const std::string &point,
-      double x,
-      double y);
-
   void SetOriginShot(const std::string &shot_id);
   void SetUnitTranslationShot(const std::string &shot_id);
 
@@ -509,7 +479,8 @@ class BundleAdjuster {
   void AddAbsolutePosition(
       const std::string &shot_id,
       const Eigen::Vector3d& position,
-      double std_deviation);
+      double std_deviation,
+      const std::string& std_deviation_group);
   void AddAbsoluteUpVector(
       const std::string &shot_id,
       const Eigen::Vector3d& up_vector,
@@ -558,6 +529,7 @@ class BundleAdjuster {
   // minimization setup
   void SetPointProjectionLossFunction(std::string name, double threshold);
   void SetRelativeMotionLossFunction(std::string name, double threshold);
+  void SetAdjustAbsolutePositionStd(bool adjust);
 
   void SetMaxNumIterations(int miter);
   void SetNumThreads(int n);
@@ -593,7 +565,6 @@ class BundleAdjuster {
   BAShot GetShot(const std::string &id);
   BAReconstruction GetReconstruction(const std::string &id);
   BAPoint GetPoint(const std::string &id);
-  BAPoint GetGcpPoint(const std::string &id);
 
   // minimization details
   std::string BriefReport();
@@ -605,7 +576,6 @@ class BundleAdjuster {
   std::map<std::string, BAShot> shots_;
   std::map<std::string, BAReconstruction> reconstructions_;
   std::map<std::string, BAPoint> points_;
-  std::map<std::string, BAPoint> gcp_points_;
   
   // minimization constraints
 
@@ -629,9 +599,6 @@ class BundleAdjuster {
   std::vector<BATranslationPrior> translation_priors_;
   std::vector<BAPositionPrior> position_priors_;
   std::vector<BAPointPositionPrior> point_position_priors_;
-
-  std::vector<BAGcpWorldObservation> gcp_world_observations_;
-  std::vector<BAPointProjectionObservation> gcp_image_observations_;
 
   BAShot *unit_translation_shot_;
 
@@ -657,6 +624,7 @@ class BundleAdjuster {
   double point_projection_loss_threshold_;
   std::string relative_motion_loss_name_;
   double relative_motion_loss_threshold_;
+  bool adjust_absolute_position_std_;
 
   bool compute_covariances_;
   bool covariance_estimation_valid_;

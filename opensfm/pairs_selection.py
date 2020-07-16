@@ -124,6 +124,7 @@ def match_candidates_with_bow(data, images_ref, images_cand,
             pairs = pairs.union(pairs_from_neighbors(im, exifs, order, other, max_neighbors))
         else:
             for i in order[:max_neighbors]:
+                logger.debug("im={}, i={}, other={}".format(im, i, other[i]))
                 dist = calc_pdr_distance(data, im, other[i])
                 if dist < max_pdr_distance * 0.3048:
                     pairs.add(tuple(sorted((im, other[i]))))

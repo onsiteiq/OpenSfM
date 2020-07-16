@@ -13,10 +13,11 @@ import sys
 import cv2
 import numpy as np
 import pyproj
+from PIL import Image
 from six import iteritems
 
-from opensfm import features
 from opensfm import geo
+from opensfm import features
 from opensfm import types
 from opensfm import context
 
@@ -101,6 +102,7 @@ def shot_from_json(key, obj, cameras):
     metadata.capture_time = obj.get("capture_time")
     metadata.gps_dop = obj.get("gps_dop")
     metadata.gps_position = obj.get("gps_position")
+    metadata.skey = obj.get("skey")
 
     shot = types.Shot()
     shot.id = key
@@ -177,8 +179,16 @@ def reconstruction_from_json(obj):
     # Extract main and unit shots
     if 'main_shot' in obj:
         reconstruction.main_shot = obj['main_shot']
+    if 'main_shots' in obj:
+        reconstruction.main_shots = obj['main_shots']
     if 'unit_shot' in obj:
         reconstruction.unit_shot = obj['unit_shot']
+
+    # Extract reference topocentric frame
+    if 'reference_lla' in obj:
+        lla = obj['reference_lla']
+        reconstruction.reference = geo.TopocentricConverter(
+            lla['latitude'], lla['longitude'], lla['altitude'])
 
     return reconstruction
 
@@ -349,8 +359,19 @@ def reconstruction_to_json(reconstruction):
     # Extract main and unit shots
     if hasattr(reconstruction, 'main_shot'):
         obj['main_shot'] = reconstruction.main_shot
+    if hasattr(reconstruction, 'main_shots'):
+        obj['main_shots'] = reconstruction.main_shots
     if hasattr(reconstruction, 'unit_shot'):
         obj['unit_shot'] = reconstruction.unit_shot
+
+    # Extract reference topocentric frame
+    if reconstruction.reference:
+        ref = reconstruction.reference
+        obj['reference_lla'] = {
+            'latitude': ref.lat,
+            'longitude': ref.lon,
+            'altitude': ref.alt,
+        }
 
     return obj
 
@@ -372,33 +393,47 @@ def cameras_to_json(cameras):
     return obj
 
 
-def _read_gcp_list_line(line, projection, reference_lla, exif):
-    words = line.split()
-    easting, northing, alt, pixel_x, pixel_y = map(float, words[:5])
-    shot_id = words[5]
+def _read_gcp_list_lines(lines, projection, reference, exif):
+    points = {}
+    for line in lines:
+        words = line.split(None, 5)
+        easting, northing, alt, pixel_x, pixel_y = map(float, words[:5])
+        shot_id = words[5].strip()
+        key = (easting, northing, alt)
 
-    # Convert 3D coordinates
-    if projection is not None:
-        lon, lat = projection(easting, northing, inverse=True)
-    else:
-        lon, lat = easting, northing
-    x, y, z = geo.topocentric_from_lla(
-        lat, lon, alt,
-        reference_lla['latitude'],
-        reference_lla['longitude'],
-        reference_lla['altitude'])
+        if key in points:
+            point = points[key]
+        else:
+            # Convert 3D coordinates
+            if np.isnan(alt):
+                alt = 0
+                has_altitude = False
+            else:
+                has_altitude = True
+            if projection is not None:
+                lon, lat = projection(easting, northing, inverse=True)
+            else:
+                lon, lat = easting, northing
+            x, y, z = reference.to_topocentric(lat, lon, alt)
 
-    # Convert 2D coordinates
-    d = exif[shot_id]
-    coordinates = features.normalized_image_coordinates(
-        np.array([[pixel_x, pixel_y]]), d['width'], d['height'])[0]
+            point = types.GroundControlPoint()
+            point.id = "unnamed-%d" % len(points)
+            point.lla = np.array([lat, lon, alt])
+            point.coordinates = np.array([x, y, z])
+            point.has_altitude = has_altitude
+            points[key] = point
 
-    o = types.GroundControlPointObservation()
-    o.lla = np.array([lat, lon, alt])
-    o.coordinates = np.array([x, y, z])
-    o.shot_id = shot_id
-    o.shot_coordinates = coordinates
-    return o
+        # Convert 2D coordinates
+        d = exif[shot_id]
+        coordinates = features.normalized_image_coordinates(
+            np.array([[pixel_x, pixel_y]]), d['width'], d['height'])[0]
+
+        o = types.GroundControlPointObservation()
+        o.shot_id = shot_id
+        o.projection = coordinates
+        point.observations.append(o)
+
+    return list(points.values())
 
 
 def _parse_utm_projection_string(line):
@@ -436,17 +471,81 @@ def _valid_gcp_line(line):
     return stripped and stripped[0] != '#'
 
 
-def read_ground_control_points_list(fileobj, reference_lla, exif):
-    """Read a ground control point list file.
+def read_gcp_list(fileobj, reference, exif):
+    """Read a ground control points from a gcp_list.txt file.
 
     It requires the points to be in the WGS84 lat, lon, alt format.
     """
     all_lines = fileobj.readlines()
     lines = iter(filter(_valid_gcp_line, all_lines))
     projection = _parse_projection(next(lines))
-    points = [_read_gcp_list_line(line, projection, reference_lla, exif)
-              for line in lines]
+    points = _read_gcp_list_lines(lines, projection, reference, exif)
     return points
+
+
+def read_ground_control_points(fileobj, reference):
+    """Read ground control points from json file.
+
+    Returns list of types.GroundControlPoint.
+    """
+    obj = json_load(fileobj)
+
+    points = []
+    for point_dict in obj['points']:
+        point = types.GroundControlPoint()
+        point.id = point_dict['id']
+        point.lla = point_dict.get('position')
+        if point.lla:
+            point.coordinates = reference.to_topocentric(
+                point.lla['latitude'],
+                point.lla['longitude'],
+                point.lla.get('altitude', 0))
+            point.has_altitude = ('altitude' in point.lla)
+
+        point.observations = []
+        for o_dict in point_dict['observations']:
+            o = types.GroundControlPointObservation()
+            o.shot_id = o_dict['shot_id']
+            if 'projection' in o_dict:
+                o.projection = np.array(o_dict['projection'])
+            point.observations.append(o)
+        points.append(point)
+    return points
+
+
+def write_ground_control_points(gcp, fileobj, reference):
+    """Write ground control points to json file."""
+    obj = {"points": []}
+
+    for point in gcp:
+        point_obj = {}
+        point_obj['id'] = point.id
+        if point.lla:
+            point_obj['position'] = {
+                'latitude': point.lla['latitude'],
+                'longitude': point.lla['longitude'],
+            }
+            if point.has_altitude:
+                point_obj['position']['altitude'] = point.lla['altitude']
+        elif point.coordinates:
+            lat, lon, alt = reference.to_lla(*point.coordinates)
+            point_obj['position'] = {
+                'latitude': lat,
+                'longitude': lon,
+            }
+            if point.has_altitude:
+                point_obj['position']['altitude'] = alt
+
+        point_obj['observations'] = []
+        for observation in point.observations:
+            point_obj['observations'].append({
+                'shot_id': observation.shot_id,
+                'projection': tuple(observation.projection),
+            })
+
+        obj['points'].append(point_obj)
+
+    json_dump(obj, fileobj)
 
 
 def _read_gps_points_list_line( line, projection ):
@@ -628,10 +727,16 @@ def json_loads(text):
     return json.loads(text)
 
 
-def imread(filename):
-    """Load image as an RGB array ignoring EXIF orientation."""
+def imread(filename, grayscale=False, unchanged=False):
+    """Load image as an array ignoring EXIF orientation."""
     if context.OPENCV3:
-        flags = cv2.IMREAD_COLOR
+        if grayscale:
+            flags = cv2.IMREAD_GRAYSCALE
+        elif unchanged:
+            flags = cv2.IMREAD_UNCHANGED
+        else:
+            flags = cv2.IMREAD_COLOR
+
         try:
             flags |= cv2.IMREAD_IGNORE_ORIENTATION
         except AttributeError:
@@ -640,20 +745,40 @@ def imread(filename):
                 "rotating them according to EXIF. Please upgrade OpenCV to "
                 "version 3.2 or newer.".format(cv2.__version__))
     else:
-        flags = cv2.CV_LOAD_IMAGE_COLOR
+        if grayscale:
+            flags = cv2.CV_LOAD_IMAGE_GRAYSCALE
+        elif unchanged:
+            flags = cv2.CV_LOAD_IMAGE_UNCHANGED
+        else:
+            flags = cv2.CV_LOAD_IMAGE_COLOR
 
-    bgr = cv2.imread(filename, flags)
+    image = cv2.imread(filename, flags)
 
-    if bgr is None:
+    if image is None:
         raise IOError("Unable to load image {}".format(filename))
 
-    return bgr[:, :, ::-1]  # Turn BGR to RGB
+    if len(image.shape) == 3:
+        image[:, :, :3] = image[:, :, [2, 1, 0]]  # Turn BGR to RGB (or BGRA to RGBA)
+    return image
 
 
 def imwrite(filename, image):
-    """Write an RGB image to a file"""
-    bgr = image[:, :, ::-1]
-    cv2.imwrite(filename, bgr)
+    """Write an image to a file"""
+    if len(image.shape) == 3:
+        image[:, :, :3] = image[:, :, [2, 1, 0]]  # Turn RGB to BGR (or RGBA to BGRA)
+    cv2.imwrite(filename, image)
+
+
+def image_size(filename):
+    """Height and width of an image."""
+    try:
+        with Image.open(filename) as img:
+            width, height = img.size
+            return height, width
+    except:
+        # Slower fallback
+        image = imread(filename)
+        return image.shape[:2]
 
 
 # Bundler
@@ -682,8 +807,13 @@ def export_bundler(image_list, reconstructions, track_graph, bundle_file_path,
             if shot_id in shots:
                 shot = shots[shot_id]
                 camera = shot.camera
+                if type(camera) == types.BrownPerspectiveCamera:
+                    # Will aproximate Brown model, not optimal
+                    focal_normalized = camera.focal_x
+                else:
+                    focal_normalized = camera.focal
                 scale = max(camera.width, camera.height)
-                focal = camera.focal * scale
+                focal = focal_normalized * scale
                 k1 = camera.k1
                 k2 = camera.k2
                 R = shot.pose.get_rotation_matrix()
@@ -856,6 +986,69 @@ def import_bundler(data_path, bundle_file, list_file, track_file,
 
 # PLY
 
+def ply_header(count_vertices, with_normals=False):
+    if with_normals:
+        header = [
+            "ply",
+            "format ascii 1.0",
+            "element vertex {}".format(count_vertices),
+            "property float x",
+            "property float y",
+            "property float z",
+            "property float nx",
+            "property float ny",
+            "property float nz",
+            "property uchar diffuse_red",
+            "property uchar diffuse_green",
+            "property uchar diffuse_blue",
+            "end_header",
+        ]
+    else:
+        header = [
+            "ply",
+            "format ascii 1.0",
+            "element vertex {}".format(count_vertices),
+            "property float x",
+            "property float y",
+            "property float z",
+            "property uchar diffuse_red",
+            "property uchar diffuse_green",
+            "property uchar diffuse_blue",
+            "end_header",
+        ]
+    return header
+
+
+def points_to_ply_string(vertices):
+    header = ply_header(len(vertices))
+    return '\n'.join(header + vertices + [''])
+
+
+def ply_to_points(filename):
+    points, normals, colors = [], [], []
+    with open(filename, 'r') as fin:
+        line = fin.readline()
+        while 'end_header' not in line:
+            line = fin.readline()
+        line = fin.readline()
+        while line != '':
+            line = fin.readline()
+            tokens = line.rstrip().split(' ')
+            if len(tokens) == 6 or len(tokens) == 7: # XYZ and RGB(A)
+                x, y, z, r, g, b = tokens[0:6]
+                nx, ny, nz = 0, 0, 0
+            elif len(tokens) > 7:                    # XYZ + Normal + RGB
+                x, y, z = tokens[0:3]
+                nx, ny, nz = tokens[3:6]
+                r, g, b = tokens[6:9]
+            else:
+                break
+            points.append([float(x), float(y), float(z)])
+            normals.append([float(nx), float(ny), float(nz)])
+            colors.append([int(r), int(g), int(b)])
+    return np.array(points), np.array(normals), np.array(colors)
+
+
 def reconstruction_to_ply(reconstruction, no_cameras=False, no_points=False):
     """Export reconstruction points as a PLY string."""
     vertices = []
@@ -873,23 +1066,9 @@ def reconstruction_to_ply(reconstruction, no_cameras=False, no_points=False):
             R = shot.pose.get_rotation_matrix()
             for axis in range(3):
                 c = 255 * np.eye(3)[axis]
-                for depth in np.linspace(0, 1, 10):
+                for depth in np.linspace(0, 2, 10):
                     p = o + depth * R[axis]
                     s = "{} {} {} {} {} {}".format(
                         p[0], p[1], p[2], int(c[0]), int(c[1]), int(c[2]))
                     vertices.append(s)
-
-    header = [
-        "ply",
-        "format ascii 1.0",
-        "element vertex {}".format(len(vertices)),
-        "property float x",
-        "property float y",
-        "property float z",
-        "property uchar diffuse_red",
-        "property uchar diffuse_green",
-        "property uchar diffuse_blue",
-        "end_header",
-    ]
-
-    return '\n'.join(header + vertices + [''])
+    return points_to_ply_string(vertices)

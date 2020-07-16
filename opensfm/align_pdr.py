@@ -364,6 +364,8 @@ def hybrid_align_pdr(data, target_images=None):
     aligned_recons = []
     aligned_shots_dict = curr_gps_points_dict.copy()
 
+    graph = None
+
     # init pdr predictions
     pdr_predictions_dict = update_pdr_global_2d(curr_gps_points_dict, pdr_shots_dict, scale_factor, False)
 
@@ -398,11 +400,18 @@ def hybrid_align_pdr(data, target_images=None):
                 # combine trusted shots with gps points
                 recon_trusted_shots.update(recon_gps_points)
 
-                aligned_recon = align_reconstruction_segments(data, recon, recon_trusted_shots)
-                aligned_recons.append(aligned_recon)
+                # only need to load graph if it hasn't been loaded before AND there are more than
+                # 2 trusted points on this recon (hence the need to break it into segments)
+                if graph is None and len(recon_trusted_shots) > 2:
+                    graph = data.load_tracks_graph()
 
-                for shot_id in aligned_recon.shots:
-                    aligned_shots_dict[shot_id] = aligned_recon.shots[shot_id].pose.get_origin()
+                # below, each 'segment' is a Reconstruction object
+                segments = align_reconstruction_segments(data, graph, recon, recon_trusted_shots)
+                aligned_recons.extend(segments)
+
+                # the 'shot' objects in segments are the same as those in recon
+                for shot_id in recon.shots:
+                    aligned_shots_dict[shot_id] = recon.shots[shot_id].pose.get_origin()
 
                 # update pdr predictions based on aligned shots so far
                 pdr_predictions_dict = update_pdr_global_2d(aligned_shots_dict, pdr_shots_dict, scale_factor, False)
@@ -790,15 +799,13 @@ def align_reconstructions_to_hlf(reconstructions, data):
             logger.debug("{} => {}".format(img_list[i], hlf_list[matches[i]]))
 
 
-def align_reconstruction_segments(data, reconstruction, recon_gps_points):
+def align_reconstruction_segments(data, graph, reconstruction, recon_gps_points):
     """
     align reconstruction to gps points. if more than 2 gps points, alignment is done segment-wise,
-    i.e. two 2 gps points are used at a time. affect shot pose only, not points
+    i.e. two 2 gps points are used at a time. each segment is returned as a separate Reconstruction
+    object. 3d points seen by each shot are assigned to the segment the shot belongs to.
     """
-    cameras = data.load_camera_models()
-
-    aligned_reconstruction = types.Reconstruction()
-    aligned_reconstruction.cameras = cameras
+    segments = []
 
     gps_shot_ids = sorted(recon_gps_points.keys())
 
@@ -836,46 +843,80 @@ def align_reconstruction_segments(data, reconstruction, recon_gps_points):
             Xp[:, 2].mean() - s * X[:, 2].mean()  # vertical alignment
         ])
 
-        start_shot_id = gps_shot_ids[i]
-        end_shot_id = gps_shot_ids[i+1]
-
-        # in first iteration, we transform from first shot of recon
-        # in last iteration, we transform until last shot of recon
         shot_ids = sorted(reconstruction.shots.keys())
         if i == 0:
-            start_shot_id = shot_ids[0]
+            # in first iteration, we transform from first shot of recon
+            start_index = _shot_id_to_int(shot_ids[0])
+        else:
+            start_index = _shot_id_to_int(gps_shot_ids[i])
 
         if i == len(gps_shot_ids)-2:
-            end_shot_id = shot_ids[-1]
+            # in last iteration, we transform until last shot of recon
+            end_index = _shot_id_to_int(shot_ids[-1])
+        else:
+            # subtract 1 at the end, since gps_shots_ids[i+1] will be transformed in the next iteration
+            end_index = _shot_id_to_int(gps_shot_ids[i+1]) - 1
 
-        start_index = _shot_id_to_int(start_shot_id)
-        end_index = _shot_id_to_int(end_shot_id)
+        segment = extract_segment(data, graph, reconstruction, start_index, end_index)
+        apply_similarity(segment, s, A, b)
 
-        # Align cameras.
-        for shot in reconstruction.shots.values():
-            if start_index <= _shot_id_to_int(shot.id) <= end_index:
-                camera = cameras[data.load_exif(shot.id)['camera']]
+        segment.alignment.aligned = True
+        segment.alignment.num_correspondences = 2
 
-                new_shot = types.Shot()
-                new_shot.id = shot.id
-                new_shot.camera = camera
-                new_shot.pose = types.Pose()
+        segments.append(segment)
 
-                R = shot.pose.get_rotation_matrix()
-                t = np.array(shot.pose.translation)
-                Rp = R.dot(A.T)
-                tp = -Rp.dot(b) + s * t
-                try:
-                    new_shot.pose.set_rotation_matrix(Rp)
-                    new_shot.pose.translation = list(tp)
-                except:
-                    logger.debug("unable to transform reconstruction!")
+    return segments
 
-                aligned_reconstruction.add_shot(new_shot)
 
-    aligned_reconstruction.alignment.aligned = True
-    aligned_reconstruction.alignment.num_correspondences = len(recon_gps_points)
-    return aligned_reconstruction
+def point_copy(point):
+    c = types.Point()
+    c.id = point.id
+    c.color = point.color
+    c.coordinates = point.coordinates.copy()
+    c.reprojection_errors = point.reprojection_errors.copy()
+    return c
+
+
+def extract_segment(data, graph, reconstruction, start_index, end_index):
+    recon_points = set(reconstruction.points)
+    segment_points = set()
+
+    segment = types.Reconstruction()
+    segment.cameras = data.load_camera_models()
+
+    for shot in reconstruction.shots.values():
+        if start_index <= _shot_id_to_int(shot.id) <= end_index:
+            segment.add_shot(reconstruction.shots[shot.id])
+            segment_points = segment_points | (recon_points & set(graph[shot.id]))
+
+    # need to copy point because a point may belong to more than one segment
+    for point_id in segment_points:
+        segment.add_point(point_copy(reconstruction.points[point_id]))
+
+    return segment
+
+
+def apply_similarity(reconstruction, s, A, b):
+    """Apply a similarity (y = s A x + b) to a reconstruction.
+
+    :param reconstruction: The reconstruction to transform.
+    :param s: The scale (a scalar)
+    :param A: The rotation matrix (3x3)
+    :param b: The translation vector (3)
+    """
+    # Align points.
+    for point in reconstruction.points.values():
+        Xp = s * A.dot(point.coordinates) + b
+        point.coordinates = Xp.tolist()
+
+    # Align cameras.
+    for shot in reconstruction.shots.values():
+        R = shot.pose.get_rotation_matrix()
+        t = np.array(shot.pose.translation)
+        Rp = R.dot(A.T)
+        tp = -Rp.dot(b) + s * t
+        shot.pose.set_rotation_matrix(Rp)
+        shot.pose.translation = list(tp)
 
 
 def get_origin_no_numpy_opencv(rotation, translation):

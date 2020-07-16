@@ -790,23 +790,37 @@ class Point(object):
         self.reprojection_errors = {}
 
 
-class GroundControlPointObservation(object):
-    """A ground control point observation.
+class GroundControlPoint(object):
+    """A ground control point with its observations.
 
     Attributes:
         lla: latitue, longitude and altitude
         coordinates: x, y, z coordinates in topocentric reference frame
-        shot_id: the shot where the point is observed
-        shot_coordinates: 2d coordinates of the observation
+        has_altitude: true if z coordinate is known
+        observations: list of observations of the point on images
     """
 
     def __init__(self):
+        self.id = None
         self.lla = None
         self.coordinates = None
-        self.shot_id = None
-        self.shot_coordinates = None
+        self.has_altitude = None
+        self.observations = []
 
-        
+
+class GroundControlPointObservation(object):
+    """A ground control point observation.
+
+    Attributes:
+        shot_id: the shot where the point is observed
+        projection: 2d coordinates of the observation
+    """
+
+    def __init__(self):
+        self.shot_id = None
+        self.projection = None
+
+
 class AlignmentInfo(object):
     """Stores reconstruction alignment metadata.
 
@@ -821,13 +835,16 @@ class AlignmentInfo(object):
         self.scaled = False
         self.num_correspondences = 0
 
+
 class Reconstruction(object):
     """Defines the reconstructed scene.
 
     Attributes:
+      alignment (AlignmentInfo): Alignment info.
       cameras (Dict(Camera)): List of cameras.
-      shots   (Dict(Shot)): List of reconstructed shots.
-      points  (Dict(Point)): List of reconstructed points.
+      shots (Dict(Shot)): List of reconstructed shots.
+      points (Dict(Point)): List of reconstructed points.
+      reference (TopocentricConverter): Topocentric reference converter.
     """
 
     def __init__(self):
@@ -836,6 +853,7 @@ class Reconstruction(object):
         self.cameras = {}
         self.shots = {}
         self.points = {}
+        self.reference = None
 
     def add_camera(self, camera):
         """Add a camera in the list

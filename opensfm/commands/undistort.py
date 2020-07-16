@@ -1,7 +1,9 @@
 import logging
 
 import cv2
+import networkx as nx
 import numpy as np
+from six import iteritems
 
 from opensfm import dataset
 from opensfm import features
@@ -24,108 +26,144 @@ class Command:
     def run(self, args):
         data = dataset.DataSet(args.dataset)
         reconstructions = data.load_reconstruction()
-        graph = data.load_tracks_graph()
+        graph = data.load_tracks_graph() if data.tracks_exists() else None
 
         if reconstructions:
             self.undistort_reconstruction(graph, reconstructions[0], data)
 
-        data.save_undistorted_tracks_graph(graph)
-
     def undistort_reconstruction(self, graph, reconstruction, data):
         urec = types.Reconstruction()
         urec.points = reconstruction.points
+        ugraph = nx.Graph()
 
         logger.debug('Undistorting the reconstruction')
         undistorted_shots = {}
         for shot in reconstruction.shots.values():
             if shot.camera.projection_type == 'perspective':
-                urec.add_camera(shot.camera)
-                urec.add_shot(shot)
-                undistorted_shots[shot.id] = [shot]
+                camera = perspective_camera_from_perspective(shot.camera)
+                subshots = [get_shot_with_different_camera(shot, camera)]
             elif shot.camera.projection_type == 'brown':
-                ushot = types.Shot()
-                ushot.id = shot.id
-                ushot.camera = perspective_camera_from_brown(shot.camera)
-                ushot.pose = shot.pose
-                ushot.metadata = shot.metadata
-                urec.add_camera(ushot.camera)
-                urec.add_shot(ushot)
-                undistorted_shots[shot.id] = [ushot]
+                camera = perspective_camera_from_brown(shot.camera)
+                subshots = [get_shot_with_different_camera(shot, camera)]
             elif shot.camera.projection_type == 'fisheye':
-                ushot = types.Shot()
-                ushot.id = shot.id
-                ushot.camera = perspective_camera_from_fisheye(shot.camera)
-                ushot.pose = shot.pose
-                ushot.metadata = shot.metadata
-                urec.add_camera(ushot.camera)
-                urec.add_shot(ushot)
-                undistorted_shots[shot.id] = [ushot]
+                camera = perspective_camera_from_fisheye(shot.camera)
+                subshots = [get_shot_with_different_camera(shot, camera)]
             elif shot.camera.projection_type in ['equirectangular', 'spherical']:
                 subshot_width = int(data.config['depthmap_resolution'])
                 subshots = perspective_views_of_a_panorama(shot, subshot_width)
-                for subshot in subshots:
-                    urec.add_camera(subshot.camera)
-                    urec.add_shot(subshot)
-                    add_subshot_tracks(graph, shot, subshot)
-                undistorted_shots[shot.id] = subshots
+
+            for subshot in subshots:
+                urec.add_camera(subshot.camera)
+                urec.add_shot(subshot)
+                if graph:
+                    add_subshot_tracks(graph, ugraph, shot, subshot)
+            undistorted_shots[shot.id] = subshots
+
         data.save_undistorted_reconstruction([urec])
+        if graph:
+            data.save_undistorted_tracks_graph(ugraph)
 
         arguments = []
         for shot in reconstruction.shots.values():
-            arguments.append((shot, undistorted_shots[shot.id], data,
-                              'load_image',
-                              'save_undistorted_image',
-                              cv2.INTER_AREA))
-            arguments.append((shot, undistorted_shots[shot.id], data,
-                              'load_mask',
-                              'save_undistorted_mask',
-                              cv2.INTER_NEAREST))
-            arguments.append((shot, undistorted_shots[shot.id], data,
-                              'load_segmentation',
-                              'save_undistorted_segmentation',
-                              cv2.INTER_NEAREST))
+            arguments.append((shot, undistorted_shots[shot.id], data))
 
         processes = data.config['processes']
-        parallel_map(undistort_image, arguments, processes)
+        parallel_map(undistort_image_and_masks, arguments, processes)
 
 
-def undistort_image(arguments):
+def undistort_image_and_masks(arguments):
+    shot, undistorted_shots, data = arguments
     log.setup()
-    shot, undistorted_shots, data, load_image, save_image, interpolation = arguments
     logger.debug('Undistorting image {}'.format(shot.id))
 
-    projection_type = shot.camera.projection_type
+    # Undistort image
+    image = data.load_image(shot.id)
+    if image is not None:
+        max_size = 100000
+        undistorted = undistort_image(shot, undistorted_shots, image,
+                                      cv2.INTER_AREA, max_size)
+        for k, v in undistorted.items():
+            data.save_undistorted_image(k, v)
 
+    # Undistort mask
+    mask = data.load_mask(shot.id)
+    if mask is not None:
+        undistorted = undistort_image(shot, undistorted_shots, mask,
+                                      cv2.INTER_NEAREST, 1e9)
+        for k, v in undistorted.items():
+            data.save_undistorted_mask(k, v)
+
+    # Undistort segmentation
+    segmentation = data.load_segmentation(shot.id)
+    if segmentation is not None:
+        undistorted = undistort_image(shot, undistorted_shots, segmentation,
+                                      cv2.INTER_NEAREST, 1e9)
+        for k, v in undistorted.items():
+            data.save_undistorted_segmentation(k, v)
+
+    # Undistort detections
+    detection = data.load_detection(shot.id)
+    if detection is not None:
+        undistorted = undistort_image(shot, undistorted_shots, detection,
+                                      cv2.INTER_NEAREST, 1e9)
+        for k, v in undistorted.items():
+            data.save_undistorted_detection(k, v)
+
+
+def undistort_image(shot, undistorted_shots, original, interpolation,
+                    max_size):
+    """Undistort an image into a set of undistorted ones.
+
+    Args:
+        shot: the distorted shot
+        undistorted_shots: the set of undistorted shots covering the
+            distorted shot field of view. That is 1 for most camera
+            types and 6 for equirectangular cameras.
+        original: the original distorted image array.
+        interpolation: the opencv interpolation flag to use.
+        max_size: maximum size of the undistorted image.
+    """
+    if original is None:
+        return
+
+    projection_type = shot.camera.projection_type
     if projection_type in ['perspective', 'brown', 'fisheye']:
         undistort_function = {
             'perspective': undistort_perspective_image,
             'brown': undistort_brown_image,
             'fisheye': undistort_fisheye_image,
         }
-        image = getattr(data, load_image)(shot.id)
-        if image is None:
-            return
         new_camera = undistorted_shots[0].camera
         uf = undistort_function[projection_type]
-        undistorted = uf(image, shot.camera, new_camera, interpolation)
-        getattr(data, save_image)(shot.id, undistorted)
+        undistorted = uf(original, shot.camera, new_camera, interpolation)
+        return {shot.id: scale_image(undistorted, max_size)}
     elif projection_type in ['equirectangular', 'spherical']:
-        original = getattr(data, load_image)(shot.id)
-        if original is None:
-            return
-        subshot_width = int(data.config['depthmap_resolution'])
+        subshot_width = undistorted_shots[0].camera.width
         width = 4 * subshot_width
         height = width // 2
         image = cv2.resize(original, (width, height), interpolation=interpolation)
+        mint = cv2.INTER_LINEAR if interpolation == cv2.INTER_AREA else interpolation
+        res = {}
         for subshot in undistorted_shots:
             undistorted = render_perspective_view_of_a_panorama(
-                image, shot, subshot,
-                cv2.INTER_LINEAR if interpolation == cv2.INTER_AREA else interpolation)
-            getattr(data, save_image)(subshot.id, undistorted)
+                image, shot, subshot, mint)
+            res[subshot.id] = scale_image(undistorted, max_size)
+        return res
     else:
         raise NotImplementedError(
             'Undistort not implemented for projection type: {}'.format(
                 shot.camera.projection_type))
+
+
+def scale_image(image, max_size):
+    """Scale an image not to exceed max_size."""
+    height, width = image.shape[:2]
+    factor = max_size / float(max(height, width))
+    if factor >= 1:
+        return image
+    width = int(round(width * factor))
+    height = int(round(height * factor))
+    return cv2.resize(image, (width, height), interpolation=cv2.INTER_NEAREST)
 
 
 def undistort_perspective_image(image, camera, new_camera, interpolation):
@@ -159,6 +197,28 @@ def undistort_fisheye_image(image, camera, new_camera, interpolation):
     map1, map2 = cv2.fisheye.initUndistortRectifyMap(
         K, distortion, None, new_K, (width, height), cv2.CV_32FC1)
     return cv2.remap(image, map1, map2, interpolation)
+
+
+def get_shot_with_different_camera(shot, camera):
+    """Copy shot and replace camera."""
+    ushot = types.Shot()
+    ushot.id = shot.id
+    ushot.camera = camera
+    ushot.pose = shot.pose
+    ushot.metadata = shot.metadata
+    return ushot
+
+
+def perspective_camera_from_perspective(distorted):
+    """Create an undistorted camera from a distorted."""
+    camera = types.PerspectiveCamera()
+    camera.id = distorted.id
+    camera.width = distorted.width
+    camera.height = distorted.height
+    camera.focal = distorted.focal
+    camera.focal_prior = distorted.focal_prior
+    camera.k1 = camera.k1_prior = camera.k2 = camera.k2_prior = 0.0
+    return camera
 
 
 def perspective_camera_from_brown(brown):
@@ -219,7 +279,8 @@ def perspective_views_of_a_panorama(spherical_shot, width):
 
 
 def render_perspective_view_of_a_panorama(image, panoshot, perspectiveshot,
-                                          interpolation=cv2.INTER_LINEAR):
+                                          interpolation=cv2.INTER_LINEAR,
+                                          borderMode=cv2.BORDER_WRAP):
     """Render a perspective view of a panorama."""
     # Get destination pixel coordinates
     dst_shape = (perspectiveshot.camera.height, perspectiveshot.camera.width)
@@ -253,16 +314,33 @@ def render_perspective_view_of_a_panorama(image, panoshot, perspectiveshot,
     # Sample color
     x = src_pixels_denormalized[..., 0].astype(np.float32)
     y = src_pixels_denormalized[..., 1].astype(np.float32)
-    colors = cv2.remap(image, x, y, interpolation, borderMode=cv2.BORDER_WRAP)
+    colors = cv2.remap(image, x, y, interpolation, borderMode=borderMode)
 
     return colors
 
 
-def add_subshot_tracks(graph, panoshot, perspectiveshot):
-    """Add edges between subshots and visible tracks."""
-    if panoshot.id not in graph:
+def add_subshot_tracks(graph, ugraph, shot, subshot):
+    """Add shot tracks to the undistorted graph."""
+    if shot.id not in graph:
         return
-    graph.add_node(perspectiveshot.id, bipartite=0)
+
+    if shot.camera.projection_type in ['equirectangular', 'spherical']:
+        add_pano_subshot_tracks(graph, ugraph, shot, subshot)
+    else:
+        ugraph.add_node(subshot.id, bipartite=0)
+        for track_id, edge in iteritems(graph[shot.id]):
+            ugraph.add_node(track_id, bipartite=1)
+            ugraph.add_edge(
+                subshot.id, track_id,
+                feature=edge['feature'],
+                feature_scale=edge['feature_scale'],
+                feature_id=edge['feature_id'],
+                feature_color=edge['feature_color'])
+
+
+def add_pano_subshot_tracks(graph, ugraph, panoshot, perspectiveshot):
+    """Add edges between subshots and visible tracks."""
+    ugraph.add_node(perspectiveshot.id, bipartite=0)
     for track in graph[panoshot.id]:
         edge = graph[panoshot.id][track]
         feature = edge['feature']
@@ -281,8 +359,10 @@ def add_subshot_tracks(graph, panoshot, perspectiveshot):
                 perspective_feature[1] > 0.5):
             continue
 
-        graph.add_edge(perspectiveshot.id,
-                       track,
-                       feature=perspective_feature,
-                       feature_id=edge['feature_id'],
-                       feature_color=edge['feature_color'])
+        ugraph.add_node(track, bipartite=1)
+        ugraph.add_edge(perspectiveshot.id,
+                        track,
+                        feature=perspective_feature,
+                        feature_scale=edge['feature_scale'],
+                        feature_id=edge['feature_id'],
+                        feature_color=edge['feature_color'])

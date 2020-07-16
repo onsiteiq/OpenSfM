@@ -19,6 +19,7 @@ BundleAdjuster::BundleAdjuster() {
   compute_covariances_ = false;
   covariance_estimation_valid_ = false;
   compute_reprojection_errors_ = true;
+  adjust_absolute_position_std_ = false;
   max_num_iterations_ = 500;
   num_threads_ = 1;
   linear_solver_type_ = "SPARSE_NORMAL_CHOLESKY";
@@ -205,51 +206,6 @@ void BundleAdjuster::AddPointPositionPrior(
   point_position_priors_.push_back(p);
 }
 
-void BundleAdjuster::AddGcpPoint(
-    const std::string &id,
-    double x,
-    double y,
-    double z,
-    bool constant) {
-  BAPoint p;
-  p.id = id;
-  p.parameters[0] = x;
-  p.parameters[1] = y;
-  p.parameters[2] = z;
-  p.constant = constant;
-  gcp_points_[id] = p;
-}
-
-void BundleAdjuster::AddGcpWorldObservation(
-    const std::string &point,
-    double x,
-    double y,
-    double z,
-    bool has_altitude) {
-  BAGcpWorldObservation o;
-  o.point = &gcp_points_[point];
-  o.coordinates[0] = x;
-  o.coordinates[1] = y;
-  o.coordinates[2] = z;
-  o.has_altitude = has_altitude;
-  gcp_world_observations_.push_back(o);
-}
-
-void BundleAdjuster::AddGcpImageObservation(
-    const std::string &shot,
-    const std::string &point,
-    double x,
-    double y) {
-  BAPointProjectionObservation o;
-  o.shot = &shots_[shot];
-  o.camera = cameras_[o.shot->camera].get();
-  o.point = &gcp_points_[point];
-  o.coordinates[0] = x;
-  o.coordinates[1] = y;
-  gcp_image_observations_.push_back(o);
-}
-
-
 void BundleAdjuster::SetOriginShot(const std::string &shot_id) {
   BAShot *shot = &shots_[shot_id];
   for (int i = 0; i < 6; ++i) shot->parameters[0] = 0;
@@ -286,11 +242,13 @@ void BundleAdjuster::AddCommonPosition(const std::string &shot_id1,
 
 void BundleAdjuster::AddAbsolutePosition(const std::string &shot_id,
                                              const Eigen::Vector3d& position,
-                                             double std_deviation) {
+                                             double std_deviation,
+                                             const std::string& std_deviation_group) {
   BAAbsolutePosition a;
   a.shot = &shots_[shot_id];
   a.position = position;
   a.std_deviation = std_deviation;
+  a.std_deviation_group = std_deviation_group;
   absolute_positions_.push_back(a);
 }
 
@@ -392,6 +350,10 @@ void BundleAdjuster::SetRelativeMotionLossFunction(std::string name,
   relative_motion_loss_threshold_ = threshold;
 }
 
+void BundleAdjuster::SetAdjustAbsolutePositionStd(bool adjust){
+  adjust_absolute_position_std_ = adjust;
+}
+
 void BundleAdjuster::SetMaxNumIterations(int miter) {
   max_num_iterations_ = miter;
 }
@@ -484,6 +446,17 @@ void BundleAdjuster::AddLinearMotion(const std::string &shot0_id,
   linear_motion_prior_.push_back(a);
 }
 
+struct BAStdDeviationConstraint {
+  BAStdDeviationConstraint() = default;
+
+  template <typename T>
+  bool operator()(const T* const std_deviation, T* residuals) const {
+    T std = std_deviation[0];
+    residuals[0] = ceres::log(T(1.0)/ceres::sqrt(T(2.0*M_PI)*std*std));
+    return true;
+  }
+};
+
 void BundleAdjuster::Run() {
   ceres::Problem problem;
 
@@ -497,6 +470,35 @@ void BundleAdjuster::Run() {
     }
   }
 
+  for (auto &i : cameras_) {
+    if (i.second->constant) {
+      switch (i.second->type()) {
+        case BA_PERSPECTIVE_CAMERA: {
+          BAPerspectiveCamera &c =
+              static_cast<BAPerspectiveCamera &>(*i.second);
+          problem.AddParameterBlock(c.parameters, BA_CAMERA_NUM_PARAMS);
+          problem.SetParameterBlockConstant(c.parameters);
+          break;
+        }
+        case BA_BROWN_PERSPECTIVE_CAMERA: {
+          BABrownPerspectiveCamera &c =
+              static_cast<BABrownPerspectiveCamera &>(*i.second);
+          problem.AddParameterBlock(c.parameters, BA_BROWN_CAMERA_NUM_PARAMS);
+          problem.SetParameterBlockConstant(c.parameters);
+          break;
+        }
+        case BA_FISHEYE_CAMERA: {
+          BAFisheyeCamera &c = static_cast<BAFisheyeCamera &>(*i.second);
+          problem.AddParameterBlock(c.parameters, BA_CAMERA_NUM_PARAMS);
+          problem.SetParameterBlockConstant(c.parameters);
+          break;
+        }
+        case BA_EQUIRECTANGULAR_CAMERA:
+          // No parameters for now
+          break;
+      }
+    }
+  }
   for (auto &i : reconstructions_) {
     for (auto &s : i.second.scales) {
       if (i.second.constant) {
@@ -512,13 +514,6 @@ void BundleAdjuster::Run() {
   }
 
   for (auto &i : points_) {
-    if (i.second.constant) {
-      problem.AddParameterBlock(i.second.parameters.data(), 3);
-      problem.SetParameterBlockConstant(i.second.parameters.data());
-    }
-  }
-
-  for (auto &i : gcp_points_) {
     if (i.second.constant) {
       problem.AddParameterBlock(i.second.parameters.data(), 3);
       problem.SetParameterBlockConstant(i.second.parameters.data());
@@ -574,32 +569,6 @@ void BundleAdjuster::Run() {
     problem.AddResidualBlock(cost_function,
                              NULL,
                              pp.point->parameters.data());
-  }
-
-  // Add ground control point world observations
-  for (auto &observation : gcp_world_observations_) {
-    if (observation.has_altitude) {
-      ceres::CostFunction* cost_function =
-          new ceres::AutoDiffCostFunction<PointPositionPriorError, 3, 3>(
-              new PointPositionPriorError(observation.coordinates, 0.01));
-
-      problem.AddResidualBlock(cost_function,
-                                NULL,
-                                observation.point->parameters.data());
-    } else {
-      ceres::CostFunction* cost_function =
-          new ceres::AutoDiffCostFunction<PointPositionPrior2dError, 2, 3>(
-              new PointPositionPrior2dError(observation.coordinates, 0.001));
-
-      problem.AddResidualBlock(cost_function,
-                                NULL,
-                                observation.point->parameters.data());
-    }
-  }
-
-  // Add ground control point image observations
-  for (auto &observation : gcp_image_observations_) {
-    AddObservationResidualBlock(observation, NULL, &problem);
   }
 
   // Add internal parameter priors blocks
@@ -724,6 +693,19 @@ void BundleAdjuster::Run() {
   }
 
   // Add absolute position errors
+  std::map<std::string,int> std_dev_group_remap;
+  for (const auto& a : absolute_positions_){
+    if(std_dev_group_remap.find(a.std_deviation_group) != std_dev_group_remap.end()){
+      continue;
+    }
+    const int index = std_dev_group_remap.size();
+    std_dev_group_remap[a.std_deviation_group] = index;
+  }
+  std::vector<double> std_deviations(std_dev_group_remap.size());
+  for (const auto& a : absolute_positions_){
+    std_deviations[std_dev_group_remap[a.std_deviation_group]] = a.std_deviation;
+  }
+
   for (auto &a : absolute_positions_) {
 
     ceres::DynamicCostFunction *cost_function = nullptr;
@@ -733,7 +715,7 @@ void BundleAdjuster::Run() {
     cost_function = new ceres::DynamicAutoDiffCostFunction<
         BAAbsolutePositionError<ShotPositionShotParam>>(
         new BAAbsolutePositionError<ShotPositionShotParam>(
-            pos_func, a.position, a.std_deviation,
+            pos_func, a.position, 1.0, true,
             PositionConstraintType::XYZ));
 
     // world parametrization
@@ -743,9 +725,25 @@ void BundleAdjuster::Run() {
     //     new BAAbsolutePositionError(pos_func, a.position, a.std_deviation));
 
     cost_function->AddParameterBlock(6);
+    cost_function->AddParameterBlock(1);
     cost_function->SetNumResiduals(3);
+    problem.AddResidualBlock(cost_function, NULL, a.shot->parameters.data(),
+                             &std_deviations[std_dev_group_remap[a.std_deviation_group]]);
+  }
 
-    problem.AddResidualBlock(cost_function, NULL, a.shot->parameters.data());
+  // Add regularizer term if we're adjusting for standart deviation, or lock them up.
+  if(adjust_absolute_position_std_){
+    for (int i = 0; i < std_deviations.size(); ++i) {
+      ceres::CostFunction* std_dev_cost_function =
+            new ceres::AutoDiffCostFunction<BAStdDeviationConstraint, 1, 1>(
+                new BAStdDeviationConstraint());
+      problem.AddResidualBlock(std_dev_cost_function, NULL, &std_deviations[i]);
+    }
+  }
+  else{
+    for (int i = 0; i < std_deviations.size(); ++i) {
+      problem.SetParameterBlockConstant(&std_deviations[i]);
+    }
   }
 
   // Add absolute up vector errors
@@ -817,7 +815,7 @@ void BundleAdjuster::Run() {
     auto *cost_function = new ceres::DynamicAutoDiffCostFunction<
         BAAbsolutePositionError<PointPositionScaledShot>>(
         new BAAbsolutePositionError<PointPositionScaledShot>(
-            pos_func, p.position, p.std_deviation, p.type));
+            pos_func, p.position, p.std_deviation, false, p.type));
 
     cost_function->AddParameterBlock(6);
     cost_function->AddParameterBlock(1);
@@ -853,7 +851,7 @@ void BundleAdjuster::Run() {
     PointPositionWorld pos_func(0);
     auto *cost_function = new ceres::DynamicAutoDiffCostFunction<
         BAAbsolutePositionError<PointPositionWorld>>(
-        new BAAbsolutePositionError<PointPositionWorld>(pos_func, p.position, p.std_deviation, p.type));
+        new BAAbsolutePositionError<PointPositionWorld>(pos_func, p.position, p.std_deviation, false, p.type));
 
     cost_function->AddParameterBlock(3);
     cost_function->SetNumResiduals(3);
@@ -1093,10 +1091,6 @@ BAShot BundleAdjuster::GetShot(const std::string &id) {
 
 BAPoint BundleAdjuster::GetPoint(const std::string &id) {
   return points_[id];
-}
-
-BAPoint BundleAdjuster::GetGcpPoint(const std::string &id) {
-  return gcp_points_[id];
 }
 
 BAReconstruction BundleAdjuster::GetReconstruction(const std::string &id) {

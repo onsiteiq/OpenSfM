@@ -10,11 +10,12 @@ struct BAAbsolutePositionError {
   BAAbsolutePositionError(const PosFunc& pos_func, 
                           const Eigen::Vector3d& pos_prior,
                           double std_deviation,
+                          bool has_std_deviation_param,
                           const PositionConstraintType& type)
-      : 
-      pos_func_(pos_func)
+      : pos_func_(pos_func)
       , pos_prior_(pos_prior)
       , scale_(1.0 / std_deviation)
+      , has_std_deviation_param_(has_std_deviation_param)
       , type_(type)
   {}
 
@@ -23,7 +24,13 @@ struct BAAbsolutePositionError {
     Eigen::Map< Eigen::Matrix<T,3,1> > residual(r);
 
     // error is : position_prior - adjusted_position
-    residual =  T(scale_) * (pos_prior_.cast<T>() - pos_func_(p));
+    residual = pos_prior_.cast<T>() - pos_func_(p);
+    if(has_std_deviation_param_){
+      residual /= p[1][0];
+    }
+    else{
+      residual *= T(scale_);
+    }
 
     // filter axises to use
     const std::vector<PositionConstraintType> axises = {
@@ -45,6 +52,7 @@ struct BAAbsolutePositionError {
   PosFunc pos_func_;
   Eigen::Vector3d pos_prior_;
   double scale_;
+  bool has_std_deviation_param_;
   PositionConstraintType type_;
 };
 
@@ -174,5 +182,107 @@ struct BARollAngleError {
   }
 
   double angle_;
+  double scale_;
+};
+
+struct RotationPriorError {
+  RotationPriorError(double *R_prior, double std_deviation)
+      : R_prior_(R_prior)
+      , scale_(1.0 / std_deviation)
+  {}
+
+  template <typename T>
+  bool operator()(const T* const shot, T* residuals) const {
+    // Get rotation and translation values.
+    const T* const R = shot + BA_SHOT_RX;
+    T Rpt[3] = { -T(R_prior_[0]),
+                 -T(R_prior_[1]),
+                 -T(R_prior_[2]) };
+
+    // Compute rotation residual: log( R Rp^t )
+    T qR[4], qRpt[4], qR_Rpt[4];
+    ceres::AngleAxisToQuaternion(R, qR);
+    ceres::AngleAxisToQuaternion(Rpt, qRpt);
+    ceres::QuaternionProduct(qR, qRpt, qR_Rpt);
+    T R_Rpt[3];
+    ceres::QuaternionToAngleAxis(qR_Rpt, R_Rpt);
+
+    residuals[0] = T(scale_) * R_Rpt[0];
+    residuals[1] = T(scale_) * R_Rpt[1];
+    residuals[2] = T(scale_) * R_Rpt[2];
+
+    return true;
+  }
+
+  double *R_prior_;
+  double scale_;
+};
+
+struct TranslationPriorError {
+  TranslationPriorError(double *translation_prior, double std_deviation)
+      : translation_prior_(translation_prior)
+      , scale_(1.0 / std_deviation)
+  {}
+
+  template <typename T>
+  bool operator()(const T* const shot, T* residuals) const {
+    residuals[0] = T(scale_) * (T(translation_prior_[0]) - shot[BA_SHOT_TX]);
+    residuals[1] = T(scale_) * (T(translation_prior_[1]) - shot[BA_SHOT_TY]);
+    residuals[2] = T(scale_) * (T(translation_prior_[2]) - shot[BA_SHOT_TZ]);
+    return true;
+  }
+
+  double *translation_prior_;
+  double scale_;
+};
+
+struct PositionPriorError {
+  PositionPriorError(double *position_prior, double std_deviation)
+      : position_prior_(position_prior)
+      , scale_(1.0 / std_deviation)
+  {}
+
+  template <typename T>
+  bool operator()(const T* const shot, T* residuals) const {
+    T Rt[3] = { -shot[BA_SHOT_RX], -shot[BA_SHOT_RY], -shot[BA_SHOT_RZ] };
+    T p[3];
+    ceres::AngleAxisRotatePoint(Rt, shot + BA_SHOT_TX, p);
+
+    residuals[0] = T(scale_) * (p[0] + T(position_prior_[0]));
+    residuals[1] = T(scale_) * (p[1] + T(position_prior_[1]));
+    residuals[2] = T(scale_) * (p[2] + T(position_prior_[2]));
+    return true;
+  }
+
+  double *position_prior_;
+  double scale_;
+};
+
+struct UnitTranslationPriorError {
+  UnitTranslationPriorError() {}
+
+  template <typename T>
+  bool operator()(const T* const shot, T* residuals) const {
+    const T* const t = shot + 3;
+    residuals[0] = log(t[0] * t[0] + t[1] * t[1] + t[2] * t[2]);
+    return true;
+  }
+};
+
+struct PointPositionPriorError {
+  PointPositionPriorError(double *position, double std_deviation)
+      : position_(position)
+      , scale_(1.0 / std_deviation)
+  {}
+
+  template <typename T>
+  bool operator()(const T* const p, T* residuals) const {
+    residuals[0] = T(scale_) * (p[0] - T(position_[0]));
+    residuals[1] = T(scale_) * (p[1] - T(position_[1]));
+    residuals[2] = T(scale_) * (p[2] - T(position_[2]));
+    return true;
+  }
+
+  double *position_;
   double scale_;
 };

@@ -10,9 +10,14 @@ endif()
 
 set(CMAKE_MODULE_PATH ${opensfm_SOURCE_DIR}/cmake)
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -std=c++0x")
-
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} \
+    -fPIC \
+    -fvisibility=hidden")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} \
+    -fPIC \
+    -fvisibility=hidden \
+    -fvisibility-inlines-hidden \
+    -std=c++11")
 
 # Find dependencies.
 add_subdirectory(third_party/pybind11)
@@ -47,7 +52,7 @@ include_directories(${GFLAGS_INCLUDE_DIR})
 find_package(Glog REQUIRED)
 include_directories(${GLOG_INCLUDE_DIR})
 
-find_package(OpenCV REQUIRED)
+find_package(OpenCV REQUIRED core imgproc calib3d)
 include_directories(${OpenCV_INCLUDE_DIRS})
 
 
@@ -80,25 +85,31 @@ add_library(vl ${VLFEAT_SRCS})
 
 
 # Bundle
- include_directories(.)
- set(BUNDLE_FILES
-     bundle/src/error_utils.h
-     bundle/src/motion_prior_terms.h
-     bundle/src/absolute_motion_terms.h
-     bundle/src/relative_motion_terms.h
-     bundle/src/bundle_adjuster.cc)
- add_library(bundle ${BUNDLE_FILES})
- target_link_libraries(bundle PRIVATE
-     ${GFLAGS_LIBRARY}
-     ${GLOG_LIBRARY}
-     ${CERES_LIBRARIES}
-     ${LAPACK_LIBRARIES}
-     ${SUITESPARSE_LIBRARIES}
- )
+include_directories(.)
+set(BUNDLE_FILES
+    bundle/src/error_utils.h
+    bundle/src/motion_prior_terms.h
+    bundle/src/absolute_motion_terms.h
+    bundle/src/relative_motion_terms.h
+    bundle/src/bundle_adjuster.cc)
+add_library(bundle ${BUNDLE_FILES})
+target_link_libraries(bundle PRIVATE
+    ${GFLAGS_LIBRARY}
+    ${GLOG_LIBRARY}
+    ${CERES_LIBRARIES}
+    ${LAPACK_LIBRARIES}
+    ${SUITESPARSE_LIBRARIES}
+)
 
 
 # Python wrapper
-pybind11_add_module(csfm csfm.cc types.cc matching.cc)
+pybind11_add_module(csfm
+    csfm.cc
+    types.cc
+    akaze_bind.cc
+    matching.cc
+    depthmap.cc
+)
 target_link_libraries(csfm PRIVATE
     ${OpenCV_LIBS}
     ${GFLAGS_LIBRARY}
@@ -115,11 +126,14 @@ set_target_properties(csfm PROPERTIES
 )
 
 
-add_executable(debug_c_extension
-    debug_c_extension.cc
-    third_party/PythonExtensionPatterns/py_import_call_execute.c
-)
-target_link_libraries(debug_c_extension ${PYTHON_LIBRARIES})
+if (CMAKE_BUILD_TYPE MATCHES DEBUG)
+    add_executable(debug_c_extension
+        debug_c_extension.cc
+        third_party/PythonExtensionPatterns/py_import_call_execute.c
+    )
+    target_link_libraries(debug_c_extension ${PYTHON_LIBRARIES})
+endif()
+
 
 # Tests
 option(OPENSFM_BUILD_TESTS "Build OpenSfM unit tests." on)
@@ -139,13 +153,10 @@ if (OPENSFM_BUILD_TESTS)
                         ${GLOG_LIBRARY}
                         gtest)
 
-  macro (OPENSFM_TEST NAME EXTRA_LIBS)
-    add_executable(${NAME}_test ${NAME}_test.cc)
-    target_link_libraries(${NAME}_test
-                          ${EXTRA_LIBS} # Extra libs MUST be first.
-                          testing_main)
-    add_test(${NAME}_test ${NAME}_test)
-  endmacro ()
+  add_executable(depthmap_test depthmap_test.cc depthmap.cc)
+  target_link_libraries(depthmap_test
+                        ${OpenCV_LIBS}
+                        testing_main)
+  add_test(depthmap_test depthmap_test)
 
-  opensfm_test(depthmap "${OpenCV_LIBS}")
 endif()

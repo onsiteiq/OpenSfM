@@ -9,7 +9,6 @@ from opensfm import io
 
 logger = logging.getLogger(__name__)
 
-
 class Command:
     name = 'export_visualsfm'
     help = "Export reconstruction to NVM_V3 format from VisualSfM"
@@ -37,9 +36,10 @@ class Command:
         for shot in reconstruction.shots.values():
             q = tf.quaternion_from_matrix(shot.pose.get_rotation_matrix())
             o = shot.pose.get_origin()
+            size = max(data.undistorted_image_size(shot.id))
             words = [
                 self.image_path(shot.id, data),
-                shot.camera.focal * max(shot.camera.width, shot.camera.height),
+                shot.camera.focal * size,
                 q[0], q[1], q[2], q[3],
                 o[0], o[1], o[2],
                 '0', '0',

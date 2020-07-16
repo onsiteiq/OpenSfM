@@ -11,14 +11,21 @@
 #include "banding_filter.cc"
 #include "hlf.cc"
 #include "geo_hash.cc"
-#include "akaze.cc"
+#include "akaze_bind.h"
+#include "matching.h"
 #include "bundle/bundle_adjuster.h"
 #include "openmvs_exporter.h"
-#include "depthmap_wrapper.cc"
+#include "depthmap_bind.h"
 #include "reconstruction_alignment.h"
 
 
 namespace py = pybind11;
+
+
+void BundleAdjusterRun(BundleAdjuster* bundle_adjuster) {
+    py::gil_scoped_release release;
+    bundle_adjuster->Run();
+}
 
 
 PYBIND11_MODULE(csfm, m) {
@@ -83,7 +90,7 @@ PYBIND11_MODULE(csfm, m) {
 
   py::class_<BundleAdjuster>(m, "BundleAdjuster")
     .def(py::init())
-    .def("run", &BundleAdjuster::Run)
+    .def("run", &BundleAdjusterRun)
     .def("set_point_projection_loss_function", &BundleAdjuster::SetPointProjectionLossFunction)
     .def("set_relative_motion_loss_function", &BundleAdjuster::SetRelativeMotionLossFunction)
     .def("get_perspective_camera", &BundleAdjuster::GetPerspectiveCamera)
@@ -127,6 +134,7 @@ PYBIND11_MODULE(csfm, m) {
     .def("get_covariance_estimation_valid", &BundleAdjuster::GetCovarianceEstimationValid)
     .def("set_compute_reprojection_errors", &BundleAdjuster::SetComputeReprojectionErrors)
     .def("set_max_num_iterations", &BundleAdjuster::SetMaxNumIterations)
+    .def("set_adjust_absolute_position_std", &BundleAdjuster::SetAdjustAbsolutePositionStd)
     .def("set_num_threads", &BundleAdjuster::SetNumThreads)
     .def("set_linear_solver_type", &BundleAdjuster::SetLinearSolverType)
     .def("brief_report", &BundleAdjuster::BriefReport)
@@ -210,9 +218,9 @@ PYBIND11_MODULE(csfm, m) {
   ;
 
   py::class_<BARelativeMotion>(m, "BARelativeMotion")
-    .def(py::init<const std::string &, const std::string &,
-		  const std::string &, const std::string &,
-		  const Eigen::Vector3d &, const Eigen::Vector3d &>())
+    .def(py::init<const std::string &, const std::string &, 
+	        const std::string &, const std::string &, 
+				  const Eigen::Vector3d &, const Eigen::Vector3d &>())
     .def_readwrite("reconstruction_i", &BARelativeMotion::reconstruction_id_i)
     .def_readwrite("shot_i", &BARelativeMotion::shot_id_i)
     .def_readwrite("reconstruction_j", &BARelativeMotion::reconstruction_id_j)
@@ -223,13 +231,13 @@ PYBIND11_MODULE(csfm, m) {
   ;
 
   py::class_<BARelativeSimilarity>(m, "BARelativeSimilarity")
-    .def(py::init<const std::string &, const std::string &,
- 	          const std::string &, const std::string &,
-		  const Eigen::Vector3d &, const Eigen::Vector3d &, double>())
+    .def(py::init<const std::string &, const std::string &, 
+	        const std::string &, const std::string &, 
+				  const Eigen::Vector3d &, const Eigen::Vector3d &, double>())
     .def_readwrite("scale", &BARelativeSimilarity::scale)
     .def("set_scale_matrix", &BARelativeSimilarity::SetScaleMatrix)
   ;
-
+  
   py::class_<BARelativeSimilarityCovariance>(m, "BARelativeSimilarityCovariance")
     .def(py::init())
     .def("add_point", &BARelativeSimilarityCovariance::AddPoint)
@@ -244,7 +252,7 @@ PYBIND11_MODULE(csfm, m) {
     .def_property("r", &BARelativeRotation::GetRotation, &BARelativeRotation::SetRotation)
     .def("set_scale_matrix", &BARelativeRotation::SetScaleMatrix)
   ;
- 
+
   py::class_<csfm::OpenMVSExporter>(m, "OpenMVSExporter")
     .def(py::init())
     .def("add_camera", &csfm::OpenMVSExporter::AddCamera)
@@ -257,6 +265,7 @@ PYBIND11_MODULE(csfm, m) {
     .def(py::init())
     .def("set_depth_range", &csfm::DepthmapEstimatorWrapper::SetDepthRange)
     .def("set_patchmatch_iterations", &csfm::DepthmapEstimatorWrapper::SetPatchMatchIterations)
+    .def("set_patch_size", &csfm::DepthmapEstimatorWrapper::SetPatchSize)
     .def("set_min_patch_sd", &csfm::DepthmapEstimatorWrapper::SetMinPatchSD)
     .def("add_view", &csfm::DepthmapEstimatorWrapper::AddView)
     .def("compute_patch_match", &csfm::DepthmapEstimatorWrapper::ComputePatchMatch)
@@ -291,6 +300,8 @@ PYBIND11_MODULE(csfm, m) {
     .def("add_reconstruction", &ReconstructionAlignment::AddReconstruction)
     .def("add_relative_motion_constraint", &ReconstructionAlignment::AddRelativeMotionConstraint)
     .def("add_absolute_position_constraint", &ReconstructionAlignment::AddAbsolutePositionConstraint)
+    .def("add_relative_absolute_position_constraint", &ReconstructionAlignment::AddRelativeAbsolutePositionConstraint)
+    .def("add_common_camera_constraint", &ReconstructionAlignment::AddCommonCameraConstraint)
     .def("add_common_point_constraint", &ReconstructionAlignment::AddCommonPointConstraint)
     .def("brief_report", &ReconstructionAlignment::BriefReport)
     .def("full_report", &ReconstructionAlignment::FullReport)
