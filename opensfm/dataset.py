@@ -537,9 +537,12 @@ class DataSet(object):
             os.path.isfile(self._feature_file_legacy(image))
 
     def load_features(self, image):
-        if os.path.isfile(self._feature_file_legacy(image)):
-            return features.load_features(self._feature_file_legacy(image), self.config)
-        return features.load_features(self._feature_file(image), self.config)
+        if self.features_exist(image):
+            if os.path.isfile(self._feature_file_legacy(image)):
+                return features.load_features(self._feature_file_legacy(image), self.config)
+            return features.load_features(self._feature_file(image), self.config)
+        else:
+            return None, None, None
 
     def save_features(self, image, points, descriptors, colors):
         self._save_features(self._feature_file(image), points, descriptors, colors)
@@ -571,8 +574,11 @@ class DataSet(object):
         return os.path.isfile(self._words_file(image))
 
     def load_words(self, image):
-        s = np.load(self._words_file(image))
-        return s['words'].astype(np.int32)
+        if self.words_exist(image):
+            s = np.load(self._words_file(image))
+            return s['words'].astype(np.int32)
+        else:
+            return None
 
     def save_words(self, image, words):
         np.savez_compressed(self._words_file(image), words=words.astype(np.uint16))

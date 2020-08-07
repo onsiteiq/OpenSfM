@@ -736,6 +736,10 @@ def detect(args):
 
     # Get points and descriptors.
     pts, desc, heatmap = fe.run(grayimg)
+
+    if len(pts.T) == 0:
+      return
+
     pts, desc = remove_border_points(img, pts, desc, border_size=6)
 
     if len(pts.T) == 0:

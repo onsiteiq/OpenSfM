@@ -119,11 +119,15 @@ def match_unwrap_args(args):
 
     im1_matches = {}
     p1, f1, _ = feature_loader.load_points_features_colors(ctx.data, im1)
+
+    if p1 is None:
+        return im1, im1_matches
+
     w1 = feature_loader.load_words(ctx.data, im1) if need_words else None
     m1 = feature_loader.load_masks(ctx.data, im1)
     camera1 = ctx.cameras[ctx.exifs[im1]['camera']]
 
-    if ctx.data.config['feature_use_superpoint']:
+    if not ctx.data.config['feature_use_superpoint']:
         f1_filtered = f1 if m1 is None else f1[m1]
         i1 = feature_loader.load_features_index(ctx.data, im1, f1_filtered) if need_index else None
     else:
@@ -137,11 +141,15 @@ def match_unwrap_args(args):
 
     for im2 in candidates:
         p2, f2, _ = feature_loader.load_points_features_colors(ctx.data, im2)
+
+        if p2 is None:
+            continue
+
         w2 = feature_loader.load_words(ctx.data, im2) if need_words else None
         m2 = feature_loader.load_masks(ctx.data, im2)
         camera2 = ctx.cameras[ctx.exifs[im2]['camera']]
 
-        if ctx.data.config['feature_use_superpoint']:
+        if not ctx.data.config['feature_use_superpoint']:
             f2_filtered = f2 if m2 is None else f2[m2]
             i2 = feature_loader.load_features_index(ctx.data, im2, f2_filtered) if need_index else None
         else:

@@ -288,6 +288,9 @@ def extract_features(color_image, config, mask=None):
         raise ValueError('Unknown feature type '
                          '(must be SURF, SIFT, AKAZE, HAHOG or ORB)')
 
+    if len(points) == 0:
+        return np.zeros((0, 2)), None, None
+
     xs = points[:, 0].round().astype(int)
     ys = points[:, 1].round().astype(int)
     colors = color_image[ys, xs]
