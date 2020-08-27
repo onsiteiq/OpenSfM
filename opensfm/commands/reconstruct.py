@@ -138,8 +138,10 @@ class Command:
 
         # If we are re-processing partial reconstructions only then merge the
         # new results with the original reconstruction. 
-        
-        new_recons = data.load_reconstruction()
+
+        new_recons = []
+        if data.reconstruction_exists():
+            new_recons = data.load_reconstruction()
 
         if len(partials) > 0:
             

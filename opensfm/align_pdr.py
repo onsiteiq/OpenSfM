@@ -1,6 +1,5 @@
 """affine transform pdr predictions to align with GPS points or SfM output."""
 
-import os
 import operator
 import logging
 import math
@@ -14,8 +13,6 @@ from opensfm import geo
 from opensfm import multiview
 from opensfm import types
 from opensfm import transformations as tf
-
-from opensfm.debug_plot import debug_plot_pdr
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +51,7 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad
             pdr_coords.append([pdr_shots_dict[shot_id][0], pdr_shots_dict[shot_id][1], 0])
 
         if pdr_coords[0] == pdr_coords[1]:
-            continue
+            pdr_coords[1] = pdr_coords[0] + (gps_coords[1] - gps_coords[0])/expected_scale
 
         #s, A, b = get_affine_transform_2d(gps_coords, pdr_coords)
         s, A, b = get_affine_transform_2d_no_numpy(gps_coords, pdr_coords)
@@ -87,6 +84,7 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad
         new_dict = apply_affine_transform_no_numpy(pdr_shots_dict, start_shot_id, end_shot_id,
                                                    s, A, b,
                                                    deviation, [all_gps_shot_ids[i], all_gps_shot_ids[i+1]])
+
         pdr_predictions_dict.update(new_dict)
 
     return pdr_predictions_dict
@@ -213,9 +211,6 @@ def init_pdr_predictions(data, use_2d=False):
 
     data.save_topocentric_gps_points(topocentric_gps_points_dict)
     data.save_pdr_predictions(pdr_predictions_dict)
-
-    # debug
-    debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict)
 
     return pdr_predictions_dict
 
@@ -461,14 +456,14 @@ def hybrid_align_pdr(data, target_images=None):
             next_coords = pdr_predictions_dict[next_img][:3]
             next_heading = np.arctan2(next_coords[1] - curr_coords[1], next_coords[0] - curr_coords[0])
 
-        if prev_heading and next_heading:
+        if prev_heading is not None and next_heading is not None:
             heading = phase((rect(1, prev_heading) + rect(1, next_heading)) * 0.5)
-        elif prev_heading:
+        elif prev_heading is not None:
             heading = prev_heading
-        elif next_heading:
+        elif next_heading is not None:
             heading = next_heading
 
-        if not heading:
+        if heading is None:
             continue
 
         R1 = _euler_angles_to_rotation_matrix([np.pi*0.5, 0, np.pi*0.5])

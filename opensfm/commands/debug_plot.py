@@ -10,28 +10,23 @@ import numpy as np
 from six import iteritems
 
 from opensfm import io
-from opensfm import csfm
 from opensfm import geo
 from opensfm import multiview
-from opensfm import types
 from opensfm import transformations as tf
+from scipy.interpolate import splprep, splev, spalde
 
-debug = False
 
-if debug:
-    import matplotlib.pyplot as plt
-    import matplotlib.image as mpimg
+import matplotlib.pyplot as plt
 
+logging.basicConfig()
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 def debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict):
     """
     draw floor plan and aligned pdr shot positions on top of it
     """
-    if not debug:
-        return
-
     logger.info("debug_plot_pdr {}".format(len(pdr_predictions_dict)))
 
     for key, value in topocentric_gps_points_dict.items():
@@ -50,7 +45,6 @@ def debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict):
     if not plan_paths or not os.path.exists(plan_paths[0]):
         return
 
-    #img = mpimg.imread(plan_paths[0])
     img = cv2.imread(plan_paths[0], cv2.IMREAD_COLOR)
 
     fig, ax = plt.subplots()
@@ -77,6 +71,27 @@ def debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict):
     #fig.savefig('./aligned_pdr_path.png', dpi=200)
 
 
+def _vector_angle(vector_1, vector_2):
+    unit_vector_1 = vector_1 / np.linalg.norm(vector_1)
+    unit_vector_2 = vector_2 / np.linalg.norm(vector_2)
+    dot_product = np.dot(unit_vector_1, unit_vector_2)
+    return np.arccos(dot_product)
+
+
+def _prev_shot_id(curr_shot_id):
+    """
+    Returns: previous shot id
+    """
+    return _int_to_shot_id(_shot_id_to_int(curr_shot_id) - 1)
+
+
+def _next_shot_id(curr_shot_id):
+    """
+    Returns: next shot id
+    """
+    return _int_to_shot_id(_shot_id_to_int(curr_shot_id) + 1)
+
+
 def debug_plot_reconstruction(reconstruction):
     '''
     draw an individual reconstruction
@@ -84,13 +99,6 @@ def debug_plot_reconstruction(reconstruction):
     :param reconstruction:
     :return:
     '''
-    if not debug:
-        return
-
-    #if not reconstruction.alignment.aligned:
-        #flatten_reconstruction(reconstruction)
-        #debug_print_origin(reconstruction, 0, 3000)
-
     fig, ax = plt.subplots(nrows=1, ncols=1)
 
     X = []
@@ -103,7 +111,84 @@ def debug_plot_reconstruction(reconstruction):
 
         ax.text(p[0], p[1], str(_shot_id_to_int(shot.id)), fontsize=8)
 
-    plt.plot(X, Y, linestyle='-', color='green', linewidth=1)
+    plt.plot(X, Y, 'g-', linewidth=1)
+
+    X1 = []
+    Y1 = []
+    U1 = []
+
+    for shot_id in sorted(reconstruction.shots):
+        curr_origin = reconstruction.shots[shot_id].pose.get_origin()
+
+        X1.append(curr_origin[0])
+        Y1.append(curr_origin[1])
+        U1.append(_shot_id_to_int(shot_id))
+
+    #tcku, fp, ier, msg = splprep([X1, Y1], u=U1, s=len(U1)*0.1, full_output=1)
+    tcku, fp, ier, msg = splprep([X1, Y1], u=U1, s=0, full_output=1)
+    tck, u = tcku
+
+    u_tenth = np.arange(u[0], u[-1], 0.1)
+    new_points = splev(u_tenth, tck)
+    plt.plot(new_points[0], new_points[1], 'r-')
+
+    alde = spalde(u_tenth, tck)
+    x_prime = np.asarray(alde[0])[:, 1]
+    x_double_prime = np.asarray(alde[0])[:, 2]
+    y_prime = np.asarray(alde[1])[:, 1]
+    y_double_prime = np.asarray(alde[1])[:, 2]
+
+
+    # curvature of parametric curve at (x, y) = |x'y'' - y'x''| / [(x')^2 + (y')^2]^1.5
+    curvature = np.divide(np.multiply(x_prime, y_double_prime) - np.multiply(y_prime, x_double_prime),
+                          np.power(np.multiply(x_prime, x_prime) + np.multiply(y_prime, y_prime), 1.5))
+
+    '''
+    x = np.asarray(new_points[0])
+    y = np.asarray(new_points[1])
+    for i, val in enumerate(u_tenth):
+        logger.debug("{:04.1f} = {} {}, prime={} {}, double_prime={} {}".format(val, x[i], y[i], x_prime[i], y_prime[i], x_double_prime[i], y_double_prime[i]))
+        
+    for i, c in enumerate(curvature):
+        logger.debug("{}={}".format(u_tenth[i], c))
+
+    for i in range(int(u[0]), int(u[-1])):
+        start_index = (i - int(u[0]))*10
+        max_c = np.amax(curvature[start_index:start_index+10])
+        logger.debug("curvature {:04.1f} = {}, {}".format(i, max_c, curvature[start_index]))
+    '''
+
+    shot_ids = sorted(reconstruction.shots)
+    for shot_id in shot_ids:
+        vector_next = vector_prev = None
+
+        next_shot_id = _next_shot_id(shot_id)
+        prev_shot_id = _prev_shot_id(shot_id)
+
+        next_2_shot_id = _next_shot_id(next_shot_id)
+        prev_2_shot_id = _prev_shot_id(prev_shot_id)
+
+        origin_curr = reconstruction.shots[shot_id].pose.get_origin()
+
+        if next_shot_id in reconstruction.shots:
+            vector_next = reconstruction.shots[next_shot_id].pose.get_origin() - origin_curr
+        elif next_2_shot_id in reconstruction.shots:
+            vector_next = reconstruction.shots[next_2_shot_id].pose.get_origin() - origin_curr
+
+        if prev_shot_id in reconstruction.shots:
+            vector_prev = origin_curr - reconstruction.shots[prev_shot_id].pose.get_origin()
+        elif prev_2_shot_id in reconstruction.shots:
+            vector_prev = origin_curr - reconstruction.shots[prev_2_shot_id].pose.get_origin()
+
+        if vector_next is not None and vector_prev is not None:
+            angle = _vector_angle(vector_next, vector_prev)
+            if angle > np.pi*2.0/3.0:
+                d_next = np.linalg.norm(vector_next)
+                d_prev = np.linalg.norm(vector_prev)
+
+                if d_next > 1.0 and d_prev > 1.0:
+                    logger.debug("{} angle = {}".format(shot_id, np.degrees(angle)))
+
     plt.show()
 
 
@@ -111,9 +196,6 @@ def debug_plot_reconstructions(reconstructions):
     """
     draw floor plan and aligned pdr shot positions on top of it
     """
-    if not debug:
-        return
-
     # floor plan
     plan_paths = []
     for plan_type in ('./*FLOOR*.png', './*ROOF*.png'):
@@ -123,7 +205,6 @@ def debug_plot_reconstructions(reconstructions):
         print("No floor plan image found. Quitting")
         return
 
-    #img = mpimg.imread(plan_paths[0])
     img = cv2.imread(plan_paths[0], cv2.IMREAD_COLOR)
 
     fig, ax = plt.subplots()
@@ -286,9 +367,6 @@ def _load_topocentric_gps_points():
 
 # Entry point
 if __name__ == "__main__":
-    debug = True
-    import matplotlib.pyplot as plt
-    import matplotlib.image as mpimg
 
     show_num = -1
 

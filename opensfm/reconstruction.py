@@ -2126,32 +2126,46 @@ def incremental_reconstruction_sequential(data, graph):
 
 
 def remove_bad_frames(reconstructions):
-    height_thresh = 1.0
-    distance_thresh = 2.0
+    height_thresh = 1.0    # in meters
+    distance_thresh = 2.0  # in meters
 
     empty_recons = []
-    for k, r in enumerate(reconstructions):
-        logger.info("Reconstruction {}: {} images".format(k, len(r.shots)))
+    for i, r in enumerate(reconstructions):
+        logger.info("Reconstruction {}: {} images".format(i, len(r.shots)))
 
-        uneven_images = []
         suspicious_images = []
 
-        for shot_id in r.shots:
-            if abs(r.shots[shot_id].pose.get_origin()[2]) > height_thresh:
-                uneven_images.append(shot_id)
-                continue
+        shot_ids = sorted(r.shots)
+        for j, shot_id in enumerate(shot_ids):
+            d1 = d2 = h1 = h2 = 0
 
             next_shot_id = _next_shot_id(shot_id)
             prev_shot_id = _prev_shot_id(shot_id)
-            if next_shot_id in r.shots and prev_shot_id in r.shots:
-                d1 = np.linalg.norm(r.shots[next_shot_id].pose.get_origin() - r.shots[shot_id].pose.get_origin())
-                d2 = np.linalg.norm(r.shots[prev_shot_id].pose.get_origin() - r.shots[shot_id].pose.get_origin())
-                if d1 > distance_thresh and d2 > distance_thresh:
-                    suspicious_images.append(shot_id)
 
-        for shot_id in uneven_images:
-            logger.info("removing uneven image: {}".format(shot_id))
-            r.shots.pop(shot_id, None)
+            origin_curr = r.shots[shot_id].pose.get_origin()
+
+            if next_shot_id in r.shots:
+                origin_next = r.shots[next_shot_id].pose.get_origin()
+                d1 = np.linalg.norm(origin_next - origin_curr)
+                h1 = abs(origin_next[2] - origin_curr[2])
+
+            if prev_shot_id in r.shots:
+                origin_prev = r.shots[prev_shot_id].pose.get_origin()
+                d2 = np.linalg.norm(origin_prev - origin_curr)
+                h2 = abs(origin_prev[2] - origin_curr[2])
+
+            if next_shot_id in r.shots and prev_shot_id in r.shots:
+                if (d1 > distance_thresh and d2 > distance_thresh) or (h1 > height_thresh and h2 > height_thresh):
+                    suspicious_images.append(shot_id)
+                    continue
+            elif next_shot_id in r.shots:
+                if d1 > distance_thresh or h1 > height_thresh:
+                    suspicious_images.append(shot_id)
+                    continue
+            elif prev_shot_id in r.shots:
+                if d2 > distance_thresh or h2 > height_thresh:
+                    suspicious_images.append(shot_id)
+                    continue
 
         for shot_id in suspicious_images:
             logger.info("removing suspicious image: {}".format(shot_id))
