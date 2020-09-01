@@ -842,14 +842,14 @@ def resect(data, graph, graph_inliers, reconstruction, shot_id,
         return False, report
 
 
-def rotation_close_to_preint(im1, im2, two_view_rel_rot, pdr_shots_dict):
+def is_two_view_rotation_close_to_preint(im1, im2, two_view_rel_rot, pdr_shots_dict):
     """
     compare relative rotation of robust matching to that of imu gyro preintegration,
     if they are not close, it is considered to be an erroneous epipoar geometry
     """
     # calculate relative rotation from preintegrated gyro input
-    preint_im1_rot = cv2.Rodrigues(np.asarray([pdr_shots_dict[im1][7], pdr_shots_dict[im1][8], pdr_shots_dict[im1][9]]))[0]
-    preint_im2_rot = cv2.Rodrigues(np.asarray([pdr_shots_dict[im2][7], pdr_shots_dict[im2][8], pdr_shots_dict[im2][9]]))[0]
+    preint_im1_rot = cv2.Rodrigues(np.asarray([pdr_shots_dict[im1][6], pdr_shots_dict[im1][7], pdr_shots_dict[im1][8]]))[0]
+    preint_im2_rot = cv2.Rodrigues(np.asarray([pdr_shots_dict[im2][6], pdr_shots_dict[im2][7], pdr_shots_dict[im2][8]]))[0]
     preint_rel_rot = np.dot(preint_im2_rot, preint_im1_rot.T)
 
     # convert this rotation from sensor frame to camera frame
@@ -1083,11 +1083,11 @@ def resect_structureless(data, graph, reconstruction, shot_id):
         pdr_shots_dict = data.load_pdr_shots()
         R = T[:, :3].T
         logger.info("test 0")
-        rel1 = np.dot(R.T, R1)
-        rotation_close_to_preint(shot_id, image_one, rel1, pdr_shots_dict)
+        rel1 = np.dot(R1, R.T)
+        is_two_view_rotation_close_to_preint(shot_id, image_one, rel1, pdr_shots_dict)
         logger.info("test 1")
-        rel2 = np.dot(R.T, R2)
-        rotation_close_to_preint(shot_id, image_two, rel2, pdr_shots_dict)
+        rel2 = np.dot(R2, R.T)
+        is_two_view_rotation_close_to_preint(shot_id, image_two, rel2, pdr_shots_dict)
     
     try:
         R = T[:, :3].T

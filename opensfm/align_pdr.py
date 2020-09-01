@@ -50,6 +50,8 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad
             gps_coords.append(gps_points_dict[shot_id])
             pdr_coords.append([pdr_shots_dict[shot_id][0], pdr_shots_dict[shot_id][1], 0])
 
+        # the last few pdr coords maybe identical if no steps were detected. treat this as a special case
+        # to avoid divide by zero later on
         if pdr_coords[0] == pdr_coords[1]:
             pdr_coords[1] = pdr_coords[0] + (gps_coords[1] - gps_coords[0])/expected_scale
 
@@ -572,10 +574,10 @@ def update_pdr_local(shot_id, sfm_points_dict, pdr_shots_dict, scale_factor):
         # pdr delta distance directly because stride length is not very accurate in tight
         # spaces, which is often the case for us. also make sure we don't get wild values
         # when pdr delta distance for last step is very small
-        if pdr_info_dist_1[6] > 1e-1:
-            delta_distance = pdr_info[6] / pdr_info_dist_1[6] * np.linalg.norm(dist_1_coords-dist_2_coords)
+        if pdr_info_dist_1[9] > 1e-1:
+            delta_distance = pdr_info[9] / pdr_info_dist_1[9] * np.linalg.norm(dist_1_coords-dist_2_coords)
         else:
-            delta_distance = pdr_info_dist_1[6]
+            delta_distance = pdr_info_dist_1[9]
 
         # TODO: put 200 in config
         return position_extrapolate(dist_1_coords, dist_2_coords, delta_heading, delta_distance), 200

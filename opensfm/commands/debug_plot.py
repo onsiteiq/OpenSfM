@@ -5,6 +5,7 @@ import glob
 import logging
 import six
 import cv2
+import math
 import numpy as np
 
 from six import iteritems
@@ -92,7 +93,37 @@ def _next_shot_id(curr_shot_id):
     return _int_to_shot_id(_shot_id_to_int(curr_shot_id) + 1)
 
 
-def debug_plot_reconstruction(reconstruction):
+def diff_recon_preint(im1, im2, reconstruction, pdr_shots_dict):
+    """
+    compare rel recon rotation of two images to that of imu gyro preintegration,
+    if they are not close, the recon of the images is considered to be an erroneous
+    """
+    # calculate relative rotation from preintegrated gyro input
+    preint_im1_rot = cv2.Rodrigues(np.asarray([pdr_shots_dict[im1][6], pdr_shots_dict[im1][7], pdr_shots_dict[im1][8]]))[0]
+    preint_im2_rot = cv2.Rodrigues(np.asarray([pdr_shots_dict[im2][6], pdr_shots_dict[im2][7], pdr_shots_dict[im2][8]]))[0]
+    preint_rel_rot = np.dot(preint_im2_rot, preint_im1_rot.T)
+
+    # convert this rotation from sensor frame to camera frame
+    b_to_c = np.asarray([1, 0, 0, 0, 0, -1, 0, 1, 0]).reshape(3, 3)
+    preint_rel_rot = cv2.Rodrigues(b_to_c.dot(cv2.Rodrigues(preint_rel_rot)[0].ravel()))[0]
+
+    R1 = reconstruction.shots[im1].pose.get_rotation_matrix()
+    R2 = reconstruction.shots[im2].pose.get_rotation_matrix()
+    recon_rel_rot = np.dot(R1, R2.T)
+
+    #logger.debug("preint {}".format(np.degrees(_rotation_matrix_to_euler_angles(preint_rel_rot))))
+    #logger.debug("recon {}".format(np.degrees(_rotation_matrix_to_euler_angles(recon_rel_rot))))
+
+    diff_rot = np.dot(preint_rel_rot, recon_rel_rot.T)
+
+    return np.linalg.norm(cv2.Rodrigues(diff_rot)[0].ravel())
+
+    # instead of returning norm of the axis-angle difference, we return only the Y component which is
+    # more relevant to the mapping use case we have
+    #return abs(_rotation_matrix_to_euler_angles(diff_rot)[1])
+
+
+def debug_plot_reconstruction(reconstruction, pdr_shots_dict, culling_dict):
     '''
     draw an individual reconstruction
 
@@ -160,34 +191,36 @@ def debug_plot_reconstruction(reconstruction):
 
     shot_ids = sorted(reconstruction.shots)
     for shot_id in shot_ids:
-        vector_next = vector_prev = None
-
         next_shot_id = _next_shot_id(shot_id)
         prev_shot_id = _prev_shot_id(shot_id)
 
-        next_2_shot_id = _next_shot_id(next_shot_id)
-        prev_2_shot_id = _prev_shot_id(prev_shot_id)
-
         origin_curr = reconstruction.shots[shot_id].pose.get_origin()
 
-        if next_shot_id in reconstruction.shots:
+        if next_shot_id in reconstruction.shots and _is_no_culling_in_between(culling_dict, shot_id, next_shot_id) and \
+           prev_shot_id in reconstruction.shots and _is_no_culling_in_between(culling_dict, shot_id, prev_shot_id):
             vector_next = reconstruction.shots[next_shot_id].pose.get_origin() - origin_curr
-        elif next_2_shot_id in reconstruction.shots:
-            vector_next = reconstruction.shots[next_2_shot_id].pose.get_origin() - origin_curr
-
-        if prev_shot_id in reconstruction.shots:
             vector_prev = origin_curr - reconstruction.shots[prev_shot_id].pose.get_origin()
-        elif prev_2_shot_id in reconstruction.shots:
-            vector_prev = origin_curr - reconstruction.shots[prev_2_shot_id].pose.get_origin()
-
-        if vector_next is not None and vector_prev is not None:
             angle = _vector_angle(vector_next, vector_prev)
-            if angle > np.pi*2.0/3.0:
+            if angle > np.pi * 2.0 / 3.0:
                 d_next = np.linalg.norm(vector_next)
                 d_prev = np.linalg.norm(vector_prev)
 
-                if d_next > 1.0 and d_prev > 1.0:
-                    logger.debug("{} angle = {}".format(shot_id, np.degrees(angle)))
+                # given that frames are 0.5s apart (not enough time for turning around), it's highly unlikely to have
+                # any significant movement that's forward then backward
+                if d_next > 0.25 and d_prev > 0.25 and (d_next > 0.5 or d_prev > 0.5):
+                    logger.debug("{} {} {} angle = {} d_prev = {} d_next {}".format(prev_shot_id, shot_id, next_shot_id,
+                                                                                    np.degrees(angle), d_prev, d_next))
+
+        if next_shot_id in reconstruction.shots and _is_no_culling_in_between(culling_dict, shot_id, next_shot_id):
+            geo_diff = diff_recon_preint(shot_id, next_shot_id, reconstruction, pdr_shots_dict)
+
+            if geo_diff > 10.0/180.0*np.pi: # 10 degrees
+                logger.debug("{} {} rotation diff {} degrees".format(shot_id, next_shot_id, np.degrees(geo_diff)))
+
+            vector_next = reconstruction.shots[next_shot_id].pose.get_origin() - origin_curr
+            distance = np.linalg.norm(vector_next)
+            if distance > 1.25:
+                logger.debug("{} {} coords distance {} meters".format(shot_id, next_shot_id, distance))
 
     plt.show()
 
@@ -347,6 +380,18 @@ def _int_to_shot_id(shot_int):
     return str(shot_int).zfill(10) + ".jpg"
 
 
+def _is_no_culling_in_between(culling_dict, shot_id_1, shot_id_2):
+    if not culling_dict:
+        return True
+
+    i1 = _shot_id_to_int(culling_dict[shot_id_1])
+    i2 = _shot_id_to_int(culling_dict[shot_id_2])
+    if abs(i1-i2) == 1:
+        return True
+    else:
+        return False
+
+
 def _load_topocentric_gps_points():
     topocentric_gps_points_dict = {}
 
@@ -365,6 +410,27 @@ def _load_topocentric_gps_points():
     return topocentric_gps_points_dict
 
 
+def _rotation_matrix_to_euler_angles(R):
+    """
+    The result is the same as MATLAB except the order of the euler angles ( x and z are swapped ).
+    https://www.learnopencv.com/rotation-matrix-to-euler-angles/
+    """
+    sy = math.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0])
+
+    singular = sy < 1e-6
+
+    if not singular:
+        x = math.atan2(R[2, 1], R[2, 2])
+        y = math.atan2(-R[2, 0], sy)
+        z = math.atan2(R[1, 0], R[0, 0])
+    else:
+        x = math.atan2(-R[1, 2], R[1, 1])
+        y = math.atan2(-R[2, 0], sy)
+        z = 0
+
+    return np.array([x, y, z])
+
+
 # Entry point
 if __name__ == "__main__":
 
@@ -378,7 +444,24 @@ if __name__ == "__main__":
 
     reconstructions = sorted(reconstructions,
                              key=lambda x: -len(x.shots))
+
+    pdr_shots_dict = {}
+    with open('pdr_shots.txt') as fin:
+        for line in fin:
+            (shot_id, x, y, z, roll, pitch, heading, omega_0, omega_1, omega_2, delta_distance) = line.split()
+            pdr_shots_dict[shot_id] = (float(x), float(y), float(z),
+                                       float(roll), float(pitch), float(heading),
+                                       float(omega_0), float(omega_1), float(omega_2),
+                                       float(delta_distance))
+
+    culling_dict = {}
+    if os.path.exists('../frames_redundant/undo.txt'):
+        with open('../frames_redundant/undo.txt') as fin:
+            for line in fin:
+                (shot_id, orig_shot_id) = line.split()
+                culling_dict[shot_id] = orig_shot_id
+
     if show_num == -1:
         debug_plot_reconstructions(reconstructions)
     else:
-        debug_plot_reconstruction(reconstructions[show_num])
+        debug_plot_reconstruction(reconstructions[show_num], pdr_shots_dict, culling_dict)

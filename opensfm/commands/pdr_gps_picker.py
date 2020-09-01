@@ -265,11 +265,11 @@ def load_pdr_shots(pdr_shots_path):
 
     with open(pdr_shots_path) as fin:
         for line in fin:
-            (shot_id, x, y, z, roll, pitch, heading, delta_distance, omega_0, omega_1, omega_2) = line.split()
+            (shot_id, x, y, z, roll, pitch, heading, omega_0, omega_1, omega_2, delta_distance) = line.split()
             pdr_shots_dict[shot_id] = (float(x), float(y), float(z),
                                        float(roll), float(pitch), float(heading),
-                                       float(delta_distance),
-                                       float(omega_0), float(omega_1), float(omega_2))
+                                       float(omega_0), float(omega_1), float(omega_2),
+                                       float(delta_distance))
 
     return pdr_shots_dict
 
