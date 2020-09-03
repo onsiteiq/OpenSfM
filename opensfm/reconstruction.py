@@ -22,7 +22,8 @@ from opensfm import tracking
 from opensfm import multiview
 from opensfm import types
 from opensfm.align import align_reconstruction, apply_similarity
-from opensfm.align_pdr import init_pdr_predictions, direct_align_pdr, hybrid_align_pdr, align_reconstruction_to_pdr
+from opensfm.align_pdr import init_pdr_predictions, direct_align_pdr, hybrid_align_pdr
+from opensfm.align_pdr import align_reconstructions_to_pdr, prune_reconstructions_by_pdr
 from opensfm.align_pdr import update_pdr_prediction_position
 from opensfm.context import parallel_map, current_memory_usage
 from opensfm import transformations as tf
@@ -2092,10 +2093,11 @@ def incremental_reconstruction_sequential(data, graph):
     if reconstructions:
         if data.pdr_shots_exist():
             # level and scale recons to pdr
-            reconstructions[:] = [align_reconstruction_to_pdr(recon, data) for recon in reconstructions]
+            align_reconstructions_to_pdr(reconstructions, data)
 
-            # remove frames from recons that are obviously wrong according to pdr
-            remove_bad_frames(reconstructions)
+            # remove frames from recons that are obviously wrong according to pdr, and break recons
+            # into segments of consecutive frames (with possible small holes in the middle)
+            reconstructions = prune_reconstructions_by_pdr(reconstructions, data, graph)
 
         reconstructions = sorted(reconstructions, key=lambda x: -len(x.shots))
         data.save_reconstruction(reconstructions)
@@ -2104,78 +2106,10 @@ def incremental_reconstruction_sequential(data, graph):
         # this cuts down the time it needs to download and parse.
         data.save_reconstruction_no_point(reconstructions)
 
-        # for gps picker tool, calculate and save a recon quality factor. pdr/hybrid will be based on it.
-        if cnt_images <= 100:
-            if len(reconstructions) == 1:
-                quality_factor = 100
-            else:
-                quality_factor = 0
-        else:
-            cnt_large_recon = 0
-            for recon in reconstructions:
-                if len(recon.shots) > 100:
-                    cnt_large_recon += len(recon.shots)
-
-            quality_factor = int(100 * cnt_large_recon / cnt_images)
-        data.save_recon_quality(str(quality_factor))
-
     chrono.lap('compute_reconstructions')
     report['wall_times'] = dict(chrono.lap_times())
     report['not_reconstructed_images'] = list(remaining_images)
     return report, reconstructions
-
-
-def remove_bad_frames(reconstructions):
-    height_thresh = 1.0    # in meters
-    distance_thresh = 2.0  # in meters
-
-    empty_recons = []
-    for i, r in enumerate(reconstructions):
-        logger.info("Reconstruction {}: {} images".format(i, len(r.shots)))
-
-        suspicious_images = []
-
-        shot_ids = sorted(r.shots)
-        for j, shot_id in enumerate(shot_ids):
-            d1 = d2 = h1 = h2 = 0
-
-            next_shot_id = _next_shot_id(shot_id)
-            prev_shot_id = _prev_shot_id(shot_id)
-
-            origin_curr = r.shots[shot_id].pose.get_origin()
-
-            if next_shot_id in r.shots:
-                origin_next = r.shots[next_shot_id].pose.get_origin()
-                d1 = np.linalg.norm(origin_next - origin_curr)
-                h1 = abs(origin_next[2] - origin_curr[2])
-
-            if prev_shot_id in r.shots:
-                origin_prev = r.shots[prev_shot_id].pose.get_origin()
-                d2 = np.linalg.norm(origin_prev - origin_curr)
-                h2 = abs(origin_prev[2] - origin_curr[2])
-
-            if next_shot_id in r.shots and prev_shot_id in r.shots:
-                if (d1 > distance_thresh and d2 > distance_thresh) or (h1 > height_thresh and h2 > height_thresh):
-                    suspicious_images.append(shot_id)
-                    continue
-            elif next_shot_id in r.shots:
-                if d1 > distance_thresh or h1 > height_thresh:
-                    suspicious_images.append(shot_id)
-                    continue
-            elif prev_shot_id in r.shots:
-                if d2 > distance_thresh or h2 > height_thresh:
-                    suspicious_images.append(shot_id)
-                    continue
-
-        for shot_id in suspicious_images:
-            logger.info("removing suspicious image: {}".format(shot_id))
-            r.shots.pop(shot_id, None)
-
-        if len(r.shots) == 0:
-            empty_recons.append(r)
-
-    for r in empty_recons:
-        reconstructions.remove(r)
 
 
 def breakup_reconstruction(graph, reconstruction):

@@ -687,10 +687,13 @@ class DataSet(object):
     def _recon_quality_path(self):
         return os.path.join(self.data_path, 'recon_quality.txt')
 
-    def save_recon_quality(self, recon_quality):
+    def save_recon_quality(self, recon_quality, avg_segment_size, ratio_shots_in_min_recon, speedup):
         """Save recon quality 0-100 to a file."""
         with io.open_wt(self._recon_quality_path()) as fout:
-            return fout.write("recon_quality_factor " + recon_quality)
+            fout.write("recon_quality_factor {0}\n".format(recon_quality))
+            fout.write("avg_segment_size {0}\n".format(int(avg_segment_size)))
+            fout.write("ratio_shots_in_min_recon {0}%\n".format(int(100*ratio_shots_in_min_recon)))
+            fout.write("speedup {:2.1f}x\n".format(speedup))
 
     def load_undistorted_reconstruction(self):
         return self.load_reconstruction(
@@ -849,6 +852,21 @@ class DataSet(object):
     def save_topocentric_gps_points(self, topocentric_gps_points_dict):
         """save a local copy of topocentric gps points"""
         self.topocentric_gps_points_dict = topocentric_gps_points_dict
+
+    def _culling_dict_file(self):
+        return os.path.join(os.path.dirname(self.data_path), 'frames_redundant/undo.txt')
+
+    def culling_dict_exist(self):
+        return os.path.isfile(self._culling_dict_file())
+
+    def load_culling_dict(self):
+        culling_dict = {}
+        if self.culling_dict_exist():
+            with open(self._culling_dict_file()) as fin:
+                for line in fin:
+                    (new_shot_id, orig_shot_id) = line.split()
+                    culling_dict[new_shot_id] = orig_shot_id
+        return culling_dict
 
     def _pdr_shots_file(self):
         return os.path.join(self.data_path, 'pdr_shots.txt')

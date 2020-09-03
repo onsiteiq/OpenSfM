@@ -3,6 +3,7 @@
 import operator
 import logging
 import math
+import cv2
 import numpy as np
 from cmath import rect, phase
 
@@ -15,6 +16,28 @@ from opensfm import types
 from opensfm import transformations as tf
 
 logger = logging.getLogger(__name__)
+
+# pruning parameters
+ABS_HEIGHT_THRESH = 2.5  # in meters
+REL_HEIGHT_THRESH = 1.0  # in meters
+DISTANCE_THRESH = 1.25  # in meters
+MOVEMENT_THRESH = 0.25  # in meters
+SIG_MOVEMENT_THRESH = 0.50  # in meters
+HEADING_THRESH = 10.0  # in degrees
+ANGLE_THRESH = 120  # in degrees
+
+# eliminate NEIGHBOR_RADIUS frames around each side of suspicious frame
+NEIGHBOR_RADIUS = 2
+
+# max size of holes. must be smaller than (2*NEIGHBOR_RADIUS+1). set to 1 to disallow holes
+MAX_HOLE_SIZE = 3
+
+# number of predictions using PDR
+PDR_TRUST_SIZE = 20
+
+# form new recons with more than MIN_RECON_SIZE consecutive frames (with possible hole in the middle)
+# this should be twice the PDR_TRUST_SIZE
+MIN_RECON_SIZE = 2*PDR_TRUST_SIZE
 
 
 def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad=True):
@@ -356,8 +379,6 @@ def hybrid_align_pdr(data, target_images=None):
     pdr_shots_dict = data.load_pdr_shots()
     reconstructions = data.load_reconstruction()
 
-    MIN_RECON_SIZE = 100
-
     aligned_recons = []
     aligned_shots_dict = curr_gps_points_dict.copy()
 
@@ -692,6 +713,10 @@ def update_pdr_prediction_rotation(shot_id, reconstruction, data):
     return [0, 0, 0], 999999.0
 
 
+def align_reconstructions_to_pdr(reconstructions, data):
+    reconstructions[:] = [align_reconstruction_to_pdr(recon, data) for recon in reconstructions]
+
+
 def align_reconstruction_to_pdr(reconstruction, data):
     """
     leveling and scaling the reconstructions to pdr
@@ -854,7 +879,7 @@ def align_reconstruction_segments(data, graph, reconstruction, recon_gps_points)
             # subtract 1 at the end, since gps_shots_ids[i+1] will be transformed in the next iteration
             end_index = _shot_id_to_int(gps_shot_ids[i+1]) - 1
 
-        segment = extract_segment(data, graph, reconstruction, start_index, end_index)
+        segment = extract_segment(reconstruction, start_index, end_index, graph, data.load_camera_models())
         apply_similarity(segment, s, A, b)
 
         segment.alignment.aligned = True
@@ -863,6 +888,36 @@ def align_reconstruction_segments(data, graph, reconstruction, recon_gps_points)
         segments.append(segment)
 
     return segments
+
+
+def diff_recon_preint(im1, im2, reconstruction, pdr_shots_dict):
+    """
+    compare rel recon rotation of two images to that of imu gyro preintegration,
+    if they are not close, the recon of the images is considered to be an erroneous
+    """
+    # calculate relative rotation from preintegrated gyro input
+    preint_im1_rot = cv2.Rodrigues(np.asarray([pdr_shots_dict[im1][6], pdr_shots_dict[im1][7], pdr_shots_dict[im1][8]]))[0]
+    preint_im2_rot = cv2.Rodrigues(np.asarray([pdr_shots_dict[im2][6], pdr_shots_dict[im2][7], pdr_shots_dict[im2][8]]))[0]
+    preint_rel_rot = np.dot(preint_im2_rot, preint_im1_rot.T)
+
+    # convert this rotation from sensor frame to camera frame
+    b_to_c = np.asarray([1, 0, 0, 0, 0, -1, 0, 1, 0]).reshape(3, 3)
+    preint_rel_rot = cv2.Rodrigues(b_to_c.dot(cv2.Rodrigues(preint_rel_rot)[0].ravel()))[0]
+
+    R1 = reconstruction.shots[im1].pose.get_rotation_matrix()
+    R2 = reconstruction.shots[im2].pose.get_rotation_matrix()
+    recon_rel_rot = np.dot(R1, R2.T)
+
+    #logger.debug("preint {}".format(np.degrees(_rotation_matrix_to_euler_angles(preint_rel_rot))))
+    #logger.debug("recon {}".format(np.degrees(_rotation_matrix_to_euler_angles(recon_rel_rot))))
+
+    diff_rot = np.dot(preint_rel_rot, recon_rel_rot.T)
+
+    return np.linalg.norm(cv2.Rodrigues(diff_rot)[0].ravel())
+
+    # instead of returning norm of the axis-angle difference, we return only the Y component which is
+    # more relevant to the mapping use case we have
+    #return abs(_rotation_matrix_to_euler_angles(diff_rot)[1])
 
 
 def point_copy(point):
@@ -874,12 +929,12 @@ def point_copy(point):
     return c
 
 
-def extract_segment(data, graph, reconstruction, start_index, end_index):
+def extract_segment(reconstruction, start_index, end_index, graph, cameras):
     recon_points = set(reconstruction.points)
     segment_points = set()
 
     segment = types.Reconstruction()
-    segment.cameras = data.load_camera_models()
+    segment.cameras = cameras
 
     for shot in reconstruction.shots.values():
         if start_index <= _shot_id_to_int(shot.id) <= end_index:
@@ -891,6 +946,164 @@ def extract_segment(data, graph, reconstruction, start_index, end_index):
         segment.add_point(point_copy(reconstruction.points[point_id]))
 
     return segment
+
+
+def prune_reconstructions_by_pdr(reconstructions, data, graph):
+    segments = []
+
+    recon_quality = 0
+    avg_segment_size = 0
+    ratio_shots_in_min_recon = 0
+    speedup = 1.0
+
+    total_shots_cnt = 0
+    total_bad_shots_cnt = 0
+
+    cameras = data.load_camera_models()
+    pdr_shots_dict = data.load_pdr_shots()
+    culling_dict = data.load_culling_dict()
+
+    for reconstruction in reconstructions:
+        total_shots_cnt += len(reconstruction.shots)
+        new_segments, bad_shots_cnt = prune_reconstruction_by_pdr(reconstruction, pdr_shots_dict, culling_dict, graph, cameras)
+        total_bad_shots_cnt += bad_shots_cnt
+
+        segments.extend(new_segments)
+
+    if len(segments) > 0:
+        recon_quality = 100-int(total_bad_shots_cnt*100/total_shots_cnt)
+        logger.info("Recon Quality - {}".format(recon_quality))
+
+        segments_shots_cnt = 0
+        for segment in segments:
+            segments_shots_cnt += len(segment.shots)
+        avg_segment_size = segments_shots_cnt/len(segments)
+        logger.info("Average good segment size - {}".format(int(avg_segment_size)))
+
+        ratio_shots_in_min_recon = (segments_shots_cnt/total_shots_cnt)
+        logger.info("Percentage of shots in good segments - {}%".format(int(100*ratio_shots_in_min_recon)))
+
+        # PDR predicts 20 frames at a time. so if average segment is 40 then we have a 40/20 = 2.0x speed up. the actual
+        # speed up depends on other factors and likely lower. avg_segment_size is capped to 100 below, because we predicts
+        # at most 100 frames at a time
+        speedup = 1.0 / (ratio_shots_in_min_recon / math.floor(min(avg_segment_size, 100.0)/20.0)
+                         + (1.0 - ratio_shots_in_min_recon))
+        logger.info("Estimated speedup Hybrid vs PDR - {:2.1f}x".format(speedup))
+
+    # for gps picker tool, calculate and save a recon quality factor. pdr/hybrid will be based on it.
+    data.save_recon_quality(recon_quality, avg_segment_size, ratio_shots_in_min_recon, speedup)
+
+    return segments
+
+
+def prune_reconstruction_by_pdr(reconstruction, pdr_shots_dict, culling_dict, graph, cameras):
+    segments = []
+    suspicious_images = []
+
+    shot_ids = sorted(reconstruction.shots)
+    for shot_id in shot_ids:
+        next_shot_id = _next_shot_id(shot_id)
+        prev_shot_id = _prev_shot_id(shot_id)
+
+        origin_curr = reconstruction.shots[shot_id].pose.get_origin()
+
+        if next_shot_id in reconstruction.shots and _is_no_culling_in_between(culling_dict, shot_id, next_shot_id):
+            vector_next = reconstruction.shots[next_shot_id].pose.get_origin() - origin_curr
+
+            # check 1: compare rotations predicted by pre-integration and that of the reconstruction
+            geo_diff = diff_recon_preint(shot_id, next_shot_id, reconstruction, pdr_shots_dict)
+
+            if geo_diff > np.radians(HEADING_THRESH): # 10 degrees
+                logger.debug("{} {} rotation diff {} degrees".format(shot_id, next_shot_id, np.degrees(geo_diff)))
+                suspicious_images.append(shot_id)
+                continue
+
+            # check 2: check absolute height of current frame and difference between neighboring frames
+            height_diff = abs(vector_next[2])
+            if abs(vector_next[2]) > REL_HEIGHT_THRESH or abs(origin_curr[2]) > ABS_HEIGHT_THRESH:
+                logger.debug("{} {} height diff {} meters".format(shot_id, next_shot_id, height_diff))
+                suspicious_images.append(shot_id)
+                continue
+
+            # check 3: check distance traveled between neighboring frames - we know frames are taken 0.5s apart,
+            # and physically the camera should move around 0.5 meters at normal walking speed. but we set the
+            # threshold somewhat higher to account for inaccuracies of pdr.
+            distance = np.linalg.norm(vector_next)
+            if distance > DISTANCE_THRESH:
+                logger.debug("{} {} coords distance {} meters".format(shot_id, next_shot_id, distance))
+                suspicious_images.append(shot_id)
+                continue
+
+            # check 4: we know that frames are 0.5s apart, which is not enough time for a human to turning around
+            # at normal walking speed, it's unlikely to have any significant movement that's forward then backward
+            if prev_shot_id in reconstruction.shots and _is_no_culling_in_between(culling_dict, shot_id, prev_shot_id):
+                vector_prev = origin_curr - reconstruction.shots[prev_shot_id].pose.get_origin()
+
+                angle = _vector_angle(vector_next, vector_prev)
+                if angle > np.radians(ANGLE_THRESH):
+                    d_next = np.linalg.norm(vector_next)
+                    d_prev = np.linalg.norm(vector_prev)
+
+                    if d_next > MOVEMENT_THRESH and d_prev > MOVEMENT_THRESH and \
+                            (d_next > SIG_MOVEMENT_THRESH or d_prev > SIG_MOVEMENT_THRESH):
+                        logger.debug("{} {} {} angle = {} d_prev = {} d_next {}".
+                                     format(prev_shot_id, shot_id, next_shot_id,
+                                            np.degrees(angle), d_prev, d_next))
+                        suspicious_images.append(shot_id)
+                        continue
+
+    # now remove suspicious images and images around them
+    remove_images = set()
+    for shot_id in suspicious_images:
+        index = _shot_id_to_int(shot_id)
+        for i in range(index - NEIGHBOR_RADIUS, index + NEIGHBOR_RADIUS + 1):
+            remove_images.add(_int_to_shot_id(i))
+
+    # TODO: is it necessary to search for and retriangulate/remove points in removed images?
+    for shot_id in sorted(remove_images):
+        if shot_id in reconstruction.shots:
+            #logger.info("removing image: {}".format(shot_id))
+            reconstruction.shots.pop(shot_id, None)
+
+    # find sequential frames longer than MIN_RECON_SIZE to form new recons. the sequence
+    # is allowed to have holes no larger than MAX_HOLE_SIZE
+    shot_ids = sorted(reconstruction.shots)
+
+    if len(shot_ids) < MIN_RECON_SIZE/MAX_HOLE_SIZE:
+        return segments, len(suspicious_images)
+
+    first_index = _shot_id_to_int(shot_ids[0])
+    last_index = _shot_id_to_int(shot_ids[-1])
+
+    start_index = end_index = first_index
+    while True:
+        while True:
+            found = False
+            for i in range(end_index + MAX_HOLE_SIZE, end_index, -1):
+                if _int_to_shot_id(i) in shot_ids:
+                    end_index = i
+                    found = True
+                    break
+
+            if not found:
+                break
+
+        if (end_index - start_index + 1) >= MIN_RECON_SIZE:
+            logger.debug("extract new recon from {} to {}".format(start_index, end_index))
+            segment = extract_segment(reconstruction, start_index, end_index, graph, cameras)
+            segments.append(segment)
+
+        found = False
+        for i in range(end_index + MAX_HOLE_SIZE, last_index - MIN_RECON_SIZE + 1):
+            if _int_to_shot_id(i) in shot_ids:
+                start_index = end_index = i
+                found = True
+                break
+
+        if not found:
+            break
+
+    return segments, len(suspicious_images)
 
 
 def apply_similarity(reconstruction, s, A, b):
@@ -1083,9 +1296,6 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
     :param num_extrapolation:
     :return:
     """
-    PDR_TRUST_SIZE = 20
-    MIN_RECON_SIZE = 100
-
     aligned_shots_dict = curr_gps_points_dict.copy()
 
     if len(curr_gps_points_dict) == 0:
@@ -1286,9 +1496,6 @@ def update_gps_picker_hybrid_old(curr_gps_points_dict, reconstructions, pdr_shot
     :param num_extrapolation:
     :return:
     """
-    PDR_TRUST_SIZE = 20
-    MIN_RECON_SIZE = 20
-
     aligned_shots_dict = curr_gps_points_dict.copy()
     predicted_shots_dict = {}
 
@@ -1691,6 +1898,25 @@ def _next_shot_id(curr_shot_id):
     Returns: next shot id
     """
     return _int_to_shot_id(_shot_id_to_int(curr_shot_id) + 1)
+
+
+def _vector_angle(vector_1, vector_2):
+    unit_vector_1 = vector_1 / np.linalg.norm(vector_1)
+    unit_vector_2 = vector_2 / np.linalg.norm(vector_2)
+    dot_product = np.dot(unit_vector_1, unit_vector_2)
+    return np.arccos(dot_product)
+
+
+def _is_no_culling_in_between(culling_dict, shot_id_1, shot_id_2):
+    if not culling_dict:
+        return True
+
+    i1 = _shot_id_to_int(culling_dict[shot_id_1])
+    i2 = _shot_id_to_int(culling_dict[shot_id_2])
+    if abs(i1-i2) == 1:
+        return True
+    else:
+        return False
 
 
 def _rotation_matrix_to_euler_angles(R):
