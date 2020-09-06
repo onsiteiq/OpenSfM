@@ -185,14 +185,17 @@ def prune_reconstructions_by_pdr(reconstructions, pdr_shots_dict, culling_dict, 
         ratio_shots_in_min_recon = (segments_shots_cnt/total_shots_cnt)
         logger.info("Percentage of shots in good segments - {}%".format(int(100*ratio_shots_in_min_recon)))
 
-        # PDR predicts 20 frames at a time. so if average segment is 40 then we have a 40/20 = 2.0x speed up. the actual
-        # speed up depends on other factors and likely lower. avg_segment_size is capped to 100 below, because we predicts
-        # at most 100 frames at a time
+        # PDR predicts 20 frames at a time. so if average segment is 40 then we have a 40/20 = 2.0x speed up.
+        # the actual speed up depends on other factors and likely lower. avg_segment_size is capped to 100
+        # below, because we predicts at most 100 frames at a time
         speedup = 1.0 / (ratio_shots_in_min_recon / math.floor(min(avg_segment_size, 100.0)/20.0)
                          + (1.0 - ratio_shots_in_min_recon))
-        logger.info("Estimated speedup Hybrid vs PDR - {:2.1f}".format(speedup))
+        logger.info("Estimated speedup Hybrid vs PDR - {:2.1f}x".format(speedup))
 
-    return segments, recon_quality
+    # for gps picker tool, calculate and save a recon quality factor. pdr/hybrid will be based on it.
+    #data.save_recon_quality(recon_quality, avg_segment_size, ratio_shots_in_min_recon, speedup)
+
+    return segments
 
 
 def prune_reconstruction_by_pdr(reconstruction, pdr_shots_dict, culling_dict, graph, cameras):
@@ -220,7 +223,7 @@ def prune_reconstruction_by_pdr(reconstruction, pdr_shots_dict, culling_dict, gr
             # check 2: check absolute height of current frame and difference between neighboring frames
             height_diff = abs(vector_next[2])
             if abs(vector_next[2]) > REL_HEIGHT_THRESH or abs(origin_curr[2]) > ABS_HEIGHT_THRESH:
-                logger.debug("{} {} height diff {} meters".format(shot_id, next_shot_id, height_diff))
+                logger.debug("{} {} height {} diff {} meters".format(shot_id, next_shot_id, origin_curr[2], height_diff))
                 suspicious_images.append(shot_id)
                 continue
 
@@ -651,5 +654,9 @@ if __name__ == "__main__":
         debug_plot_reconstruction(recons[show_num], pdr_shots_dict, culling_dict, graph, cameras)
     else:
         # if show_num is -1, run the pruning code
-        prune_reconstructions_by_pdr(recons, pdr_shots_dict, culling_dict, graph, cameras)
+        segments = prune_reconstructions_by_pdr(recons, pdr_shots_dict, culling_dict, graph, cameras)
+        segments = sorted(segments, key=lambda x: -len(x.shots))
+        with io.open_wt('reconstruction.json.new') as fout:
+            io.json_dump(io.reconstructions_to_json(segments), fout, False)
+
 

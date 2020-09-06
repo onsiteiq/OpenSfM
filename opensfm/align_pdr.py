@@ -40,6 +40,25 @@ PDR_TRUST_SIZE = 20
 MIN_RECON_SIZE = 2*PDR_TRUST_SIZE
 
 
+def distance_2d_no_numpy(p1, p2, expected_scale):
+    x = p1[0] - p2[0]
+    y = p1[1] - p2[1]
+    return math.sqrt(x*x + y*y) / expected_scale
+
+
+def filter_gps_points_no_numpy(gps_points_dict, expected_scale):
+    shot_ids = sorted(gps_points_dict.keys())
+    keep_shot_ids = [shot_ids[-1]]
+
+    for i in range(len(shot_ids) - 2, 0, -1):
+        if distance_2d_no_numpy(gps_points_dict[shot_ids[i]], gps_points_dict[keep_shot_ids[-1]], expected_scale) > 3.0:
+            keep_shot_ids.append(shot_ids[i])
+
+    keep_shot_ids.append(shot_ids[0])
+
+    return {k: v for k, v in gps_points_dict.items() if k in keep_shot_ids}
+
+
 def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad=True):
     """
     *globally* align pdr predictions to GPS points. used with direct_align
@@ -76,7 +95,8 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad
         # the last few pdr coords maybe identical if no steps were detected. treat this as a special case
         # to avoid divide by zero later on
         if pdr_coords[0] == pdr_coords[1]:
-            pdr_coords[1] = pdr_coords[0] + (gps_coords[1] - gps_coords[0])/expected_scale
+            pdr_coords[1][0] = pdr_coords[0][0] + (gps_coords[1][0] - gps_coords[0][0])/expected_scale
+            pdr_coords[1][1] = pdr_coords[0][1] + (gps_coords[1][1] - gps_coords[0][1])/expected_scale
 
         #s, A, b = get_affine_transform_2d(gps_coords, pdr_coords)
         s, A, b = get_affine_transform_2d_no_numpy(gps_coords, pdr_coords)
@@ -111,6 +131,32 @@ def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad
                                                    deviation, [all_gps_shot_ids[i], all_gps_shot_ids[i+1]])
 
         pdr_predictions_dict.update(new_dict)
+
+    # special case: if last two points are very close, alignment to them can be quite off, and the
+    # extrapolations beyond the last point can contain large errors. therefore we seek a second
+    # point that's sufficiently far away from the last point, which should make the alignment
+    # (hence the extrapolations) more stable. if no such point was found, we would just fall back to
+    # use whatever was calculated above
+    p_last = gps_points_dict[all_gps_shot_ids[-1]]
+    for i in range(len(all_gps_shot_ids) - 2, 0, -1):
+        p_curr = gps_points_dict[all_gps_shot_ids[i]]
+        x = p_last[0] - p_curr[0]
+        y = p_last[1] - p_curr[1]
+
+        if math.sqrt(x * x + y * y) / expected_scale > 5.0: # 5 meters
+            gps_coords = [p_curr, p_last]
+            pdr_coords = [[pdr_shots_dict[all_gps_shot_ids[i]][0], pdr_shots_dict[all_gps_shot_ids[i]][1], 0],
+                          [pdr_shots_dict[all_gps_shot_ids[-1]][0], pdr_shots_dict[all_gps_shot_ids[-1]][1], 0]]
+
+            s, A, b = get_affine_transform_2d_no_numpy(gps_coords, pdr_coords)
+            deviation = math.fabs(1.0 - s / expected_scale)
+
+            # this transformation is applied to shots after the last gps point only
+            new_dict = apply_affine_transform_no_numpy(pdr_shots_dict, all_gps_shot_ids[-1], _int_to_shot_id(len(pdr_shots_dict)-1),
+                                                       s, A, b,
+                                                       deviation, [all_gps_shot_ids[i], all_gps_shot_ids[-1]])
+            pdr_predictions_dict.update(new_dict)
+            break
 
     return pdr_predictions_dict
 
@@ -983,9 +1029,9 @@ def prune_reconstructions_by_pdr(reconstructions, data, graph):
         ratio_shots_in_min_recon = (segments_shots_cnt/total_shots_cnt)
         logger.info("Percentage of shots in good segments - {}%".format(int(100*ratio_shots_in_min_recon)))
 
-        # PDR predicts 20 frames at a time. so if average segment is 40 then we have a 40/20 = 2.0x speed up. the actual
-        # speed up depends on other factors and likely lower. avg_segment_size is capped to 100 below, because we predicts
-        # at most 100 frames at a time
+        # PDR predicts 20 frames at a time. so if average segment is 40 then we have a 40/20 = 2.0x speed up.
+        # the actual speed up depends on other factors and likely lower. avg_segment_size is capped to 100
+        # below, because we predicts at most 100 frames at a time
         speedup = 1.0 / (ratio_shots_in_min_recon / math.floor(min(avg_segment_size, 100.0)/20.0)
                          + (1.0 - ratio_shots_in_min_recon))
         logger.info("Estimated speedup Hybrid vs PDR - {:2.1f}x".format(speedup))
@@ -1021,7 +1067,7 @@ def prune_reconstruction_by_pdr(reconstruction, pdr_shots_dict, culling_dict, gr
             # check 2: check absolute height of current frame and difference between neighboring frames
             height_diff = abs(vector_next[2])
             if abs(vector_next[2]) > REL_HEIGHT_THRESH or abs(origin_curr[2]) > ABS_HEIGHT_THRESH:
-                logger.debug("{} {} height diff {} meters".format(shot_id, next_shot_id, height_diff))
+                logger.debug("{} {} height {} diff {} meters".format(shot_id, next_shot_id, origin_curr[2], height_diff))
                 suspicious_images.append(shot_id)
                 continue
 
@@ -1384,28 +1430,32 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
     before_dict consists of shots from aligned_shots_dict, or shots from pdr_predictions_dict if they are
     not aligned.
 
-    after_dict shots are added as follows:
-        1) current_shot = last_gps_point + 1
-
-        2) while current_shot - last_gps_point < num_extrapolations:
-
-            a. if current shot is aligned, add aligned_shots_dict[current_shot] to after_dict. set
-            num_pdr_predictions=0
-
-            b. if current shot is not aligned, add pdr_predictions_dict[current_shot] to after_dict.
-            num_pdr_predictions++
-
-            c. if num_pdr_predictions > PDR_TRUST_SIZE, break
-
-            d. current_shot++
+    after_dict shots are composed of 
+        1) up to num_extrapolation aligned shots (may contain small holes), or
+        2) up to PDR_TRUST_SIZE of pdr predictions when there is no remaining aligned shots, or
+        3) in case of less than PDR_TRUST_SIZE aligned shots, pdr predictions are padded at the end
     '''
 
     last_gps_idx = _shot_id_to_int(sorted(curr_gps_points_dict.keys(), reverse=True)[0])
+    last_aligned_idx = _shot_id_to_int(sorted(aligned_shots_dict.keys(), reverse=True)[0])
 
-    if num_extrapolation != -1:
-        max_shot_idx = last_gps_idx + num_extrapolation
+    if num_extrapolation == -1:
+        num_extrapolation = 999999
+
+    if last_aligned_idx > last_gps_idx:
+        num_aligned_remaining = last_aligned_idx - last_gps_idx
+        if num_extrapolation < num_aligned_remaining < 2*num_extrapolation:
+            # avoid situation where only a small number of aligned shots remaining
+            max_shot_idx = last_gps_idx + num_aligned_remaining/2
+        elif num_aligned_remaining < PDR_TRUST_SIZE:
+            # in this case we will have a few aligned shots followed by up to PDR_TRUST_SIZE predictions
+            max_shot_idx = last_gps_idx + PDR_TRUST_SIZE
+        else:
+            # in this case we will have up to num_extrapolation aligned shots
+            max_shot_idx = last_gps_idx + min(num_extrapolation, num_aligned_remaining)
     else:
-        max_shot_idx = 999999
+        # in this case we will have PDR_TRUST_SIZE predictions
+        max_shot_idx = last_gps_idx + PDR_TRUST_SIZE
 
     max_shot_idx = min(len(pdr_shots_dict) - 1, max_shot_idx)
 
@@ -1420,18 +1470,13 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
             before_dict[shot_id] = pdr_predictions_dict[shot_id][:3]
 
     curr_shot_idx = last_gps_idx + 1
-    num_pdr_predictions = 0
 
     while curr_shot_idx <= max_shot_idx:
         shot_id = _int_to_shot_id(curr_shot_idx)
         if shot_id in aligned_shots_dict:
             after_dict[shot_id] = aligned_shots_dict[shot_id]
-            num_pdr_predictions = 0
         else:
             after_dict[shot_id] = pdr_predictions_dict[shot_id][:3]
-            num_pdr_predictions += 1
-            if num_pdr_predictions >= PDR_TRUST_SIZE:
-                break
 
         curr_shot_idx += 1
 

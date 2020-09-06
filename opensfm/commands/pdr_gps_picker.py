@@ -114,12 +114,13 @@ class DragMover(object):
         self.offset = np.zeros((1, 2))
 
     def on_press(self, event):
+        '''
         if event.dblclick:
             # use double-click event to signal the end of gps picking. save our work.
             # this is for debugging only. in practice we would call hybrid_align from
             # sfm pipeline. so neither the hybrid_align_pdr function, or the function
             # save_reconstructions need to be ported to javascript
-            if self.num_extrapolation == -1:
+            if self.num_extrapolation >= 100:
                 curr_gps_points_dict = {}
                 for shot_obj in self.shot_objs:
                     if shot_obj.get_is_gps():
@@ -131,6 +132,7 @@ class DragMover(object):
                                                self.pdr_shots_dict, self.scale_factor, -1)
                 save_reconstructions(self.reconstructions)
                 return
+        '''
 
         # is the press over some shot object
         is_on_shot_obj = False
@@ -307,13 +309,13 @@ def pdr_gps_picker(plan_path, pdr_shots_path, recon_file_path, scale_factor, num
 
 if __name__ == '__main__':
     """
-    run pdr_gps_picker with argument -1 to use hybrid (sfm+pdr) gps picker;
-    no argument or argument different than -1 to use pure pdr gps picker
+    run pdr_gps_picker with argument >=100 to use hybrid (sfm+pdr) gps picker;
+    no argument or argument different than <100 to use pure pdr gps picker
     """
     if len(sys.argv) > 1:
-        pdr_extrapolation_frames = int(sys.argv[1])
+        num_frames = int(sys.argv[1])
     else:
-        pdr_extrapolation_frames = 50
+        num_frames = 50
 
     # floor plan
     plan_paths = []
@@ -351,4 +353,4 @@ if __name__ == '__main__':
         exit(0)
 
     pdr_gps_picker(plan_paths[0], pdr_shots_paths[0], recon_file_paths[0],
-                   data_config['reconstruction_scale_factor'], pdr_extrapolation_frames)
+                   data_config['reconstruction_scale_factor'], num_frames)
