@@ -40,25 +40,6 @@ PDR_TRUST_SIZE = 20
 MIN_RECON_SIZE = 2*PDR_TRUST_SIZE
 
 
-def distance_2d_no_numpy(p1, p2, expected_scale):
-    x = p1[0] - p2[0]
-    y = p1[1] - p2[1]
-    return math.sqrt(x*x + y*y) / expected_scale
-
-
-def filter_gps_points_no_numpy(gps_points_dict, expected_scale):
-    shot_ids = sorted(gps_points_dict.keys())
-    keep_shot_ids = [shot_ids[-1]]
-
-    for i in range(len(shot_ids) - 2, 0, -1):
-        if distance_2d_no_numpy(gps_points_dict[shot_ids[i]], gps_points_dict[keep_shot_ids[-1]], expected_scale) > 3.0:
-            keep_shot_ids.append(shot_ids[i])
-
-    keep_shot_ids.append(shot_ids[0])
-
-    return {k: v for k, v in gps_points_dict.items() if k in keep_shot_ids}
-
-
 def update_pdr_global_2d(gps_points_dict, pdr_shots_dict, scale_factor, skip_bad=True):
     """
     *globally* align pdr predictions to GPS points. used with direct_align
