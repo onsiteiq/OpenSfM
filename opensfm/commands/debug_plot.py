@@ -62,10 +62,8 @@ def debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict):
                     format(key, value[0], value[1], value[2], value[3]))
 
     # floor plan
-    # floor plan
     plan_paths = []
-    for plan_type in ('./*FLOOR*.png', './*ROOF*.png'):
-        plan_paths.extend(glob.glob(plan_type))
+    plan_paths.extend(glob.glob('./*.png'))
 
     if not plan_paths or not os.path.exists(plan_paths[0]):
         return
@@ -94,6 +92,75 @@ def debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict):
 
     plt.show()
     #fig.savefig('./aligned_pdr_path.png', dpi=200)
+
+
+def check_scale_change_by_pdr(reconstruction, pdr_shots_dict, culling_dict):
+    """
+    detect if and where a sudden change of scale happens in the reconstruction. returns a list of
+    shot ids where change occur. the caller will need to break the recon at these places.
+
+    :param reconstruction:
+    :param pdr_shots_dict:
+    :param culling_dict:
+    :return:
+    """
+    shot_ids = sorted(reconstruction.shots)
+
+    distance_dict = {}
+    for i in range(_shot_id_to_int(shot_ids[0]), _shot_id_to_int(shot_ids[-1]) - 2):
+        shot_0 = _int_to_shot_id(i)
+        shot_1 = _int_to_shot_id(i+1)
+        shot_2 = _int_to_shot_id(i+2)
+
+        if shot_0 in shot_ids and shot_1 in shot_ids and shot_2 in shot_ids and \
+                _is_no_culling_in_between(culling_dict, shot_0, shot_1) and \
+                _is_no_culling_in_between(culling_dict, shot_1, shot_2):
+            vector_prev_recon = reconstruction.shots[shot_1].pose.get_origin() - reconstruction.shots[
+                shot_0].pose.get_origin()
+            vector_next_recon = reconstruction.shots[shot_2].pose.get_origin() - reconstruction.shots[
+                shot_1].pose.get_origin()
+            angle_recon = _vector_angle(vector_prev_recon, vector_next_recon)
+
+            vector_prev_pdr = np.asarray(pdr_shots_dict[shot_1][0:3]) - np.asarray(pdr_shots_dict[shot_0][0:3])
+            vector_next_pdr = np.asarray(pdr_shots_dict[shot_2][0:3]) - np.asarray(pdr_shots_dict[shot_1][0:3])
+            angle_pdr = _vector_angle(vector_prev_pdr, vector_next_pdr)
+
+            if np.linalg.norm(vector_prev_pdr) > 0.3048 and np.linalg.norm(vector_next_pdr) > 0.3048 and \
+                    angle_recon < np.radians(30) and angle_pdr < np.radians(30):
+                # we have 3 consecutive shots that, by all indication, are moving on roughly a straight line.
+                # we will remember the recon distance that's traveled.
+                distance_dict[shot_0] = np.linalg.norm(
+                    reconstruction.shots[shot_2].pose.get_origin() - reconstruction.shots[shot_0].pose.get_origin())
+
+    #logger.debug("distance_dict {}".format(distance_dict))
+
+    # detect change event in larger recons
+    if len(distance_dict) > 20:
+        shot_ids = sorted(distance_dict.keys())
+        distances = [distance_dict[i] for i in shot_ids]
+
+        # we look for a place where, 10 previous distance measurements are significantly different
+        # then the following 10. specifically a change in magnitude by more than 30%. the pre and
+        # post measurements should each be consistent, specifically the coefficient of variation
+        # cannot exceed 15%
+        for i in range(10, len(distance_dict) - 10):
+            pre_avg = np.mean(distances[i-10:i])
+            pre_stddev = np.std(distances[i-10:i])
+            pre_cv = pre_stddev / pre_avg
+
+            change = abs(distances[i] - pre_avg)
+            if change > 0.3*pre_avg and pre_cv < 0.15:
+                post_avg = np.mean(distances[i:i+10])
+                post_stddev = np.std(distances[i:i+10])
+                post_cv = post_stddev/post_avg
+
+                change_avg = abs(post_avg - pre_avg)
+                if change_avg > 0.3*pre_avg and post_cv < 0.15:
+                    logger.debug("scale change event is detected at {}, change {}, change_avg {}, "
+                                 "pre_avg {}, pre_cv {}, post_avg {}, post_cv {}"
+                                 .format(shot_ids[i], change, change_avg, pre_avg, pre_cv, post_avg, post_cv))
+
+    return True
 
 
 def diff_recon_preint(im1, im2, reconstruction, pdr_shots_dict):
@@ -374,7 +441,8 @@ def debug_plot_reconstruction(reconstruction, pdr_shots_dict, culling_dict, grap
         logger.debug("curvature {:04.1f} = {}, {}".format(i, max_c, curvature[start_index]))
     '''
 
-    prune_reconstruction_by_pdr(reconstruction, pdr_shots_dict, culling_dict, graph, cameras)
+    check_scale_change_by_pdr(reconstruction, pdr_shots_dict, culling_dict)
+    #prune_reconstruction_by_pdr(reconstruction, pdr_shots_dict, culling_dict, graph, cameras)
 
     plt.show()
 
@@ -385,8 +453,7 @@ def debug_plot_reconstructions(reconstructions):
     """
     # floor plan
     plan_paths = []
-    for plan_type in ('./*FLOOR*.png', './*ROOF*.png'):
-        plan_paths.extend(glob.glob(plan_type))
+    plan_paths.extend(glob.glob('./*.png'))
 
     if not plan_paths or not os.path.exists(plan_paths[0]):
         print("No floor plan image found. Quitting")
@@ -549,6 +616,9 @@ def _next_shot_id(curr_shot_id):
 
 
 def _vector_angle(vector_1, vector_2):
+    if np.allclose(vector_1, [0, 0, 0]) or np.allclose(vector_2, [0, 0, 0]):
+        return 0
+
     unit_vector_1 = vector_1 / np.linalg.norm(vector_1)
     unit_vector_2 = vector_2 / np.linalg.norm(vector_2)
     dot_product = np.dot(unit_vector_1, unit_vector_2)
@@ -570,17 +640,20 @@ def _is_no_culling_in_between(culling_dict, shot_id_1, shot_id_2):
 def _load_topocentric_gps_points():
     topocentric_gps_points_dict = {}
 
-    with open("gps_list.txt") as fin:
-        gps_points_dict = io.read_gps_points_list(fin)
+    try:
+        with open("gps_list.txt") as fin:
+            gps_points_dict = io.read_gps_points_list(fin)
 
-    with io.open_rt("reference_lla.json") as fin:
-        reflla = io.json_load(fin)
+        with io.open_rt("reference_lla.json") as fin:
+            reflla = io.json_load(fin)
 
-    for key, value in gps_points_dict.items():
-        x, y, z = geo.topocentric_from_lla(
-            value[0], value[1], value[2],
-            reflla['latitude'], reflla['longitude'], reflla['altitude'])
-        topocentric_gps_points_dict[key] = (x, y, z)
+        for key, value in gps_points_dict.items():
+            x, y, z = geo.topocentric_from_lla(
+                value[0], value[1], value[2],
+                reflla['latitude'], reflla['longitude'], reflla['altitude'])
+            topocentric_gps_points_dict[key] = (x, y, z)
+    except os.error:
+        return {}
 
     return topocentric_gps_points_dict
 
@@ -619,8 +692,12 @@ if __name__ == "__main__":
             NEIGHBOR_RADIUS = int(sys.argv[3])
             MAX_HOLE_SIZE = int(sys.argv[4])
 
-    with open('reconstruction.json') as fin:
-        recons = io.reconstructions_from_json(json.load(fin))
+    if show_num is None:
+        with open('aligned_reconstructions.json') as fin:
+            recons = io.reconstructions_from_json(json.load(fin))
+    else:
+        with open('reconstruction.json') as fin:
+            recons = io.reconstructions_from_json(json.load(fin))
 
     recons = sorted(recons, key=lambda x: -len(x.shots))
 

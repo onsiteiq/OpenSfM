@@ -2092,8 +2092,9 @@ def incremental_reconstruction_sequential(data, graph):
 
     if reconstructions:
         if data.pdr_shots_exist():
-            # level and scale recons to pdr
-            align_reconstructions_to_pdr(reconstructions, data)
+            # level and scale recons to pdr. also check for sudden scale change in large recons,
+            # and if one found, the recon would be broken into smaller pieces
+            reconstructions = align_reconstructions_to_pdr(reconstructions, data)
 
             # remove frames from recons that are obviously wrong according to pdr, and break recons
             # into segments of consecutive frames (with possible small holes in the middle)

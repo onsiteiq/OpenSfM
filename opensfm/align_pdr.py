@@ -430,62 +430,33 @@ def hybrid_align_pdr(data, target_images=None):
 
     graph = None
 
-    # init pdr predictions
-    pdr_predictions_dict = update_pdr_global_2d(curr_gps_points_dict, pdr_shots_dict, scale_factor, False)
-
     # align recons to gps points and/or trusted shots
-    while True:
-        can_align = False
-        for recon in reconstructions:
-            if recon.alignment.aligned or len(recon.shots) < MIN_RECON_SIZE:
-                continue
+    for recon in reconstructions:
+        if recon.alignment.aligned or len(recon.shots) < MIN_RECON_SIZE:
+            continue
 
-            recon_gps_points = {}
-            recon_trusted_shots = {}
+        recon_gps_points = {}
 
-            # match gps points to this recon
+        # match gps points to this recon
+        for shot_id in recon.shots:
+            if shot_id in curr_gps_points_dict:
+                recon_gps_points[shot_id] = curr_gps_points_dict[shot_id]
+
+        if len(recon_gps_points) >= 2:
+            # only need to load graph if it hasn't been loaded before AND there are more than
+            # 2 trusted points on this recon (hence the need to break it into segments)
+            if graph is None and len(recon_gps_points) > 2:
+                graph = data.load_tracks_graph()
+
+            # below, each 'segment' is a Reconstruction object
+            segments = align_reconstruction_segments(data, graph, recon, recon_gps_points)
+            aligned_recons.extend(segments)
+
+            # the 'shot' objects in segments are the same as those in recon
             for shot_id in recon.shots:
-                if shot_id in curr_gps_points_dict:
-                    recon_gps_points[shot_id] = curr_gps_points_dict[shot_id]
+                aligned_shots_dict[shot_id] = recon.shots[shot_id].pose.get_origin()
 
-            # find trusted shots on this recon if not enough gps points
-            if len(recon_gps_points) < 2:
-                recon_shot_ids = sorted(recon.shots)
-
-                if recon_shot_ids[0] not in curr_gps_points_dict and \
-                        _prev_shot_id(recon_shot_ids[0]) in aligned_shots_dict:
-                    recon_trusted_shots[recon_shot_ids[0]] = pdr_predictions_dict[recon_shot_ids[0]][:3]
-
-                if recon_shot_ids[-1] not in curr_gps_points_dict and \
-                        _next_shot_id(recon_shot_ids[-1]) in aligned_shots_dict:
-                    recon_trusted_shots[recon_shot_ids[-1]] = pdr_predictions_dict[recon_shot_ids[-1]][:3]
-
-            if len(recon_gps_points) + len(recon_trusted_shots) >= 2:
-                # combine trusted shots with gps points
-                recon_trusted_shots.update(recon_gps_points)
-
-                # only need to load graph if it hasn't been loaded before AND there are more than
-                # 2 trusted points on this recon (hence the need to break it into segments)
-                if graph is None and len(recon_trusted_shots) > 2:
-                    graph = data.load_tracks_graph()
-
-                # below, each 'segment' is a Reconstruction object
-                segments = align_reconstruction_segments(data, graph, recon, recon_trusted_shots)
-                aligned_recons.extend(segments)
-
-                # the 'shot' objects in segments are the same as those in recon
-                for shot_id in recon.shots:
-                    aligned_shots_dict[shot_id] = recon.shots[shot_id].pose.get_origin()
-
-                # update pdr predictions based on aligned shots so far
-                pdr_predictions_dict = update_pdr_global_2d(aligned_shots_dict, pdr_shots_dict, scale_factor, False)
-
-                recon.alignment.aligned = True
-                can_align = True
-                break
-
-        if not can_align:
-            break
+            recon.alignment.aligned = True
 
     # for shots that are not in aligned recons at this point, we throw them in a new recon. the
     # camera poses are calculated using the same method as direct align
@@ -760,7 +731,32 @@ def update_pdr_prediction_rotation(shot_id, reconstruction, data):
 
 
 def align_reconstructions_to_pdr(reconstructions, data):
-    reconstructions[:] = [align_reconstruction_to_pdr(recon, data) for recon in reconstructions]
+    pdr_aligned_recons = []
+    graph = None
+    for recon in reconstructions:
+        scale_change_shot_ids = check_scale_change_by_pdr(recon, data)
+        if len(scale_change_shot_ids) == 0:
+            align_reconstruction_to_pdr(recon, data)
+            pdr_aligned_recons.append(recon)
+        else:
+            logger.debug("align_reconstructions_to_pdr: scale change events {}".format(scale_change_shot_ids))
+            if graph is None:
+                graph = data.load_tracks_graph()
+
+            recon_shot_ids = sorted(recon.shots)
+            start_shot_id = recon_shot_ids[0]
+            scale_change_shot_ids.append(recon_shot_ids[-1])
+            for shot_id in sorted(scale_change_shot_ids):
+                if _shot_id_to_int(shot_id) - _shot_id_to_int(start_shot_id) > MIN_RECON_SIZE:
+                    logger.debug("align_reconstructions_to_pdr: segment {}-{}".format(start_shot_id, _prev_shot_id(shot_id)))
+                    segment = extract_segment(recon, _shot_id_to_int(start_shot_id), _shot_id_to_int(shot_id) - 1,
+                                              graph, data.load_camera_models())
+                    align_reconstruction_to_pdr(segment, data)
+                    pdr_aligned_recons.append(segment)
+
+                start_shot_id = shot_id
+
+    return pdr_aligned_recons
 
 
 def align_reconstruction_to_pdr(reconstruction, data):
@@ -992,6 +988,83 @@ def extract_segment(reconstruction, start_index, end_index, graph, cameras):
         segment.add_point(point_copy(reconstruction.points[point_id]))
 
     return segment
+
+
+def check_scale_change_by_pdr(reconstruction, data):
+    """
+    detect if and where a sudden change of scale happens in the reconstruction. returns a list of
+    shot ids where change occur. the caller will need to break the recon at these places.
+
+    :param reconstruction:
+    :param pdr_shots_dict:
+    :param culling_dict:
+    :return:
+    """
+    scale_change_shot_ids = []
+
+    if not data.pdr_shots_exist():
+        return scale_change_shot_ids
+
+    pdr_shots_dict = data.load_pdr_shots()
+    culling_dict = data.load_culling_dict()
+    shot_ids = sorted(reconstruction.shots)
+
+    distance_dict = {}
+    for i in range(_shot_id_to_int(shot_ids[0]), _shot_id_to_int(shot_ids[-1]) - 2):
+        shot_0 = _int_to_shot_id(i)
+        shot_1 = _int_to_shot_id(i+1)
+        shot_2 = _int_to_shot_id(i+2)
+
+        if shot_0 in shot_ids and shot_1 in shot_ids and shot_2 in shot_ids and \
+                _is_no_culling_in_between(culling_dict, shot_0, shot_1) and \
+                _is_no_culling_in_between(culling_dict, shot_1, shot_2):
+            vector_prev_recon = reconstruction.shots[shot_1].pose.get_origin() - reconstruction.shots[
+                shot_0].pose.get_origin()
+            vector_next_recon = reconstruction.shots[shot_2].pose.get_origin() - reconstruction.shots[
+                shot_1].pose.get_origin()
+            angle_recon = _vector_angle(vector_prev_recon, vector_next_recon)
+
+            vector_prev_pdr = np.asarray(pdr_shots_dict[shot_1][0:3]) - np.asarray(pdr_shots_dict[shot_0][0:3])
+            vector_next_pdr = np.asarray(pdr_shots_dict[shot_2][0:3]) - np.asarray(pdr_shots_dict[shot_1][0:3])
+            angle_pdr = _vector_angle(vector_prev_pdr, vector_next_pdr)
+
+            if np.linalg.norm(vector_prev_pdr) > 0.3048 and np.linalg.norm(vector_next_pdr) > 0.3048 and \
+                    angle_recon < np.radians(30) and angle_pdr < np.radians(30):
+                # we have 3 consecutive shots that, by all indication, are moving on roughly a straight line.
+                # we will remember the recon distance that's traveled.
+                distance_dict[shot_0] = np.linalg.norm(
+                    reconstruction.shots[shot_2].pose.get_origin() - reconstruction.shots[shot_0].pose.get_origin())
+
+    #logger.debug("distance_dict {}".format(distance_dict))
+
+    # detect change event in larger recons
+    if len(distance_dict) > 20:
+        shot_ids = sorted(distance_dict.keys())
+        distances = [distance_dict[i] for i in shot_ids]
+
+        # we look for a place where, 10 previous distance measurements are significantly different
+        # then the following 10. specifically a change in magnitude by more than 30%. the pre and
+        # post measurements should each be consistent, specifically the coefficient of variation
+        # cannot exceed 15%
+        for i in range(10, len(distance_dict) - 10):
+            pre_avg = np.mean(distances[i-10:i])
+            pre_stddev = np.std(distances[i-10:i])
+            pre_cv = pre_stddev / pre_avg
+
+            change = abs(distances[i] - pre_avg)
+            if change > 0.3*pre_avg and pre_cv < 0.15:
+                post_avg = np.mean(distances[i:i+10])
+                post_stddev = np.std(distances[i:i+10])
+                post_cv = post_stddev/post_avg
+
+                change_avg = abs(post_avg - pre_avg)
+                if change_avg > 0.3*pre_avg and post_cv < 0.15:
+                    #logger.debug("scale change event is detected at {}, change {}, change_avg {}, "
+                                 #"pre_avg {}, pre_cv {}, post_avg {}, post_cv {}"
+                                 #.format(shot_ids[i], change, change_avg, pre_avg, pre_cv, post_avg, post_cv))
+                    scale_change_shot_ids.append(shot_ids[i])
+
+    return scale_change_shot_ids
 
 
 def prune_reconstructions_by_pdr(reconstructions, data, graph):
@@ -1373,52 +1446,23 @@ def update_gps_picker_hybrid(curr_gps_points_dict, reconstructions, pdr_shots_di
     for recon in reconstructions:
         recon.alignment.aligned = False
 
-    # init pdr predictions
-    pdr_predictions_dict = update_pdr_global_2d(curr_gps_points_dict, pdr_shots_dict, scale_factor, False)
-
     # align recons to gps points and/or trusted shots
-    while True:
-        can_align = False
-        for recon in reconstructions:
-            if recon.alignment.aligned or len(recon.shots) < MIN_RECON_SIZE:
-                continue
+    for recon in reconstructions:
+        if recon.alignment.aligned or len(recon.shots) < MIN_RECON_SIZE:
+            continue
 
-            recon_gps_points = {}
-            recon_trusted_shots = {}
+        recon_gps_points = {}
 
-            # match gps points to this recon
-            for shot_id in recon.shots:
-                if shot_id in curr_gps_points_dict:
-                    recon_gps_points[shot_id] = curr_gps_points_dict[shot_id]
+        # match gps points to this recon
+        for shot_id in recon.shots:
+            if shot_id in curr_gps_points_dict:
+                recon_gps_points[shot_id] = curr_gps_points_dict[shot_id]
 
-            # find trusted shots on this recon if not enough gps points
-            if len(recon_gps_points) < 2:
-                recon_shot_ids = sorted(recon.shots)
+        if len(recon_gps_points) >= 2:
+            shots_dict = align_reconstruction_no_numpy(recon, recon_gps_points)
+            aligned_shots_dict.update(shots_dict)
 
-                if recon_shot_ids[0] not in curr_gps_points_dict and \
-                        _prev_shot_id(recon_shot_ids[0]) in aligned_shots_dict:
-                    recon_trusted_shots[recon_shot_ids[0]] = pdr_predictions_dict[recon_shot_ids[0]][:3]
-
-                if recon_shot_ids[-1] not in curr_gps_points_dict and \
-                        _next_shot_id(recon_shot_ids[-1]) in aligned_shots_dict:
-                    recon_trusted_shots[recon_shot_ids[-1]] = pdr_predictions_dict[recon_shot_ids[-1]][:3]
-
-            if len(recon_gps_points) + len(recon_trusted_shots) >= 2:
-                # combine trusted shots with gps points
-                recon_trusted_shots.update(recon_gps_points)
-
-                shots_dict = align_reconstruction_no_numpy(recon, recon_trusted_shots)
-                aligned_shots_dict.update(shots_dict)
-
-                # update pdr predictions based on aligned shots so far
-                pdr_predictions_dict = update_pdr_global_2d(aligned_shots_dict, pdr_shots_dict, scale_factor, False)
-
-                recon.alignment.aligned = True
-                can_align = True
-                break
-
-        if not can_align:
-            break
+            recon.alignment.aligned = True
 
     # update pdr predictions based on aligned shots so far
     pdr_predictions_dict = update_pdr_global_2d(aligned_shots_dict, pdr_shots_dict, scale_factor, False)
@@ -1946,6 +1990,9 @@ def _next_shot_id(curr_shot_id):
 
 
 def _vector_angle(vector_1, vector_2):
+    if np.allclose(vector_1, [0, 0, 0]) or np.allclose(vector_2, [0, 0, 0]):
+        return 0
+
     unit_vector_1 = vector_1 / np.linalg.norm(vector_1)
     unit_vector_2 = vector_2 / np.linalg.norm(vector_2)
     dot_product = np.dot(unit_vector_1, unit_vector_2)
