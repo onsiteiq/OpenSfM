@@ -144,8 +144,8 @@ def check_scale_change_by_pdr(reconstruction, pdr_shots_dict, culling_dict):
     # cannot exceed 40%
     for i in range(5, len(distance_dict) - 5):
         pre_distances = [distances[j] for j in range(i-1, 0, -1)
-                         if _shot_id_to_int(shot_ids[i]) - _shot_id_to_int(shot_ids[j]) < 20]
-        if len(pre_distances) < 5:
+                         if _shot_id_to_int(shot_ids[i]) - _shot_id_to_int(shot_ids[j]) < 40]
+        if len(pre_distances) < 10:
             continue
         pre_avg = np.mean(pre_distances)
         pre_stddev = np.std(pre_distances)
@@ -154,8 +154,8 @@ def check_scale_change_by_pdr(reconstruction, pdr_shots_dict, culling_dict):
         ratio = distances[i] / pre_avg
         if (ratio < 0.6 or ratio > 1.0/0.6) and pre_cv < 0.4:
             post_distances = [distances[j] for j in range(i, len(distances))
-                              if _shot_id_to_int(shot_ids[j]) - _shot_id_to_int(shot_ids[i]) < 20]
-            if len(post_distances) < 5:
+                              if _shot_id_to_int(shot_ids[j]) - _shot_id_to_int(shot_ids[i]) < 40]
+            if len(post_distances) < 10:
                 continue
             post_avg = np.mean(post_distances)
             post_stddev = np.std(post_distances)
@@ -232,6 +232,7 @@ def prune_reconstructions_by_pdr(reconstructions, pdr_shots_dict, culling_dict, 
     segments = []
 
     recon_quality = 0
+    avg_segment_quality = 0
     avg_segment_size = 0
     ratio_shots_in_min_recon = 0
     speedup = 1.0
@@ -247,8 +248,8 @@ def prune_reconstructions_by_pdr(reconstructions, pdr_shots_dict, culling_dict, 
         segments.extend(new_segments)
 
     if len(segments) > 0:
-        recon_quality = 100-int(total_bad_shots_cnt*100/total_shots_cnt)
-        logger.info("Recon Quality - {}".format(recon_quality))
+        avg_segment_quality = 100-int(total_bad_shots_cnt*100/total_shots_cnt)
+        logger.info("Averge segment quality - {}".format(avg_segment_quality))
 
         segments_shots_cnt = 0
         for segment in segments:
@@ -265,6 +266,13 @@ def prune_reconstructions_by_pdr(reconstructions, pdr_shots_dict, culling_dict, 
         speedup = 1.0 / (ratio_shots_in_min_recon / math.floor(min(avg_segment_size, 100.0)/20.0)
                          + (1.0 - ratio_shots_in_min_recon))
         logger.info("Estimated speedup Hybrid vs PDR - {:2.1f}x".format(speedup))
+
+        if avg_segment_size < 2 * MIN_RECON_SIZE or speedup < 2.0:
+            recon_quality = 0
+        else:
+            recon_quality = avg_segment_quality
+
+        logger.info("Recon quality - {}".format(recon_quality))
 
     # for gps picker tool, calculate and save a recon quality factor. pdr/hybrid will be based on it.
     #data.save_recon_quality(recon_quality, avg_segment_size, ratio_shots_in_min_recon, speedup)
