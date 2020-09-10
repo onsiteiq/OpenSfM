@@ -87,7 +87,7 @@ def debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict):
     for key, value in topocentric_gps_points_dict.items():
         circle = plt.Circle((value[0], value[1]), color='green', radius=100)
         ax.add_artist(circle)
-        ax.text(value[0], value[1], str(_shot_id_to_int(key)), fontsize=8)
+        ax.text(value[0], value[1], str(_shot_id_to_int(key)), fontsize=10)
         #logger.info("topocentric gps positions {} = {}, {}, {}".format(shot_id, value[0], value[1], value[2]))
 
     plt.show()
@@ -135,30 +135,37 @@ def check_scale_change_by_pdr(reconstruction, pdr_shots_dict, culling_dict):
     #logger.debug("distance_dict {}".format(distance_dict))
 
     # detect change event in larger recons
-    if len(distance_dict) > 20:
-        shot_ids = sorted(distance_dict.keys())
-        distances = [distance_dict[i] for i in shot_ids]
+    shot_ids = sorted(distance_dict.keys())
+    distances = [distance_dict[i] for i in shot_ids]
 
-        # we look for a place where, 10 previous distance measurements are significantly different
-        # then the following 10. specifically a change in magnitude by more than 30%. the pre and
-        # post measurements should each be consistent, specifically the coefficient of variation
-        # cannot exceed 15%
-        for i in range(10, len(distance_dict) - 10):
-            pre_avg = np.mean(distances[i-10:i])
-            pre_stddev = np.std(distances[i-10:i])
-            pre_cv = pre_stddev / pre_avg
+    # we look for a place where, recent previous distance measurements are significantly different
+    # then the ones that follow. specifically a change in magnitude by more than 40%. the pre and
+    # post measurements should each be consistent, specifically the coefficient of variation
+    # cannot exceed 25%
+    for i in range(5, len(distance_dict) - 5):
+        pre_distances = [distances[j] for j in range(i-1, 0, -1)
+                         if _shot_id_to_int(shot_ids[i]) - _shot_id_to_int(shot_ids[j]) < 20]
+        if len(pre_distances) < 5:
+            continue
+        pre_avg = np.mean(pre_distances)
+        pre_stddev = np.std(pre_distances)
+        pre_cv = pre_stddev / pre_avg
 
-            change = abs(distances[i] - pre_avg)
-            if change > 0.3*pre_avg and pre_cv < 0.15:
-                post_avg = np.mean(distances[i:i+10])
-                post_stddev = np.std(distances[i:i+10])
-                post_cv = post_stddev/post_avg
+        ratio = distances[i] / pre_avg
+        if (ratio < 0.6 or ratio > 1.0/0.6) and pre_cv < 0.25:
+            post_distances = [distances[j] for j in range(i, len(distances))
+                              if _shot_id_to_int(shot_ids[j]) - _shot_id_to_int(shot_ids[i]) < 20]
+            if len(post_distances) < 5:
+                continue
+            post_avg = np.mean(post_distances)
+            post_stddev = np.std(post_distances)
+            post_cv = post_stddev/post_avg
 
-                change_avg = abs(post_avg - pre_avg)
-                if change_avg > 0.3*pre_avg and post_cv < 0.15:
-                    logger.debug("scale change event is detected at {}, change {}, change_avg {}, "
-                                 "pre_avg {}, pre_cv {}, post_avg {}, post_cv {}"
-                                 .format(shot_ids[i], change, change_avg, pre_avg, pre_cv, post_avg, post_cv))
+            avg_ratio = post_avg / pre_avg
+            if (avg_ratio < 0.6 or avg_ratio > 1.0/0.6) and post_cv < 0.5:
+                logger.debug("scale change event is detected at {}, "
+                             "pre_avg {}, pre_cv {}, post_avg {}, post_cv {}"
+                             .format(shot_ids[i], pre_avg, pre_cv, post_avg, post_cv))
 
     return True
 
@@ -392,7 +399,7 @@ def debug_plot_reconstruction(reconstruction, pdr_shots_dict, culling_dict, grap
         X.append(p[0])
         Y.append(p[1])
 
-        ax.text(p[0], p[1], str(_shot_id_to_int(shot.id)), fontsize=8)
+        ax.text(p[0], p[1], str(_shot_id_to_int(shot.id)), fontsize=10)
 
     plt.plot(X, Y, 'g-', linewidth=1)
 
@@ -466,9 +473,9 @@ def debug_plot_reconstructions(reconstructions):
 
     topocentric_gps_points_dict = _load_topocentric_gps_points()
     for key, value in topocentric_gps_points_dict.items():
-        circle = plt.Circle((value[0], value[1]), color='black', radius=50)
+        circle = plt.Circle((value[0], value[1]), color='black', radius=25)
         ax.add_artist(circle)
-        ax.text(value[0], value[1], str(_shot_id_to_int(key)), color='white', fontsize=6)
+        ax.text(value[0], value[1], str(_shot_id_to_int(key)), color='white', fontsize=10)
 
     # show each recon in different colors
     colors = ["green", "blue", "cyan", "magenta", "yellow"]
@@ -483,14 +490,14 @@ def debug_plot_reconstructions(reconstructions):
 
         for shot in reconstruction.shots.values():
             if shot.metadata.gps_dop != 999999.0:
-                radius = 50
-            else:
                 radius = 25
+            else:
+                radius = 10
 
             p = shot.pose.get_origin()
             circle = plt.Circle((p[0], p[1]), color=color, radius=radius)
             ax.add_artist(circle)
-            ax.text(p[0], p[1], str(_shot_id_to_int(shot.id)), fontsize=6)
+            ax.text(p[0], p[1], str(_shot_id_to_int(shot.id)), fontsize=10)
 
     plt.show()
     #fig.savefig('./recon.png', dpi=200)

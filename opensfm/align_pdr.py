@@ -1018,32 +1018,38 @@ def check_scale_change_by_pdr(reconstruction, data):
 
     #logger.debug("distance_dict {}".format(distance_dict))
 
-    # detect change event in larger recons
-    if len(distance_dict) > 20:
-        shot_ids = sorted(distance_dict.keys())
-        distances = [distance_dict[i] for i in shot_ids]
+    # we look for a place where, recent previous distance measurements are significantly different
+    # then the ones that follow. specifically a change in magnitude by more than 40%. the pre and
+    # post measurements should each be consistent, specifically the coefficient of variation
+    # cannot exceed 25%
+    shot_ids = sorted(distance_dict.keys())
+    distances = [distance_dict[i] for i in shot_ids]
 
-        # we look for a place where, 10 previous distance measurements are significantly different
-        # then the following 10. specifically a change in magnitude by more than 30%. the pre and
-        # post measurements should each be consistent, specifically the coefficient of variation
-        # cannot exceed 15%
-        for i in range(10, len(distance_dict) - 10):
-            pre_avg = np.mean(distances[i-10:i])
-            pre_stddev = np.std(distances[i-10:i])
-            pre_cv = pre_stddev / pre_avg
+    for i in range(5, len(distance_dict) - 5):
+        pre_distances = [distances[j] for j in range(i-1, 0, -1)
+                         if _shot_id_to_int(shot_ids[i]) - _shot_id_to_int(shot_ids[j]) < 20]
+        if len(pre_distances) < 5:
+            continue
+        pre_avg = np.mean(pre_distances)
+        pre_stddev = np.std(pre_distances)
+        pre_cv = pre_stddev / pre_avg
 
-            change = abs(distances[i] - pre_avg)
-            if change > 0.3*pre_avg and pre_cv < 0.15:
-                post_avg = np.mean(distances[i:i+10])
-                post_stddev = np.std(distances[i:i+10])
-                post_cv = post_stddev/post_avg
+        ratio = distances[i] / pre_avg
+        if (ratio < 0.6 or ratio > 1.0/0.6) and pre_cv < 0.25:
+            post_distances = [distances[j] for j in range(i, len(distances))
+                              if _shot_id_to_int(shot_ids[j]) - _shot_id_to_int(shot_ids[i]) < 20]
+            if len(post_distances) < 5:
+                continue
+            post_avg = np.mean(post_distances)
+            post_stddev = np.std(post_distances)
+            post_cv = post_stddev/post_avg
 
-                change_avg = abs(post_avg - pre_avg)
-                if change_avg > 0.3*pre_avg and post_cv < 0.15:
-                    #logger.debug("scale change event is detected at {}, change {}, change_avg {}, "
-                                 #"pre_avg {}, pre_cv {}, post_avg {}, post_cv {}"
-                                 #.format(shot_ids[i], change, change_avg, pre_avg, pre_cv, post_avg, post_cv))
-                    scale_change_shot_ids.append(shot_ids[i])
+            avg_ratio = post_avg / pre_avg
+            if (avg_ratio < 0.6 or avg_ratio > 1.0/0.6) and post_cv < 0.5:
+                #logger.debug("scale change event is detected at {}, "
+                             #"pre_avg {}, pre_cv {}, post_avg {}, post_cv {}"
+                             #.format(shot_ids[i], pre_avg, pre_cv, post_avg, post_cv))
+                scale_change_shot_ids.append(shot_ids[i])
 
     return scale_change_shot_ids
 
