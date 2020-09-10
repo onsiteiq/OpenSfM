@@ -125,7 +125,7 @@ def check_scale_change_by_pdr(reconstruction, pdr_shots_dict, culling_dict):
             vector_next_pdr = np.asarray(pdr_shots_dict[shot_2][0:3]) - np.asarray(pdr_shots_dict[shot_1][0:3])
             angle_pdr = _vector_angle(vector_prev_pdr, vector_next_pdr)
 
-            if np.linalg.norm(vector_prev_pdr) > 0.3048 and np.linalg.norm(vector_next_pdr) > 0.3048 and \
+            if np.linalg.norm(vector_prev_pdr) > 0.15 and np.linalg.norm(vector_next_pdr) > 0.15 and \
                     angle_recon < np.radians(30) and angle_pdr < np.radians(30):
                 # we have 3 consecutive shots that, by all indication, are moving on roughly a straight line.
                 # we will remember the recon distance that's traveled.
@@ -141,7 +141,7 @@ def check_scale_change_by_pdr(reconstruction, pdr_shots_dict, culling_dict):
     # we look for a place where, recent previous distance measurements are significantly different
     # then the ones that follow. specifically a change in magnitude by more than 40%. the pre and
     # post measurements should each be consistent, specifically the coefficient of variation
-    # cannot exceed 25%
+    # cannot exceed 40%
     for i in range(5, len(distance_dict) - 5):
         pre_distances = [distances[j] for j in range(i-1, 0, -1)
                          if _shot_id_to_int(shot_ids[i]) - _shot_id_to_int(shot_ids[j]) < 20]
@@ -152,7 +152,7 @@ def check_scale_change_by_pdr(reconstruction, pdr_shots_dict, culling_dict):
         pre_cv = pre_stddev / pre_avg
 
         ratio = distances[i] / pre_avg
-        if (ratio < 0.6 or ratio > 1.0/0.6) and pre_cv < 0.25:
+        if (ratio < 0.6 or ratio > 1.0/0.6) and pre_cv < 0.4:
             post_distances = [distances[j] for j in range(i, len(distances))
                               if _shot_id_to_int(shot_ids[j]) - _shot_id_to_int(shot_ids[i]) < 20]
             if len(post_distances) < 5:
@@ -162,7 +162,7 @@ def check_scale_change_by_pdr(reconstruction, pdr_shots_dict, culling_dict):
             post_cv = post_stddev/post_avg
 
             avg_ratio = post_avg / pre_avg
-            if (avg_ratio < 0.6 or avg_ratio > 1.0/0.6) and post_cv < 0.5:
+            if (avg_ratio < 0.6 or avg_ratio > 1.0/0.6) and post_cv < 0.4:
                 logger.debug("scale change event is detected at {}, "
                              "pre_avg {}, pre_cv {}, post_avg {}, post_cv {}"
                              .format(shot_ids[i], pre_avg, pre_cv, post_avg, post_cv))
