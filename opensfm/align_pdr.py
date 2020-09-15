@@ -871,21 +871,15 @@ def align_reconstruction_segments(data, graph, reconstruction, recon_gps_points)
         X = np.array(X)
         Xp = np.array(Xp)
 
-        # Estimate ground plane.
-        p = multiview.fit_plane(X - X.mean(axis=0), onplane, verticals)
-        Rplane = multiview.plane_horizontalling_rotation(p)
-        X = Rplane.dot(X.T).T
-
         # Estimate 2d similarity to align to pdr predictions
         T = tf.affine_matrix_from_points(X.T[:2], Xp.T[:2], shear=False)
         s = np.linalg.det(T[:2, :2]) ** 0.5
         A = np.eye(3)
         A[:2, :2] = T[:2, :2] / s
-        A = A.dot(Rplane)
         b = np.array([
             T[0, 2],
             T[1, 2],
-            Xp[:, 2].mean() - s * X[:, 2].mean()  # vertical alignment
+            0
         ])
 
         shot_ids = sorted(reconstruction.shots.keys())
@@ -1027,21 +1021,21 @@ def check_scale_change_by_pdr(reconstruction, data):
 
     for i in range(5, len(distance_dict) - 5):
         pre_distances = [distances[j] for j in range(i-1, 0, -1)
-                         if _shot_id_to_int(shot_ids[i]) - _shot_id_to_int(shot_ids[j]) < 40]
+                         if _shot_id_to_int(shot_ids[i]) - _shot_id_to_int(shot_ids[j]) < 50]
         if len(pre_distances) < 10:
             continue
-        pre_avg = np.mean(pre_distances)
-        pre_stddev = np.std(pre_distances)
+        pre_avg = np.mean(pre_distances[:10])
+        pre_stddev = np.std(pre_distances[:10])
         pre_cv = pre_stddev / pre_avg
 
         ratio = distances[i] / pre_avg
         if (ratio < 0.6 or ratio > 1.0/0.6) and pre_cv < 0.4:
             post_distances = [distances[j] for j in range(i, len(distances))
-                              if _shot_id_to_int(shot_ids[j]) - _shot_id_to_int(shot_ids[i]) < 40]
+                              if _shot_id_to_int(shot_ids[j]) - _shot_id_to_int(shot_ids[i]) < 50]
             if len(post_distances) < 10:
                 continue
-            post_avg = np.mean(post_distances)
-            post_stddev = np.std(post_distances)
+            post_avg = np.mean(post_distances[:10])
+            post_stddev = np.std(post_distances[:10])
             post_cv = post_stddev/post_avg
 
             avg_ratio = post_avg / pre_avg

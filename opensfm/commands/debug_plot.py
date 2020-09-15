@@ -144,21 +144,21 @@ def check_scale_change_by_pdr(reconstruction, pdr_shots_dict, culling_dict):
     # cannot exceed 40%
     for i in range(5, len(distance_dict) - 5):
         pre_distances = [distances[j] for j in range(i-1, 0, -1)
-                         if _shot_id_to_int(shot_ids[i]) - _shot_id_to_int(shot_ids[j]) < 40]
+                         if _shot_id_to_int(shot_ids[i]) - _shot_id_to_int(shot_ids[j]) < 50]
         if len(pre_distances) < 10:
             continue
-        pre_avg = np.mean(pre_distances)
-        pre_stddev = np.std(pre_distances)
+        pre_avg = np.mean(pre_distances[:10])
+        pre_stddev = np.std(pre_distances[:10])
         pre_cv = pre_stddev / pre_avg
 
         ratio = distances[i] / pre_avg
         if (ratio < 0.6 or ratio > 1.0/0.6) and pre_cv < 0.4:
             post_distances = [distances[j] for j in range(i, len(distances))
-                              if _shot_id_to_int(shot_ids[j]) - _shot_id_to_int(shot_ids[i]) < 40]
+                              if _shot_id_to_int(shot_ids[j]) - _shot_id_to_int(shot_ids[i]) < 50]
             if len(post_distances) < 10:
                 continue
-            post_avg = np.mean(post_distances)
-            post_stddev = np.std(post_distances)
+            post_avg = np.mean(post_distances[:10])
+            post_stddev = np.std(post_distances[:10])
             post_cv = post_stddev/post_avg
 
             avg_ratio = post_avg / pre_avg
@@ -229,6 +229,21 @@ def extract_segment(reconstruction, start_index, end_index, graph, cameras):
 
 
 def prune_reconstructions_by_pdr(reconstructions, pdr_shots_dict, culling_dict, graph, cameras):
+    # debugging - see how culling affects breaks
+    breaks_total = 0
+    breaks_due_to_culling = 0
+    for reconstruction in reconstructions:
+        break_shot_id = sorted(reconstruction.shots)[-1]
+        next_shot_id = _next_shot_id(break_shot_id)
+        if _shot_id_to_int(next_shot_id) < len(pdr_shots_dict):
+            breaks_total += 1
+            if not _is_no_culling_in_between(culling_dict, break_shot_id, next_shot_id):
+                breaks_due_to_culling += 1
+
+    if breaks_total > 0:
+        logger.debug("culling breaks {} total breaks {}, {:2.1f}%".
+                     format(breaks_due_to_culling, breaks_total, breaks_due_to_culling*100/breaks_total))
+
     segments = []
 
     recon_quality = 0
