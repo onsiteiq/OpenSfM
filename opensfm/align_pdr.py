@@ -985,10 +985,10 @@ def check_scale_change_by_pdr(reconstruction, data):
     shot_ids = sorted(reconstruction.shots)
 
     distance_dict = {}
-    for i in range(_shot_id_to_int(shot_ids[0]), _shot_id_to_int(shot_ids[-1]) - 2):
-        shot_0 = _int_to_shot_id(i)
-        shot_1 = _int_to_shot_id(i+1)
-        shot_2 = _int_to_shot_id(i+2)
+    for i in range(_shot_id_to_int(shot_ids[1]), _shot_id_to_int(shot_ids[-2])):
+        shot_0 = _int_to_shot_id(i-1)
+        shot_1 = _int_to_shot_id(i)
+        shot_2 = _int_to_shot_id(i+1)
 
         if shot_0 in shot_ids and shot_1 in shot_ids and shot_2 in shot_ids and \
                 _is_no_culling_in_between(culling_dict, shot_0, shot_1) and \
@@ -1003,43 +1003,46 @@ def check_scale_change_by_pdr(reconstruction, data):
             vector_next_pdr = np.asarray(pdr_shots_dict[shot_2][0:3]) - np.asarray(pdr_shots_dict[shot_1][0:3])
             angle_pdr = _vector_angle(vector_prev_pdr, vector_next_pdr)
 
-            if np.linalg.norm(vector_prev_pdr) > 0.15 and np.linalg.norm(vector_next_pdr) > 0.15 and \
+            if np.linalg.norm(vector_prev_pdr) > 0.2 and np.linalg.norm(vector_next_pdr) > 0.2 and \
                     angle_recon < np.radians(30) and angle_pdr < np.radians(30):
                 # we have 3 consecutive shots that, by all indication, are moving on roughly a straight line.
                 # we will remember the recon distance that's traveled.
-                distance_dict[shot_0] = np.linalg.norm(
-                    reconstruction.shots[shot_2].pose.get_origin() - reconstruction.shots[shot_0].pose.get_origin())
+                distance_dict[shot_1] = np.linalg.norm(
+                    reconstruction.shots[shot_1].pose.get_origin() - reconstruction.shots[shot_0].pose.get_origin())
 
     #logger.debug("distance_dict {}".format(distance_dict))
+
+    # detect change event in larger recons
+    shot_ids = sorted(distance_dict.keys())
+    distances = [distance_dict[i] for i in shot_ids]
 
     # we look for a place where, recent previous distance measurements are significantly different
     # then the ones that follow. specifically a change in magnitude by more than 40%. the pre and
     # post measurements should each be consistent, specifically the coefficient of variation
-    # cannot exceed 40%
-    shot_ids = sorted(distance_dict.keys())
-    distances = [distance_dict[i] for i in shot_ids]
-
-    for i in range(5, len(distance_dict) - 5):
+    # cannot exceed 33%
+    for i in range(len(distance_dict)):
         pre_distances = [distances[j] for j in range(i-1, 0, -1)
-                         if _shot_id_to_int(shot_ids[i]) - _shot_id_to_int(shot_ids[j]) < 50]
+                         if _shot_id_to_int(shot_ids[i]) - _shot_id_to_int(shot_ids[j]) < 40]
         if len(pre_distances) < 10:
             continue
-        pre_avg = np.mean(pre_distances[:10])
-        pre_stddev = np.std(pre_distances[:10])
-        pre_cv = pre_stddev / pre_avg
 
-        ratio = distances[i] / pre_avg
-        if (ratio < 0.6 or ratio > 1.0/0.6) and pre_cv < 0.4:
-            post_distances = [distances[j] for j in range(i, len(distances))
-                              if _shot_id_to_int(shot_ids[j]) - _shot_id_to_int(shot_ids[i]) < 50]
-            if len(post_distances) < 10:
-                continue
-            post_avg = np.mean(post_distances[:10])
-            post_stddev = np.std(post_distances[:10])
+        post_distances = [distances[j] for j in range(i, len(distances))
+                          if _shot_id_to_int(shot_ids[j]) - _shot_id_to_int(shot_ids[i]) < 40]
+        if len(post_distances) < 10:
+            continue
+
+        pre_avg = np.mean(pre_distances)
+        post_avg = np.mean(post_distances)
+
+        avg_ratio = post_avg / pre_avg
+        if avg_ratio < 0.6 or avg_ratio > 1.0 / 0.6:
+            pre_stddev = np.std(pre_distances)
+            pre_cv = pre_stddev / pre_avg
+
+            post_stddev = np.std(post_distances)
             post_cv = post_stddev/post_avg
 
-            avg_ratio = post_avg / pre_avg
-            if (avg_ratio < 0.6 or avg_ratio > 1.0/0.6) and post_cv < 0.4:
+            if pre_cv < 0.33 and post_cv < 0.33:
                 #logger.debug("scale change event is detected at {}, "
                              #"pre_avg {}, pre_cv {}, post_avg {}, post_cv {}"
                              #.format(shot_ids[i], pre_avg, pre_cv, post_avg, post_cv))
