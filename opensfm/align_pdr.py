@@ -1094,10 +1094,16 @@ def prune_reconstructions_by_pdr(reconstructions, data, graph):
                          + (1.0 - ratio_shots_in_min_recon))
         logger.info("Estimated speedup Hybrid vs PDR - {:2.1f}x".format(speedup))
 
-        if avg_segment_size < 2*MIN_RECON_SIZE or speedup < 2.0:
-            recon_quality = 0
+        if total_shots_cnt > 4*MIN_RECON_SIZE:
+            if speedup < 2.0:
+                recon_quality = 0
+            else:
+                recon_quality = avg_segment_quality
         else:
-            recon_quality = avg_segment_quality
+            if ratio_shots_in_min_recon < 0.5:
+                recon_quality = 0
+            else:
+                recon_quality = avg_segment_quality
 
         logger.info("Recon quality - {}".format(recon_quality))
 

@@ -7,6 +7,7 @@ import six
 import cv2
 import math
 import numpy as np
+import webbrowser
 
 from six import iteritems
 
@@ -90,6 +91,7 @@ def debug_plot_pdr(topocentric_gps_points_dict, pdr_predictions_dict):
         ax.text(value[0], value[1], str(_shot_id_to_int(key)), fontsize=10)
         #logger.info("topocentric gps positions {} = {}, {}, {}".format(shot_id, value[0], value[1], value[2]))
 
+    plt.gca().set_aspect('equal', adjustable='box')
     plt.show()
     #fig.savefig('./aligned_pdr_path.png', dpi=200)
 
@@ -284,10 +286,16 @@ def prune_reconstructions_by_pdr(reconstructions, pdr_shots_dict, culling_dict, 
                          + (1.0 - ratio_shots_in_min_recon))
         logger.info("Estimated speedup Hybrid vs PDR - {:2.1f}x".format(speedup))
 
-        if avg_segment_size < 2 * MIN_RECON_SIZE or speedup < 2.0:
-            recon_quality = 0
+        if total_shots_cnt > 4*MIN_RECON_SIZE:
+            if speedup < 2.0:
+                recon_quality = 0
+            else:
+                recon_quality = avg_segment_quality
         else:
-            recon_quality = avg_segment_quality
+            if ratio_shots_in_min_recon < 0.5:
+                recon_quality = 0
+            else:
+                recon_quality = avg_segment_quality
 
         logger.info("Recon quality - {}".format(recon_quality))
 
@@ -407,7 +415,7 @@ def prune_reconstruction_by_pdr(reconstruction, pdr_shots_dict, culling_dict, gr
     return segments, len(suspicious_images)
 
 
-def debug_plot_reconstruction(reconstruction, pdr_shots_dict, culling_dict, graph, cameras):
+def debug_plot_reconstruction(reconstruction, pdr_shots_dict, culling_dict):
     '''
     draw an individual reconstruction
 
@@ -476,6 +484,7 @@ def debug_plot_reconstruction(reconstruction, pdr_shots_dict, culling_dict, grap
     check_scale_change_by_pdr(reconstruction, pdr_shots_dict, culling_dict)
     #prune_reconstruction_by_pdr(reconstruction, pdr_shots_dict, culling_dict, graph, cameras)
 
+    plt.gca().set_aspect('equal', adjustable='box')
     plt.show()
 
 
@@ -553,69 +562,55 @@ def debug_save_reconstruction(data, graph, reconstruction, curr_shot_idx, start_
             [reconstruction], 'reconstruction.{}.json'.format(curr_shot_idx))
 
 
-def transform_reconstruction(reconstruction, ref_shots_dict):
+def debug_rescale_reconstructions(recons):
     """
-    transform recon based on two reference positions
-    :param reconstruction:
-    :param ref_shots_dict:
+    rescale recons (which had been aligned)
+    :param reconstructions:
     :return:
     """
-    X, Xp = [], []
-    onplane, verticals = [], []
-    for shot_id in ref_shots_dict:
-        X.append(reconstruction.shots[shot_id].pose.get_origin())
-        Xp.append(ref_shots_dict[shot_id])
-        R = reconstruction.shots[shot_id].pose.get_rotation_matrix()
-        onplane.append(R[0,:])
-        onplane.append(R[2,:])
-        verticals.append(R[1,:])
+    all_origins = []
+    for recon in recons:
+        for shot_id in recon.shots:
+            all_origins.append(recon.shots[shot_id].pose.get_origin())
 
-    X = np.array(X)
-    Xp = np.array(Xp)
+    all_origins = np.asarray(all_origins)
+    minx = min(all_origins[:, 0])
+    maxx = max(all_origins[:, 0])
+    miny = min(all_origins[:, 1])
+    maxy = max(all_origins[:, 1])
+    meanz = np.mean(all_origins[:, 2])
 
-    # Estimate ground plane.
-    p = multiview.fit_plane(X - X.mean(axis=0), onplane, verticals)
-    Rplane = multiview.plane_horizontalling_rotation(p)
-    X = Rplane.dot(X.T).T
-
-    # Estimate 2d similarity to align to pdr predictions
-    T = tf.affine_matrix_from_points(X.T[:2], Xp.T[:2], shear=False)
-    s = np.linalg.det(T[:2, :2]) ** 0.5
+    s = 100.0/max([maxx-minx, maxy-miny])
     A = np.eye(3)
-    A[:2, :2] = T[:2, :2] / s
-    A = A.dot(Rplane)
     b = np.array([
-        T[0, 2],
-        T[1, 2],
-        Xp[:, 2].mean() - s * X[:, 2].mean()  # vertical alignment
+        -(minx+maxx)/2.0*s,
+        -(miny+maxy)/2.0*s,
+        -meanz*s
     ])
 
-    # Align points.
-    for point in reconstruction.points.values():
-        p = s * A.dot(point.coordinates) + b
-        point.coordinates = p.tolist()
+    for recon in recons:
+        # Align points.
+        for point in recon.points.values():
+            p = s * A.dot(point.coordinates) + b
+            point.coordinates = p.tolist()
 
-    # Align cameras.
-    for shot in reconstruction.shots.values():
-        R = shot.pose.get_rotation_matrix()
-        t = np.array(shot.pose.translation)
-        Rp = R.dot(A.T)
-        tp = -Rp.dot(b) + s * t
-        try:
-            shot.pose.set_rotation_matrix(Rp)
-            shot.pose.translation = list(tp)
-        except:
-            logger.debug("unable to transform reconstruction!")
+        # Align cameras.
+        for shot in recon.shots.values():
+            R = shot.pose.get_rotation_matrix()
+            t = np.array(shot.pose.translation)
+            Rp = R.dot(A.T)
+            tp = -Rp.dot(b) + s * t
+            try:
+                shot.pose.set_rotation_matrix(Rp)
+                shot.pose.translation = list(tp)
+            except:
+                logger.debug("unable to transform reconstruction!")
 
-
-def flatten_reconstruction(reconstruction):
-    shot_ids = sorted(reconstruction.shots)
-
-    ref_shots_dict = {}
-    ref_shots_dict[shot_ids[0]] = (0, 0, 0)
-    ref_shots_dict[shot_ids[-1]] = (1, 1, 0)
-
-    transform_reconstruction(reconstruction, ref_shots_dict)
+    os.chdir("/home/cren/source/OpenSfM")
+    with io.open_wt('data/rx.json') as fout:
+        io.json_dump(io.reconstructions_to_json(recons), fout, False)
+    os.system("python3 -m http.server")
+    webbrowser.open('http://localhost:8000/viewer/reconstruction.html#file=/data/rx.json', new=2)
 
 
 def _shot_id_to_int(shot_id):
@@ -714,23 +709,41 @@ def _rotation_matrix_to_euler_angles(R):
 # Entry point
 if __name__ == "__main__":
 
+    # we produce a few variations of reconstruction output, as follows:
+    #   1. after sfm but before alignment
+    #       * reconstruction.json (flattened and has roughly same scale as pdr output),
+    #       * reconstruction_no_point.json (same as above but with points stripped off, for gps picker)
+    #   2. after alignment
+    #       * reconstruction.json (aligned with gps points)
+    #       * reconstruction.json.bak (saved original sfm)
+    #   3. after pipeline executes 'output_aligned_reconstructions'
+    #       * aligned_reconstructions.json (same as reconstruction.json)
     show_num = None
+    recon_file = None
 
+    # syntax: python3 debug_plot.py [show_num] [recon_file]
+    # show_num (None): plot aligned recons on floor plan
+    # show_num == -1: run the pruning code
+    # show_num == -2: run the rescaling code, then launch browser for viewing
+    # show_num == n: n is index of recon to be plotted
     if len(sys.argv) > 1:
         show_num = int(sys.argv[1])
 
         if len(sys.argv) > 2:
-            MIN_RECON_SIZE = int(sys.argv[2])
-            NEIGHBOR_RADIUS = int(sys.argv[3])
-            MAX_HOLE_SIZE = int(sys.argv[4])
+            recon_file = sys.argv[2]
 
-    if show_num is None:
-        with open('aligned_reconstructions.json') as fin:
-            recons = io.reconstructions_from_json(json.load(fin))
-    else:
-        with open('reconstruction.json') as fin:
-            recons = io.reconstructions_from_json(json.load(fin))
+    if recon_file is None:
+        if show_num is None:
+            recon_file = 'aligned_reconstructions.json'
+        elif show_num == -1:
+            recon_file = 'reconstruction_no_point.json'
+        elif show_num == -2:
+            recon_file = 'reconstruction.json.bak'
+        else:
+            recon_file = 'reconstruction.json'
 
+    with open(recon_file) as fin:
+        recons = io.reconstructions_from_json(json.load(fin))
     recons = sorted(recons, key=lambda x: -len(x.shots))
 
     pdr_shots_dict = {}
@@ -749,23 +762,29 @@ if __name__ == "__main__":
                 (new_shot_id, orig_shot_id) = line.split()
                 culling_dict[new_shot_id] = orig_shot_id
 
-    with io.open_rt('tracks.csv') as fin:
-        graph = tracking.load_tracks_graph(fin)
-
-    with io.open_rt('camera_models.json') as fin:
-        obj = json.load(fin)
-        cameras = io.cameras_from_json(obj)
-
-    if show_num is None:
-        # if there is no argument, plot all recons on floor plan
-        debug_plot_reconstructions(recons)
-    elif show_num != -1:
-        debug_plot_reconstruction(recons[show_num], pdr_shots_dict, culling_dict, graph, cameras)
-    else:
+    if show_num == -1:
         # if show_num is -1, run the pruning code
+        with io.open_rt('tracks.csv') as fin:
+            graph = tracking.load_tracks_graph(fin)
+
+        with io.open_rt('camera_models.json') as fin:
+            obj = json.load(fin)
+            cameras = io.cameras_from_json(obj)
+
         segments = prune_reconstructions_by_pdr(recons, pdr_shots_dict, culling_dict, graph, cameras)
         segments = sorted(segments, key=lambda x: -len(x.shots))
+
         with io.open_wt('reconstruction.json.new') as fout:
             io.json_dump(io.reconstructions_to_json(segments), fout, False)
 
+    elif show_num == -2:
+        # if show_num is -2, run the rescaling code, then launch browser for viewing
+        debug_rescale_reconstructions(recons)
 
+    elif show_num is not None:
+        # if show_num is not -1 or -2 it is index of recon to be plotted
+        debug_plot_reconstruction(recons[show_num], pdr_shots_dict, culling_dict)
+
+    else: #if show_num is None:
+        # if there is no argument, plot all recons on floor plan
+        debug_plot_reconstructions(recons)

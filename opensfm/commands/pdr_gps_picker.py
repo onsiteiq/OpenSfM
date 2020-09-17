@@ -304,6 +304,7 @@ def pdr_gps_picker(plan_path, pdr_shots_path, recon_file_path, scale_factor, num
     # start drag mover
     drag_mover = DragMover(fig, ax, shape, reconstructions, pdr_shots_dict, scale_factor, num_extrapolation)
 
+    plt.gca().set_aspect('equal', adjustable='box')
     plt.show()
 
 
