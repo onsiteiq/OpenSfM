@@ -13,10 +13,8 @@ from six import iteritems
 
 from opensfm import io
 from opensfm import geo
-from opensfm import multiview
 from opensfm import types
 from opensfm import tracking
-from opensfm import transformations as tf
 from scipy.interpolate import splprep, splev, spalde
 
 
@@ -618,9 +616,12 @@ def debug_rescale_reconstructions(recons):
             except:
                 logger.debug("unable to transform reconstruction!")
 
+    images_dir = os.path.join(os.getcwd(), "images")
     os.chdir(os.path.join(os.environ['HOME'], 'source/OpenSfM'))
     with io.open_wt('data/scaled.json') as fout:
         io.json_dump(io.reconstructions_to_json(recons), fout, False)
+    os.system("rm -fr data/images")
+    os.system("ln -s " + images_dir + " data/images")
     os.system("python3 -m http.server &")
     webbrowser.open('http://localhost:8000/viewer/reconstruction.html#file=/data/scaled.json', new=2)
 
@@ -786,8 +787,8 @@ if __name__ == "__main__":
         segments = prune_reconstructions_by_pdr(recons, pdr_shots_dict, culling_dict, graph, cameras)
         segments = sorted(segments, key=lambda x: -len(x.shots))
 
-        with io.open_wt('reconstruction.json.new') as fout:
-            io.json_dump(io.reconstructions_to_json(segments), fout, False)
+        #with io.open_wt('reconstruction.json.new') as fout:
+            #io.json_dump(io.reconstructions_to_json(segments), fout, False)
 
     elif show_num == -2:
         # if show_num is -2, run the rescaling code, then launch browser for viewing
