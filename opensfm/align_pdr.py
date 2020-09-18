@@ -320,17 +320,7 @@ def direct_align_pdr(data, target_images=None):
 
         # Our floorplan/gps coordinate system: x point right, y point back, z point down
         #
-        # OpenSfM 3D viewer coordinate system: x point left, y point back, z point up (or equivalently it can be
-        # viewed as x point right, y point forward, z point up)
-        #
         # OpenSfM camera coordinate system: x point right of its body, y point down, z point forward (look-at dir)
-        #
-        # Since our floorplan/gps uses a different coordinate system than the OpenSfM 3D viewer, reconstructions
-        # are upside down in the 3D viewer.
-        #
-        # We can fix in one of two ways: 1) assume the origin of the floor plan to be bottom-left, rather than top-
-        # left; or 2) we can hack the OpenSfM 3D viewer for it to follow our coordinate system. The first option is
-        # better, however it will probably require changes in both the current gps picker and our own viewer.
         #
         # If camera has 0 rotation on all axes relative to OpenSfM 3D viewer coordinate system, then in the
         # viewer, its lens points up towards the sky. If camera has 0 rotation relative to our floorplan/gps

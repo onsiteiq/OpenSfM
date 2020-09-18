@@ -580,12 +580,24 @@ def debug_rescale_reconstructions(recons):
     maxy = max(all_origins[:, 1])
     meanz = np.mean(all_origins[:, 2])
 
-    s = 100.0/max([maxx-minx, maxy-miny])
-    A = np.eye(3)
+    # by default the viewer shows a grid that measures 80x80 and we want to fit into that
+    s = 80.0/max([maxx-minx, maxy-miny])
+
+    # Our floorplan/gps coordinate system: x point right, y point back, z point down
+    #
+    # OpenSfM 3D viewer coordinate system: x point left, y point back, z point up (or equivalently it can be
+    # viewed as x point right, y point forward, z point up)
+    #
+    # Since our floorplan/gps uses a different coordinate system than the OpenSfM 3D viewer, reconstructions
+    # would look upside down in the 3D viewer. We therefore perform a transformation below to correct that.
+    #
+    A = np.array([[1, 0, 0],
+                  [0, -1, 0],
+                  [0, 0, -1]])
     b = np.array([
         -(minx+maxx)/2.0*s,
-        -(miny+maxy)/2.0*s,
-        -meanz*s
+        (miny+maxy)/2.0*s,
+        meanz*s
     ])
 
     for recon in recons:
@@ -606,11 +618,11 @@ def debug_rescale_reconstructions(recons):
             except:
                 logger.debug("unable to transform reconstruction!")
 
-    os.chdir("/home/cren/source/OpenSfM")
-    with io.open_wt('data/rx.json') as fout:
+    os.chdir(os.path.join(os.environ['HOME'], 'source/OpenSfM'))
+    with io.open_wt('data/scaled.json') as fout:
         io.json_dump(io.reconstructions_to_json(recons), fout, False)
-    os.system("python3 -m http.server")
-    webbrowser.open('http://localhost:8000/viewer/reconstruction.html#file=/data/rx.json', new=2)
+    os.system("python3 -m http.server &")
+    webbrowser.open('http://localhost:8000/viewer/reconstruction.html#file=/data/scaled.json', new=2)
 
 
 def _shot_id_to_int(shot_id):
