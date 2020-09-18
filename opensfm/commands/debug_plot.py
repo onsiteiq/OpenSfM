@@ -740,7 +740,7 @@ if __name__ == "__main__":
         elif show_num == -2:
             recon_file = 'reconstruction.json.bak'
         else:
-            recon_file = 'reconstruction.json'
+            recon_file = 'reconstruction_no_point.json'
 
     with open(recon_file) as fin:
         recons = io.reconstructions_from_json(json.load(fin))
