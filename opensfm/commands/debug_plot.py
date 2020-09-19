@@ -622,6 +622,7 @@ def debug_rescale_reconstructions(recons):
         io.json_dump(io.reconstructions_to_json(recons), fout, False)
     os.system("rm -fr data/images")
     os.system("ln -s " + images_dir + " data/images")
+    os.system("touch data/images/*")
     os.system("python3 -m http.server &")
     webbrowser.open('http://localhost:8000/viewer/reconstruction.html#file=/data/scaled.json', new=2)
 
