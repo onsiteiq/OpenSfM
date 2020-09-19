@@ -689,6 +689,10 @@ if __name__ == "__main__":
         else:
             recon_file = 'reconstruction_no_point.json'
 
+    if not os.path.exists(recon_file):
+        logger.error("No recon file found. Are you running this script in osfm directory?")
+        exit(-1)
+
     with open(recon_file) as fin:
         recons = io.reconstructions_from_json(json.load(fin))
     recons = sorted(recons, key=lambda x: -len(x.shots))
