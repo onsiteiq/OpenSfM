@@ -7,7 +7,6 @@ import six
 import cv2
 import math
 import numpy as np
-import webbrowser
 
 from six import iteritems
 
@@ -560,73 +559,6 @@ def debug_save_reconstruction(data, graph, reconstruction, curr_shot_idx, start_
             [reconstruction], 'reconstruction.{}.json'.format(curr_shot_idx))
 
 
-def debug_rescale_reconstructions(recons):
-    """
-    rescale recons (which had been aligned)
-    :param reconstructions:
-    :return:
-    """
-    all_origins = []
-    for recon in recons:
-        for shot_id in recon.shots:
-            all_origins.append(recon.shots[shot_id].pose.get_origin())
-
-    all_origins = np.asarray(all_origins)
-    minx = min(all_origins[:, 0])
-    maxx = max(all_origins[:, 0])
-    miny = min(all_origins[:, 1])
-    maxy = max(all_origins[:, 1])
-    meanz = np.mean(all_origins[:, 2])
-
-    # by default the viewer shows a grid that measures 80x80 and we want to fit into that
-    s = 80.0/max([maxx-minx, maxy-miny])
-
-    # Our floorplan/gps coordinate system: x point right, y point back, z point down
-    #
-    # OpenSfM 3D viewer coordinate system: x point left, y point back, z point up (or equivalently it can be
-    # viewed as x point right, y point forward, z point up)
-    #
-    # Since our floorplan/gps uses a different coordinate system than the OpenSfM 3D viewer, reconstructions
-    # would look upside down in the 3D viewer. We therefore perform a transformation below to correct that.
-    #
-    A = np.array([[1, 0, 0],
-                  [0, -1, 0],
-                  [0, 0, -1]])
-    b = np.array([
-        -(minx+maxx)/2.0*s,
-        (miny+maxy)/2.0*s,
-        meanz*s
-    ])
-
-    for recon in recons:
-        # Align points.
-        for point in recon.points.values():
-            p = s * A.dot(point.coordinates) + b
-            point.coordinates = p.tolist()
-
-        # Align cameras.
-        for shot in recon.shots.values():
-            R = shot.pose.get_rotation_matrix()
-            t = np.array(shot.pose.translation)
-            Rp = R.dot(A.T)
-            tp = -Rp.dot(b) + s * t
-            try:
-                shot.pose.set_rotation_matrix(Rp)
-                shot.pose.translation = list(tp)
-            except:
-                logger.debug("unable to transform reconstruction!")
-
-    images_dir = os.path.join(os.getcwd(), "images")
-    os.chdir(os.path.join(os.environ['HOME'], 'source/OpenSfM'))
-    with io.open_wt('data/scaled.json') as fout:
-        io.json_dump(io.reconstructions_to_json(recons), fout, False)
-    os.system("rm -fr data/images")
-    os.system("ln -s " + images_dir + " data/images")
-    os.system("touch data/images/*")
-    os.system("python3 -m http.server &")
-    webbrowser.open('http://localhost:8000/viewer/reconstruction.html#file=/data/scaled.json', new=2)
-
-
 def _shot_id_to_int(shot_id):
     """
     Returns: shot id to integer
@@ -722,6 +654,14 @@ def _rotation_matrix_to_euler_angles(R):
 
 # Entry point
 if __name__ == "__main__":
+    """
+    show recons with matplotlib.pylot
+    
+    syntax: python3 debug_plot.py [show_num] [recon_file]
+        show_num (None): plot aligned recons on floor plan
+        show_num == -1: run the pruning code
+        show_num == n: n is index of recon to be plotted
+    """
 
     # we produce a few variations of reconstruction output, as follows:
     #   1. after sfm but before alignment
@@ -735,11 +675,6 @@ if __name__ == "__main__":
     show_num = None
     recon_file = None
 
-    # syntax: python3 debug_plot.py [show_num] [recon_file]
-    # show_num (None): plot aligned recons on floor plan
-    # show_num == -1: run the pruning code
-    # show_num == -2: run the rescaling code, then launch browser for viewing
-    # show_num == n: n is index of recon to be plotted
     if len(sys.argv) > 1:
         show_num = int(sys.argv[1])
 
@@ -751,8 +686,6 @@ if __name__ == "__main__":
             recon_file = 'aligned_reconstructions.json'
         elif show_num == -1:
             recon_file = 'reconstruction_no_point.json'
-        elif show_num == -2:
-            recon_file = 'reconstruction.json.bak'
         else:
             recon_file = 'reconstruction_no_point.json'
 
@@ -790,10 +723,6 @@ if __name__ == "__main__":
 
         #with io.open_wt('reconstruction.json.new') as fout:
             #io.json_dump(io.reconstructions_to_json(segments), fout, False)
-
-    elif show_num == -2:
-        # if show_num is -2, run the rescaling code, then launch browser for viewing
-        debug_rescale_reconstructions(recons)
 
     elif show_num is not None:
         # if show_num is not -1 or -2 it is index of recon to be plotted
