@@ -414,9 +414,8 @@ def hybrid_align_pdr(data, target_images=None):
                 recon_gps_points[shot_id] = curr_gps_points_dict[shot_id]
 
         if len(recon_gps_points) >= 2:
-            # only need to load graph if it hasn't been loaded before AND there are more than
-            # 2 trusted points on this recon (hence the need to break it into segments)
-            if graph is None and len(recon_gps_points) > 2:
+            # only need to load graph if it hasn't been loaded before
+            if graph is None:
                 graph = data.load_tracks_graph()
 
             # below, each 'segment' is a Reconstruction object
