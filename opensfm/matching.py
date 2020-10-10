@@ -487,8 +487,8 @@ def apply_adhoc_filters(data, matches, im1, camera1, p1, im2, camera2, p2):
     """
     matches = _non_static_matches(p1, p2, matches, data.config)
     matches = _not_on_pano_poles_matches(p1, p2, matches, camera1, camera2)
-    matches = _not_on_vermont_watermark(p1, p2, matches, im1, im2, data)
-    matches = _not_on_blackvue_watermark(p1, p2, matches, im1, im2, data)
+    #matches = _not_on_vermont_watermark(p1, p2, matches, im1, im2, data)
+    #matches = _not_on_blackvue_watermark(p1, p2, matches, im1, im2, data)
     return matches
 
 
@@ -518,8 +518,8 @@ def _not_on_pano_poles_matches(p1, p2, matches, camera1, camera2):
 
     That should remove matches on the sky and and carhood part of panoramas
     """
-    min_lat = -0.125
-    max_lat = 0.125
+    min_lat = np.deg2rad(0.0)
+    max_lat = np.deg2rad(90.0)
     is_pano1 = (camera1.projection_type == 'equirectangular')
     is_pano2 = (camera2.projection_type == 'equirectangular')
     if is_pano1 or is_pano2:

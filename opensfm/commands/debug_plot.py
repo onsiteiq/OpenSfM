@@ -284,7 +284,7 @@ def prune_reconstructions_by_pdr(reconstructions, pdr_shots_dict, culling_dict, 
         logger.info("Estimated speedup Hybrid vs PDR - {:2.1f}x".format(speedup))
 
         if total_shots_cnt > 4*MIN_RECON_SIZE:
-            if speedup < 2.0:
+            if speedup < 1.5:
                 recon_quality = 0
             else:
                 recon_quality = avg_segment_quality
