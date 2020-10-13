@@ -2096,6 +2096,8 @@ def incremental_reconstruction_sequential(data, graph):
             # and if one found, the recon would be broken into smaller pieces
             reconstructions = align_reconstructions_to_pdr(reconstructions, data)
 
+            data.save_reconstruction(reconstructions, 'tmp.json')
+
             # remove frames from recons that are obviously wrong according to pdr, and break recons
             # into segments of consecutive frames (with possible small holes in the middle)
             reconstructions = prune_reconstructions_by_pdr(reconstructions, data, graph)

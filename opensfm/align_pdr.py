@@ -18,7 +18,7 @@ from opensfm import transformations as tf
 logger = logging.getLogger(__name__)
 
 # pruning parameters
-ABS_HEIGHT_THRESH = 2.5  # in meters
+ABS_HEIGHT_THRESH = 5.0  # in meters
 REL_HEIGHT_THRESH = 1.0  # in meters
 DISTANCE_THRESH = 1.25  # in meters
 MOVEMENT_THRESH = 0.25  # in meters
