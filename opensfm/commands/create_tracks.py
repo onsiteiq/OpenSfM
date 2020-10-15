@@ -29,6 +29,10 @@ class Command:
 
         if data.config['feature_use_superpoint']:
             for im in features:
+                if len(features[im]) == 0:
+                    logger.debug("no feature for {}".format(im))
+                    continue
+
                 p_s, f_s, c_s = superpoint.load_features(im)
                 if p_s is not None:
                     features[im] = np.concatenate((features[im], p_s), axis=0)
