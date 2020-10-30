@@ -28,13 +28,19 @@ class Command:
         reconstructions = data.load_reconstruction()
         graph = data.load_tracks_graph() if data.tracks_exists() else None
 
-        if reconstructions:
-            self.undistort_reconstruction(graph, reconstructions[0], data)
+        ugraph = nx.Graph()
+        urecs = []
 
-    def undistort_reconstruction(self, graph, reconstruction, data):
+        for reconstruction in reconstructions:
+            urecs.append(self.undistort_reconstruction(graph, ugraph, reconstruction, data))
+
+        data.save_undistorted_reconstruction(urecs)
+        if graph:
+            data.save_undistorted_tracks_graph(ugraph)
+
+    def undistort_reconstruction(self, graph, ugraph, reconstruction, data):
         urec = types.Reconstruction()
         urec.points = reconstruction.points
-        ugraph = nx.Graph()
 
         logger.debug('Undistorting the reconstruction')
         undistorted_shots = {}
@@ -59,16 +65,14 @@ class Command:
                     add_subshot_tracks(graph, ugraph, shot, subshot)
             undistorted_shots[shot.id] = subshots
 
-        data.save_undistorted_reconstruction([urec])
-        if graph:
-            data.save_undistorted_tracks_graph(ugraph)
-
         arguments = []
         for shot in reconstruction.shots.values():
             arguments.append((shot, undistorted_shots[shot.id], data))
 
         processes = data.config['processes']
         parallel_map(undistort_image_and_masks, arguments, processes)
+
+        return urec
 
 
 def undistort_image_and_masks(arguments):

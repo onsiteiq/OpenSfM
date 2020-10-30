@@ -54,8 +54,6 @@ def compute_depthmaps(data, graph, reconstruction):
         arguments.append((data, neighbors[shot.id], shot))
     parallel_map(prune_depthmap_catched, arguments, processes)
 
-    merge_depthmaps(data, reconstruction)
-
 
 def compute_depthmap_catched(arguments):
     try:
@@ -210,28 +208,26 @@ def prune_depthmap(arguments):
             point_cloud_to_ply(points, normals, colors, labels, detections, fp)
 
 
-def merge_depthmaps(data, reconstruction):
+def merge_depthmaps(data, reconstructions):
     """Merge depthmaps into a single point cloud."""
-    logger.info("Merging depthmaps")
-
-    shot_ids = [s for s in reconstruction.shots if data.pruned_depthmap_exists(s)]
-
-    if not shot_ids:
-        logger.warning("Depthmaps contain no points.  Try using more images.")
-        return
-
     points = []
     normals = []
     colors = []
     labels = []
     detections = []
-    for shot_id in shot_ids:
-        p, n, c, l, d = data.load_pruned_depthmap(shot_id)
-        points.append(p)
-        normals.append(n)
-        colors.append(c)
-        labels.append(l)
-        detections.append(d)
+
+    logger.info("Merging depthmaps")
+
+    for reconstruction in reconstructions:
+        shot_ids = [s for s in reconstruction.shots if data.pruned_depthmap_exists(s)]
+
+        for shot_id in shot_ids:
+            p, n, c, l, d = data.load_pruned_depthmap(shot_id)
+            points.append(p)
+            normals.append(n)
+            colors.append(c)
+            labels.append(l)
+            detections.append(d)
 
     points = np.concatenate(points)
     normals = np.concatenate(normals)

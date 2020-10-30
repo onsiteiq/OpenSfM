@@ -22,4 +22,7 @@ class Command:
         reconstructions = data.load_undistorted_reconstruction()
         graph = data.load_undistorted_tracks_graph()
 
-        dense.compute_depthmaps(data, graph, reconstructions[0])
+        for reconstruction in reconstructions:
+            dense.compute_depthmaps(data, graph, reconstruction)
+
+        dense.merge_depthmaps(data, reconstructions)
