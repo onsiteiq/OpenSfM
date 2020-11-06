@@ -7,11 +7,14 @@ import logging
 
 import cv2
 import numpy as np
+import networkx as nx
 from six import iteritems
 
+from opensfm import transformations as tf
 from opensfm import csfm
 from opensfm import io
 from opensfm import log
+from opensfm import types
 from opensfm import tracking
 from opensfm.context import parallel_map
 
@@ -184,6 +187,84 @@ def clean_depthmap(arguments):
         plt.show()
 
 
+def parse_neighbor_id(nid):
+    # shot id is of the form 'xxxxxxxxxx.jpg_perspective_view_{front|left|back|right|top|bottom}
+    tokens = nid.split('_')
+
+    # returns spherical shot id, subshot name
+    return tokens[0], tokens[3]
+
+
+def to_spherical_coords(subshot_name, px, py):
+    """Unit vector pointing to the pixel viewing direction for an unfolded spherical image"""
+
+    # calculate bearing in subshot
+    K = np.array([[0.5, 0., 0.],
+                  [0., 0.5, 0.],
+                  [0., 0., 1.]])
+    point = np.asarray((px, py)).reshape((1, 1, 2))
+    distortion = np.array([0., 0., 0., 0.])
+    x, y = cv2.undistortPoints(point, K, distortion).flat
+    l = np.sqrt(x * x + y * y + 1.0)
+    bearing = np.array([x / l, y / l, 1.0 / l])
+
+    # Determine which is the correct undistorted camera and convert
+    # into normalized image coordinates for this camera.  From normalized
+    # image coordinates a unit bearing can be calculated.
+    if subshot_name == 'front':
+        R = tf.rotation_matrix(-0 * np.pi / 2, (0, 1, 0))[:3, :3]
+    elif subshot_name == 'bottom':
+        R = tf.rotation_matrix(+np.pi / 2, (1, 0, 0))[:3, :3]
+    elif subshot_name == 'left':
+        R = tf.rotation_matrix(-1 * np.pi / 2, (0, 1, 0))[:3, :3]
+    elif subshot_name == 'back':
+        R = tf.rotation_matrix(-2 * np.pi / 2, (0, 1, 0))[:3, :3]
+    elif subshot_name == 'right':
+        R = tf.rotation_matrix(-3 * np.pi / 2, (0, 1, 0))[:3, :3]
+    elif subshot_name == 'top':
+        R = tf.rotation_matrix(-np.pi / 2, (1, 0, 0))[:3, :3]
+
+    # rotated bearing
+    bearing = np.dot(bearing, R)
+
+    # project a 3D point in camera coordinates to the image plane
+    lon = np.arctan2(bearing[0], bearing[2])
+    lat = np.arctan2(-bearing[1], np.sqrt(bearing[0]**2 + bearing[2]**2))
+    return np.array([lon / (2 * np.pi), -lat / (2 * np.pi)])
+
+
+def unpack_projections(neighbors, points, projections):
+    """ Convert projections into tracks """
+    tracks = []
+    track_ids = []
+
+    # first entry in 'neighbors' is the current shot, the rest are real neighbors
+    spherical_shot_id, subshot_name = parse_neighbor_id(neighbors[0].id)
+    int_spherical_shot_id = int(spherical_shot_id.split('.')[0])
+    int_subshot_name = ['front', 'left', 'back', 'right', 'top', 'bottom'].index(subshot_name)
+
+    # make sure each shot/subshot has non-overlapping track ids. max 2^12 tracks per subshot
+    base_track_id = int_spherical_shot_id << 15 + int_subshot_name << 12
+
+    for i, point in enumerate(points):
+        track_id = base_track_id + i
+        track_ids.append(track_id)
+
+        # go through projected x/y coordinates for each neighbor
+        for j, neighbor in enumerate(neighbors):
+            spherical_shot_id, subshot_name = parse_neighbor_id(neighbor.id)
+
+            x = projections[i][2*j]
+            y = projections[i][2*j+1]
+
+            # if x/y = -1, projection is not in a neighbor,
+            if x != -1.0 and y != -1.0:
+                norm_pix_x, norm_pix_y = to_spherical_coords(subshot_name, x, y)
+                tracks.append((spherical_shot_id, track_id, norm_pix_x, norm_pix_y))
+
+    return tracks, track_ids
+
+
 def prune_depthmap(arguments):
     """Prune depthmap to remove redundant points."""
     log.setup()
@@ -198,10 +279,14 @@ def prune_depthmap(arguments):
     dp = csfm.DepthmapPruner()
     dp.set_same_depth_threshold(data.config['depthmap_same_depth_threshold'])
     add_views_to_depth_pruner(data, neighbors, dp)
-    points, normals, colors, labels, detections = dp.prune()
+    points, projections, normals, colors, labels, detections = dp.prune()
+
+    # Convert projections into tracks
+    tracks, track_ids = unpack_projections(neighbors, points, projections)
+    data.save_densified_tracks(shot.id, tracks)
 
     # Save and display results
-    data.save_pruned_depthmap(shot.id, points, normals, colors, labels, detections)
+    data.save_pruned_depthmap(shot.id, points, track_ids, normals, colors, labels, detections)
 
     if data.config['depthmap_save_debug_files']:
         with io.open_wt(data._depthmap_file(shot.id, 'pruned.npz.ply')) as fp:
@@ -222,7 +307,7 @@ def merge_depthmaps(data, reconstructions):
         shot_ids = [s for s in reconstruction.shots if data.pruned_depthmap_exists(s)]
 
         for shot_id in shot_ids:
-            p, n, c, l, d = data.load_pruned_depthmap(shot_id)
+            p, _, n, c, l, d = data.load_pruned_depthmap(shot_id)
             points.append(p)
             normals.append(n)
             colors.append(c)
@@ -237,6 +322,62 @@ def merge_depthmaps(data, reconstructions):
 
     with io.open_wt(data._depthmap_path() + '/merged.ply') as fp:
         point_cloud_to_ply(points, normals, colors, labels, detections, fp)
+
+
+def densify_reconstructions(data, reconstructions):
+    """Create densified_reconstructions.json and densified_tracks.csv"""
+    subshot_names = ['front', 'left', 'back', 'right', 'top', 'bottom']
+    tracks_graph = nx.Graph()
+
+    logger.info("Densifying reconstructions")
+
+    for reconstruction in reconstructions:
+        points = []
+        colors = []
+        track_ids = []
+
+        for spherical_shot_id in reconstruction.shots:
+            subshot_ids = []
+
+            for subshot_name in subshot_names:
+                subshot_id = '{}_perspective_view_{}'.format(spherical_shot_id, subshot_name)
+                if data.pruned_depthmap_exists(subshot_id):
+                    subshot_ids.append(subshot_id)
+
+            for subshot_id in subshot_ids:
+                p, t, _, c, _, _ = data.load_pruned_depthmap(subshot_id)
+                points.extend(p)
+                colors.extend(c)
+                track_ids.extend(t)
+
+                tracks = data.load_densified_tracks(subshot_id)
+
+                for track in tracks:
+                    image = track[0]
+                    track_id = track[1]
+                    x = track[2]
+                    y = track[3]
+
+                    tracks_graph.add_node(str(image), bipartite=0)
+                    tracks_graph.add_node(str(track_id), bipartite=1)
+                    tracks_graph.add_edge(str(image),
+                                          str(track_id),
+                                          feature=(float(x), float(y)),
+                                          feature_scale=0.0004,
+                                          feature_id=0,
+                                          feature_color=(0.0, 0.0, 0.0))
+
+        reconstruction.points.clear()
+        for i in range(len(points)):
+            p = types.Point()
+            p.id = str(track_ids[i])
+            p.coordinates = points[i].tolist()
+            p.color = colors[i].tolist()
+
+            reconstruction.add_point(p)
+
+    data.save_densified_reconstruction(reconstructions)
+    data.save_densified_tracks_graph(tracks_graph)
 
 
 def add_views_to_depth_estimator(data, neighbors, de):

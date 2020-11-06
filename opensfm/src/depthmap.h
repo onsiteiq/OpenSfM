@@ -148,6 +148,7 @@ class DepthmapPruner {
                const unsigned char *pdetection,
                int width, int height);
   void Prune(std::vector<float> *merged_points,
+             std::vector<float> *merged_projections,
              std::vector<float> *merged_normals,
              std::vector<unsigned char> *merged_colors,
              std::vector<unsigned char> *merged_labels,

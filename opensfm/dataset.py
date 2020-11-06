@@ -364,6 +364,10 @@ class DataSet(object):
         """Path to the depthmap file"""
         return os.path.join(self._depthmap_path(), image + '.' + suffix)
 
+    def _densified_tracks_file(self, image, suffix):
+        """Path to the depthmap file"""
+        return os.path.join(self._depthmap_path(), image + '.' + suffix)
+
     def raw_depthmap_exists(self, image):
         return os.path.isfile(self._depthmap_file(image, 'raw.npz'))
 
@@ -391,20 +395,20 @@ class DataSet(object):
     def pruned_depthmap_exists(self, image):
         return os.path.isfile(self._depthmap_file(image, 'pruned.npz'))
 
-    def save_pruned_depthmap(self, image, points, normals, colors, labels, detections):
+    def save_pruned_depthmap(self, image, points, track_ids, normals, colors, labels, detections):
         io.mkdir_p(self._depthmap_path())
         filepath = self._depthmap_file(image, 'pruned.npz')
         np.savez_compressed(filepath,
-                            points=points, normals=normals,
-                            colors=colors, labels=labels,
-                            detections=detections)
+                            points=points, track_ids=track_ids,
+                            normals=normals, colors=colors,
+                            labels=labels, detections=detections)
 
     def load_pruned_depthmap(self, image):
         o = np.load(self._depthmap_file(image, 'pruned.npz'))
         if 'detections' not in o:
-            return o['points'], o['normals'], o['colors'], o['labels'], np.zeros(o['labels'].shape)
+            return o['points'], o['track_ids'], o['normals'], o['colors'], o['labels'], np.zeros(o['labels'].shape)
         else:
-            return o['points'], o['normals'], o['colors'], o['labels'], o['detections']
+            return o['points'], o['track_ids'], o['normals'], o['colors'], o['labels'], o['detections']
 
     def _is_image_file(self, filename):
         extensions = {'jpg', 'jpeg', 'png', 'tif', 'tiff', 'pgm', 'pnm', 'gif'}
@@ -653,6 +657,27 @@ class DataSet(object):
     def save_undistorted_tracks_graph(self, graph):
         return self.save_tracks_graph(graph, 'undistorted_tracks.csv')
 
+    def load_densified_tracks_graph(self):
+        return self.load_tracks_graph('densified_tracks.csv')
+
+    def save_densified_tracks_graph(self, graph):
+        return self.save_tracks_graph(graph, 'densified_tracks.csv')
+
+    def save_densified_tracks(self, image, tracks):
+        """Save densified tracks for image"""
+        with io.open_wt(self._densified_tracks_file(image, 'tracks.csv')) as fout:
+            fout.write('\n'.join('%s\t%s\t%s\t%s' % t for t in tracks))
+
+    def load_densified_tracks(self, image):
+        """Return densified tracks for image"""
+        tracks = []
+        with io.open_rt(self._densified_tracks_file(image, 'tracks.csv')) as fin:
+            for line in fin:
+                image, track_id, x, y = line.split('\t')
+                tracks.append((image, track_id, x, y))
+
+        return tracks
+
     def save_match_counts(self, matches, filename=None, minify=False ):
         with io.open_wt( self._match_counts_file(filename) ) as fout:
             io.json_dump(matches, fout, minify)
@@ -702,6 +727,14 @@ class DataSet(object):
     def save_undistorted_reconstruction(self, reconstruction):
         return self.save_reconstruction(
             reconstruction, filename='undistorted_reconstruction.json')
+
+    def load_densified_reconstruction(self):
+        return self.load_reconstruction(
+            filename='densified_reconstruction.json')
+
+    def save_densified_reconstruction(self, reconstruction):
+        return self.save_reconstruction(
+            reconstruction, filename='densified_reconstruction.json')
 
     def _reference_lla_path(self):
         return os.path.join(self.data_path, 'reference_lla.json')

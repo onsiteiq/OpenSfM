@@ -127,16 +127,19 @@ class DepthmapPrunerWrapper {
     py::gil_scoped_release release;
 
     std::vector<float> points;
+    std::vector<float> projections;
     std::vector<float> normals;
     std::vector<unsigned char> colors;
     std::vector<unsigned char> labels;
     std::vector<unsigned char> detections;
 
-    dp_.Prune(&points, &normals, &colors, &labels, &detections);
+    dp_.Prune(&points, &projections, &normals, &colors, &labels, &detections);
 
     py::list retn;
     int n = int(points.size()) / 3;
+    int m = int(projections.size()) / n;
     retn.append(py_array_from_data(&points[0], n, 3));
+    retn.append(py_array_from_data(&projections[0], n, m));
     retn.append(py_array_from_data(&normals[0], n, 3));
     retn.append(py_array_from_data(&colors[0], n, 3));
     retn.append(py_array_from_data(&labels[0], n));

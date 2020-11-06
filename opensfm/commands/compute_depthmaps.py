@@ -26,3 +26,6 @@ class Command:
             dense.compute_depthmaps(data, graph, reconstruction)
 
         dense.merge_depthmaps(data, reconstructions)
+
+        reconstructions = data.load_reconstruction()
+        dense.densify_reconstructions(data, reconstructions)

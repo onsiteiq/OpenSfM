@@ -1,4 +1,5 @@
 #include "depthmap.h"
+#include <iostream>
 #include <opencv2/opencv.hpp>
 #include <random>
 
@@ -560,6 +561,7 @@ void DepthmapPruner::AddView(const double *pK, const double *pR,
 }
 
 void DepthmapPruner::Prune(std::vector<float> *merged_points,
+                           std::vector<float> *merged_projections,
                            std::vector<float> *merged_normals,
                            std::vector<unsigned char> *merged_colors,
                            std::vector<unsigned char> *merged_labels,
@@ -575,14 +577,22 @@ void DepthmapPruner::Prune(std::vector<float> *merged_points,
       float area = -normal(2) / depth * Ks_[0](0, 0);
       cv::Vec3f point = Backproject(j, i, depth, Ks_[0], Rs_[0], ts_[0]);
       bool keep = true;
+      std::vector<float> reproj{j, i};
       for (int other = 1; other < depths_.size(); ++other) {
         cv::Vec3d reprojection = Project(point, Ks_[other], Rs_[other], ts_[other]);
         int iu = int(reprojection(0) / reprojection(2) + 0.5f);
         int iv = int(reprojection(1) / reprojection(2) + 0.5f);
         float depth_of_point = reprojection(2);
         if (!IsInsideImage(depths_[other], iv, iu)) {
+          reproj.push_back(-1.0f);
+          reproj.push_back(-1.0f);
           continue;
         }
+
+        int size = std::max(depths_[other].rows, depths_[other].cols);
+        reproj.push_back(((float)iu + 0.5f - (float)depths_[other].cols / 2.0f) / (float)size);
+        reproj.push_back(((float)iv + 0.5f - (float)depths_[other].rows / 2.0f) / (float)size);
+
         float depth_at_reprojection = depths_[other].at<float>(iv, iu);
         if (depth_at_reprojection > (1 - same_depth_threshold_) * depth_of_point) {
           cv::Vec3f normal_at_reprojection = cv::normalize(planes_[other].at<cv::Vec3f>(iv, iu));
@@ -601,6 +611,7 @@ void DepthmapPruner::Prune(std::vector<float> *merged_points,
         merged_points->push_back(point[0]);
         merged_points->push_back(point[1]);
         merged_points->push_back(point[2]);
+        merged_projections->insert(merged_projections->end(), reproj.begin(), reproj.end());
         merged_normals->push_back(R1_normal[0]);
         merged_normals->push_back(R1_normal[1]);
         merged_normals->push_back(R1_normal[2]);
