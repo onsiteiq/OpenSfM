@@ -244,7 +244,7 @@ def unpack_projections(neighbors, points, projections):
     int_subshot_name = ['front', 'left', 'back', 'right', 'top', 'bottom'].index(subshot_name)
 
     # make sure each shot/subshot has non-overlapping track ids. max 2^12 tracks per subshot
-    base_track_id = int_spherical_shot_id << 15 + int_subshot_name << 12
+    base_track_id = int_spherical_shot_id * (2 << 15) + int_subshot_name * (2 << 12)
 
     for i, point in enumerate(points):
         track_id = base_track_id + i
