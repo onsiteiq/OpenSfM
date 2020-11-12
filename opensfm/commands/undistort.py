@@ -32,6 +32,9 @@ class Command:
         urecs = []
 
         for reconstruction in reconstructions:
+            if len(reconstruction.points) == 0:
+                continue
+
             urecs.append(self.undistort_reconstruction(graph, ugraph, reconstruction, data))
 
         data.save_undistorted_reconstruction(urecs)

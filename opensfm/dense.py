@@ -332,6 +332,9 @@ def densify_reconstructions(data, reconstructions):
     logger.info("Densifying reconstructions")
 
     for reconstruction in reconstructions:
+        if len(reconstruction.points) == 0:
+            continue
+
         points = []
         colors = []
         track_ids = []
