@@ -327,17 +327,18 @@ def merge_depthmaps(data, reconstructions):
 def densify_reconstructions(data, reconstructions):
     """Create densified_reconstructions.json and densified_tracks.csv"""
     subshot_names = ['front', 'left', 'back', 'right', 'top', 'bottom']
-    tracks_graph = nx.Graph()
+    tracks_filenames = []
 
     logger.info("Densifying reconstructions")
 
-    for reconstruction in reconstructions:
+    for i, reconstruction in enumerate(reconstructions):
         if len(reconstruction.points) == 0:
             continue
 
         points = []
         colors = []
         track_ids = []
+        tracks_graph = nx.Graph()
 
         for spherical_shot_id in reconstruction.shots:
             subshot_ids = []
@@ -370,6 +371,10 @@ def densify_reconstructions(data, reconstructions):
                                           feature_id=0,
                                           feature_color=(0.0, 0.0, 0.0))
 
+        filename = str(i) + '.csv'
+        data.save_tracks_graph_no_header(tracks_graph, filename)
+        tracks_filenames.append(filename)
+
         reconstruction.points.clear()
         for i in range(len(points)):
             p = types.Point()
@@ -380,7 +385,7 @@ def densify_reconstructions(data, reconstructions):
             reconstruction.add_point(p)
 
     data.save_densified_reconstruction(reconstructions)
-    data.save_densified_tracks_graph(tracks_graph)
+    data.save_densified_tracks_graph(tracks_filenames)
 
 
 def add_views_to_depth_estimator(data, neighbors, de):

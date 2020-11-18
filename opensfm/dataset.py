@@ -9,6 +9,7 @@ import glob
 
 import numpy as np
 import six
+import shutil
 
 from opensfm import io
 from opensfm import config
@@ -651,6 +652,10 @@ class DataSet(object):
         with io.open_wt(self._tracks_graph_file(filename)) as fout:
             tracking.save_tracks_graph(fout, graph)
 
+    def save_tracks_graph_no_header(self, graph, filename=None):
+        with io.open_wt(self._tracks_graph_file(filename)) as fout:
+            tracking.save_tracks_graph_no_header(fout, graph)
+
     def load_undistorted_tracks_graph(self):
         return self.load_tracks_graph('undistorted_tracks.csv')
 
@@ -660,8 +665,17 @@ class DataSet(object):
     def load_densified_tracks_graph(self):
         return self.load_tracks_graph('densified_tracks.csv')
 
-    def save_densified_tracks_graph(self, graph):
-        return self.save_tracks_graph(graph, 'densified_tracks.csv')
+    def save_densified_tracks_graph(self, tracks_filenames):
+        with io.open_wt(self._tracks_graph_file('densified_tracks.csv')) as fout:
+            tracking.save_tracks_graph_header(fout)
+            for f in tracks_filenames:
+                with io.open_rt(self._tracks_graph_file(f)) as fin:
+                    shutil.copyfileobj(fin, fout)
+
+        for f in tracks_filenames:
+            os.remove(self._tracks_graph_file(f))
+
+        return
 
     def save_densified_tracks(self, image, tracks):
         """Save densified tracks for image"""

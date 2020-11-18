@@ -176,6 +176,15 @@ def save_tracks_graph(fileobj, graph):
     getattr(sys.modules[__name__], '_save_tracks_graph_v%d' % TRACKS_VERSION)(fileobj, graph)
 
 
+def save_tracks_graph_header(fileobj):
+    fileobj.write((TRACKS_HEADER + u'_v%d\n') % TRACKS_VERSION)
+
+
+def save_tracks_graph_no_header(fileobj, graph):
+    """ Save a tracks graph to some file object """
+    getattr(sys.modules[__name__], '_save_tracks_graph_v%d' % TRACKS_VERSION)(fileobj, graph)
+
+
 def _tracks_file_version(fileobj):
     """ Extract tracks file version by reading header.
 
