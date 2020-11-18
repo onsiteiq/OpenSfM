@@ -17,7 +17,6 @@ from opensfm import types
 from opensfm import tracking
 from opensfm.context import parallel_map
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -324,22 +323,17 @@ def merge_depthmaps(data, reconstructions):
 
 
 def densify_reconstructions(data, reconstructions):
-    """Create densified_reconstructions.json and densified_tracks.csv"""
+    """Create densified_reconstructions.json"""
     subshot_names = ['front', 'left', 'back', 'right', 'top', 'bottom']
-    tracks_filenames = []
+    recon_filenames = []
 
     logger.info("Densifying reconstructions")
 
-    for i, reconstruction in enumerate(reconstructions):
+    for recon_num, reconstruction in enumerate(reconstructions):
         if len(reconstruction.points) == 0:
             continue
 
         reconstruction.points.clear()
-
-        points = []
-        colors = []
-        track_ids = []
-        tracks = []
 
         for spherical_shot_id in reconstruction.shots:
             subshot_ids = []
@@ -351,26 +345,51 @@ def densify_reconstructions(data, reconstructions):
 
             for subshot_id in subshot_ids:
                 p, t, _, c, _, _ = data.load_pruned_depthmap(subshot_id)
-                points.extend(p)
-                colors.extend(c)
-                track_ids.extend(t)
 
+                for i in range(len(p)):
+                    n_p = types.Point()
+                    n_p.id = str(t[i])
+                    n_p.coordinates = p[i].tolist()
+                    n_p.color = c[i].tolist()
+                    reconstruction.add_point(n_p)
+
+        recon_filename = str(recon_num) + '.json'
+        data.save_reconstruction_no_header(reconstruction, recon_filename)
+        recon_filenames.append(recon_filename)
+        reconstructions[recon_num] = None
+
+    data.save_densified_reconstruction(recon_filenames)
+
+
+def densify_tracks(data, reconstructions):
+    """Create densified_tracks.csv"""
+    subshot_names = ['front', 'left', 'back', 'right', 'top', 'bottom']
+    track_filenames = []
+
+    logger.info("Densifying tracks")
+
+    for recon_num, reconstruction in enumerate(reconstructions):
+        if len(reconstruction.points) == 0:
+            continue
+
+        tracks = []
+
+        for spherical_shot_id in reconstruction.shots:
+            subshot_ids = []
+
+            for subshot_name in subshot_names:
+                subshot_id = '{}_perspective_view_{}'.format(spherical_shot_id, subshot_name)
+                if data.pruned_depthmap_exists(subshot_id):
+                    subshot_ids.append(subshot_id)
+
+            for subshot_id in subshot_ids:
                 tracks.extend(data.load_densified_tracks(subshot_id))
 
-        filename = str(i) + '.csv'
-        data.save_tracks_graph_no_header(tracks, filename)
-        tracks_filenames.append(filename)
+        track_filename = str(recon_num) + '.csv'
+        data.save_tracks_graph_no_header(tracks, track_filename)
+        track_filenames.append(track_filename)
 
-        for i in range(len(points)):
-            p = types.Point()
-            p.id = str(track_ids[i])
-            p.coordinates = points[i].tolist()
-            p.color = colors[i].tolist()
-
-            reconstruction.add_point(p)
-
-    data.save_densified_reconstruction(reconstructions)
-    data.save_densified_tracks_graph(tracks_filenames)
+    data.save_densified_tracks_graph(track_filenames)
 
 
 def add_views_to_depth_estimator(data, neighbors, de):

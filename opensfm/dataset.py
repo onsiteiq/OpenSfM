@@ -665,17 +665,15 @@ class DataSet(object):
     def load_densified_tracks_graph(self):
         return self.load_tracks_graph('densified_tracks.csv')
 
-    def save_densified_tracks_graph(self, tracks_filenames):
+    def save_densified_tracks_graph(self, track_filenames):
         with io.open_wt(self._tracks_graph_file('densified_tracks.csv')) as fout:
             tracking.save_tracks_graph_header(fout)
-            for f in tracks_filenames:
+            for f in track_filenames:
                 with io.open_rt(self._tracks_graph_file(f)) as fin:
                     shutil.copyfileobj(fin, fout)
 
-        for f in tracks_filenames:
+        for f in track_filenames:
             os.remove(self._tracks_graph_file(f))
-
-        return
 
     def save_densified_tracks(self, image, tracks):
         """Save densified tracks for image"""
@@ -691,6 +689,12 @@ class DataSet(object):
                 tracks.append((image, track_id, x, y))
 
         return tracks
+
+    def densification_cleanup(self):
+        shutil.rmtree(self._depthmap_path())
+        shutil.rmtree(self._undistorted_image_path())
+        os.remove(self._reconstruction_file('undistorted_reconstruction.json'))
+        os.remove(self._tracks_graph_file('undistorted_tracks.csv'))
 
     def save_match_counts(self, matches, filename=None, minify=False ):
         with io.open_wt( self._match_counts_file(filename) ) as fout:
@@ -715,6 +719,10 @@ class DataSet(object):
     def save_reconstruction(self, reconstruction, filename=None, minify=False):
         with io.open_wt(self._reconstruction_file(filename)) as fout:
             io.json_dump(io.reconstructions_to_json(reconstruction), fout, minify)
+
+    def save_reconstruction_no_header(self, reconstruction, filename=None, minify=False):
+        with io.open_wt(self._reconstruction_file(filename)) as fout:
+            io.json_dump(io.reconstruction_to_json(reconstruction), fout, minify)
 
     def save_reconstruction_no_point(self, reconstruction, minify=False):
         with io.open_wt(self._reconstruction_file('reconstruction_no_point.json')) as fout:
@@ -746,9 +754,20 @@ class DataSet(object):
         return self.load_reconstruction(
             filename='densified_reconstruction.json')
 
-    def save_densified_reconstruction(self, reconstruction):
-        return self.save_reconstruction(
-            reconstruction, filename='densified_reconstruction.json')
+    def save_densified_reconstruction(self, recon_filenames):
+        with io.open_wt(self._reconstruction_file('densified_reconstruction.json')) as fout:
+            fout.write('[\n')
+
+            for f in recon_filenames:
+                with io.open_rt(self._reconstruction_file(f)) as fin:
+                    shutil.copyfileobj(fin, fout)
+
+                fout.write('\n')
+
+            fout.write(']\n')
+
+        for f in recon_filenames:
+            os.remove(self._reconstruction_file(f))
 
     def _reference_lla_path(self):
         return os.path.join(self.data_path, 'reference_lla.json')
