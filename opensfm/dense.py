@@ -7,7 +7,6 @@ import logging
 
 import cv2
 import numpy as np
-import networkx as nx
 from six import iteritems
 
 from opensfm import transformations as tf
@@ -335,10 +334,12 @@ def densify_reconstructions(data, reconstructions):
         if len(reconstruction.points) == 0:
             continue
 
+        reconstruction.points.clear()
+
         points = []
         colors = []
         track_ids = []
-        tracks_graph = nx.Graph()
+        tracks = []
 
         for spherical_shot_id in reconstruction.shots:
             subshot_ids = []
@@ -354,28 +355,12 @@ def densify_reconstructions(data, reconstructions):
                 colors.extend(c)
                 track_ids.extend(t)
 
-                tracks = data.load_densified_tracks(subshot_id)
-
-                for track in tracks:
-                    image = track[0]
-                    track_id = track[1]
-                    x = track[2]
-                    y = track[3]
-
-                    tracks_graph.add_node(str(image), bipartite=0)
-                    tracks_graph.add_node(str(track_id), bipartite=1)
-                    tracks_graph.add_edge(str(image),
-                                          str(track_id),
-                                          feature=(float(x), float(y)),
-                                          feature_scale=0.0004,
-                                          feature_id=0,
-                                          feature_color=(0.0, 0.0, 0.0))
+                tracks.extend(data.load_densified_tracks(subshot_id))
 
         filename = str(i) + '.csv'
-        data.save_tracks_graph_no_header(tracks_graph, filename)
+        data.save_tracks_graph_no_header(tracks, filename)
         tracks_filenames.append(filename)
 
-        reconstruction.points.clear()
         for i in range(len(points)):
             p = types.Point()
             p.id = str(track_ids[i])

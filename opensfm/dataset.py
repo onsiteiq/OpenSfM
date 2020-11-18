@@ -652,9 +652,9 @@ class DataSet(object):
         with io.open_wt(self._tracks_graph_file(filename)) as fout:
             tracking.save_tracks_graph(fout, graph)
 
-    def save_tracks_graph_no_header(self, graph, filename=None):
+    def save_tracks_graph_no_header(self, tracks, filename=None):
         with io.open_wt(self._tracks_graph_file(filename)) as fout:
-            tracking.save_tracks_graph_no_header(fout, graph)
+            tracking.save_tracks_graph_no_header(fout, tracks)
 
     def load_undistorted_tracks_graph(self):
         return self.load_tracks_graph('undistorted_tracks.csv')

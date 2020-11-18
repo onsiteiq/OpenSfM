@@ -180,9 +180,11 @@ def save_tracks_graph_header(fileobj):
     fileobj.write((TRACKS_HEADER + u'_v%d\n') % TRACKS_VERSION)
 
 
-def save_tracks_graph_no_header(fileobj, graph):
+def save_tracks_graph_no_header(fileobj, tracks):
     """ Save a tracks graph to some file object """
-    getattr(sys.modules[__name__], '_save_tracks_graph_v%d' % TRACKS_VERSION)(fileobj, graph)
+    for track in tracks:
+        fileobj.write(u'%s\t%s\t%d\t%g\t%g\t%g\t%g\t%g\t%g\n' % (
+            str(track[0]), str(track[1]), 0, float(track[2]), float(track[3]), 0.0004, 0, 0, 0))
 
 
 def _tracks_file_version(fileobj):
