@@ -323,7 +323,9 @@ def merge_depthmaps(data, reconstructions):
 
 
 def densify_reconstructions(data, reconstructions):
-    """Create densified_reconstructions.json"""
+    """
+    Create densified_reconstructions.json. The code is modified to minimize memory usage.
+    """
     subshot_names = ['front', 'left', 'back', 'right', 'top', 'bottom']
     recon_filenames = []
 
@@ -362,7 +364,9 @@ def densify_reconstructions(data, reconstructions):
 
 
 def densify_tracks(data, reconstructions):
-    """Create densified_tracks.csv"""
+    """
+    Create densified_tracks.csv. The code is modified to minimize memory usage.
+    """
     subshot_names = ['front', 'left', 'back', 'right', 'top', 'bottom']
     track_filenames = []
 

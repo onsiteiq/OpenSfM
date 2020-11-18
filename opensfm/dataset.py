@@ -758,11 +758,14 @@ class DataSet(object):
         with io.open_wt(self._reconstruction_file('densified_reconstruction.json')) as fout:
             fout.write('[\n')
 
-            for f in recon_filenames:
+            for i, f in enumerate(recon_filenames):
                 with io.open_rt(self._reconstruction_file(f)) as fin:
                     shutil.copyfileobj(fin, fout)
 
-                fout.write('\n')
+                if i == len(recon_filenames) - 1:
+                    fout.write('\n')
+                else:
+                    fout.write(',\n')
 
             fout.write(']\n')
 
