@@ -773,6 +773,17 @@ class DataSet(object):
         else:
             return -1
 
+    def get_recon_list(self):
+        reconstructions = self.load_reconstruction()
+        recon_list = []
+        for recon_num, reconstruction in enumerate(reconstructions):
+            if len(reconstruction.points) == 0:
+                continue
+
+            recon_list.append(recon_num)
+
+        return recon_list
+
     def _reference_lla_path(self):
         return os.path.join(self.data_path, 'reference_lla.json')
 
