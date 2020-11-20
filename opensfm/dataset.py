@@ -365,9 +365,13 @@ class DataSet(object):
         """Path to the depthmap file"""
         return os.path.join(self._depthmap_path(), image + '.' + suffix)
 
-    def _densified_tracks_file(self, image, suffix):
-        """Path to the depthmap file"""
-        return os.path.join(self._depthmap_path(), image + '.' + suffix)
+    def _image_tracks_path(self):
+        """Path to save densified tracks fro each subshot"""
+        return os.path.join(self.data_path, 'depthmaps')
+
+    def _image_tracks_file(self, image, suffix):
+        """Path to the densified tracks file for each subshot"""
+        return os.path.join(self._image_tracks_path(), image + '.' + suffix)
 
     def raw_depthmap_exists(self, image):
         return os.path.isfile(self._depthmap_file(image, 'raw.npz'))
@@ -652,49 +656,50 @@ class DataSet(object):
         with io.open_wt(self._tracks_graph_file(filename)) as fout:
             tracking.save_tracks_graph(fout, graph)
 
-    def save_tracks_graph_no_header(self, tracks, filename=None):
-        with io.open_wt(self._tracks_graph_file(filename)) as fout:
-            tracking.save_tracks_graph_no_header(fout, tracks)
-
     def load_undistorted_tracks_graph(self):
         return self.load_tracks_graph('undistorted_tracks.csv')
 
     def save_undistorted_tracks_graph(self, graph):
         return self.save_tracks_graph(graph, 'undistorted_tracks.csv')
 
-    def load_densified_tracks_graph(self):
-        return self.load_tracks_graph('densified_tracks.csv')
+    def _densified_path(self):
+        return os.path.join(self.data_path, 'densified')
 
-    def save_densified_tracks_graph(self, track_filenames):
-        with io.open_wt(self._tracks_graph_file('densified_tracks.csv')) as fout:
+    def _densified_reconstruction_file(self, recon_num):
+        """Path to the densified recon file"""
+        return os.path.join(self._densified_path(), 'densified_reconstruction_' + str(recon_num) + '.json')
+
+    def _densified_tracks_graph_file(self, recon_num):
+        """Path to the densified tracks file"""
+        return os.path.join(self._densified_path(), 'densified_tracks_' + str(recon_num) + '.csv')
+
+    def save_image_tracks(self, image, tracks):
+        """Save densified tracks for each subshot image"""
+        with io.open_wt(self._image_tracks_file(image, 'tracks.csv')) as fout:
+            for track in tracks:
+                fout.write(u'%s\t%s\t%d\t%g\t%g\t%g\t%g\t%g\t%g\n' % (
+                    str(track[0]), str(track[1]), 0, float(track[2]), float(track[3]), 0.0004, 0, 0, 0))
+
+    def save_densified_tracks_graph(self, recon_num, subshot_ids):
+        io.mkdir_p(self._densified_path())
+        with io.open_wt(self._densified_tracks_graph_file(recon_num)) as fout:
             tracking.save_tracks_graph_header(fout)
-            for f in track_filenames:
-                with io.open_rt(self._tracks_graph_file(f)) as fin:
+            for subshot_id in subshot_ids:
+                with io.open_rt(self._image_tracks_file(subshot_id, 'tracks.csv')) as fin:
                     shutil.copyfileobj(fin, fout)
 
-        for f in track_filenames:
-            os.remove(self._tracks_graph_file(f))
-
-    def save_densified_tracks(self, image, tracks):
-        """Save densified tracks for image"""
-        with io.open_wt(self._densified_tracks_file(image, 'tracks.csv')) as fout:
-            fout.write('\n'.join('%s\t%s\t%s\t%s' % t for t in tracks))
-
-    def load_densified_tracks(self, image):
-        """Return densified tracks for image"""
-        tracks = []
-        with io.open_rt(self._densified_tracks_file(image, 'tracks.csv')) as fin:
-            for line in fin:
-                image, track_id, x, y = line.split('\t')
-                tracks.append((image, track_id, x, y))
-
-        return tracks
+    def load_densified_tracks_graph(self, recon_num):
+        """Return graph (networkx data structure) of densififed tracks"""
+        with io.open_rt(self._densified_tracks_graph_file(recon_num)) as fin:
+            return tracking.load_tracks_graph(fin)
 
     def densification_cleanup(self):
-        shutil.rmtree(self._depthmap_path())
-        shutil.rmtree(self._undistorted_image_path())
-        os.remove(self._reconstruction_file('undistorted_reconstruction.json'))
-        os.remove(self._tracks_graph_file('undistorted_tracks.csv'))
+        shutil.rmtree(self._depthmap_path(), True)
+        shutil.rmtree(self._undistorted_image_path(), True)
+        if os.path.exists(self._reconstruction_file('undistorted_reconstruction.json')):
+            os.remove(self._reconstruction_file('undistorted_reconstruction.json'))
+        if os.path.exists(self._tracks_graph_file('undistorted_tracks.csv')):
+            os.remove(self._tracks_graph_file('undistorted_tracks.csv'))
 
     def save_match_counts(self, matches, filename=None, minify=False ):
         with io.open_wt( self._match_counts_file(filename) ) as fout:
@@ -720,10 +725,6 @@ class DataSet(object):
         with io.open_wt(self._reconstruction_file(filename)) as fout:
             io.json_dump(io.reconstructions_to_json(reconstruction), fout, minify)
 
-    def save_reconstruction_no_header(self, reconstruction, filename=None, minify=False):
-        with io.open_wt(self._reconstruction_file(filename)) as fout:
-            io.json_dump(io.reconstruction_to_json(reconstruction), fout, minify)
-
     def save_reconstruction_no_point(self, reconstruction, minify=False):
         with io.open_wt(self._reconstruction_file('reconstruction_no_point.json')) as fout:
             objs = io.reconstructions_to_json(reconstruction)
@@ -731,12 +732,12 @@ class DataSet(object):
                 obj['points'] = {}
             io.json_dump(objs, fout, minify)
 
-    def _recon_quality_path(self):
+    def _recon_quality_file(self):
         return os.path.join(self.data_path, 'recon_quality.txt')
 
     def save_recon_quality(self, recon_quality, avg_segment_size, ratio_shots_in_min_recon, speedup):
         """Save recon quality 0-100 to a file."""
-        with io.open_wt(self._recon_quality_path()) as fout:
+        with io.open_wt(self._recon_quality_file()) as fout:
             fout.write("recon_quality_factor {0}\n".format(recon_quality))
             fout.write("avg_segment_size {0}\n".format(int(avg_segment_size)))
             fout.write("ratio_shots_in_min_recon {0}%\n".format(int(100*ratio_shots_in_min_recon)))
@@ -747,30 +748,30 @@ class DataSet(object):
             filename='undistorted_reconstruction.json')
 
     def save_undistorted_reconstruction(self, reconstruction):
-        return self.save_reconstruction(
-            reconstruction, filename='undistorted_reconstruction.json')
+        self.save_reconstruction(reconstruction, filename='undistorted_reconstruction.json')
 
-    def load_densified_reconstruction(self):
-        return self.load_reconstruction(
-            filename='densified_reconstruction.json')
+    def load_densified_reconstruction(self, recon_num):
+        with io.open_rt(self._densified_reconstruction_file(recon_num)) as fin:
+            reconstructions = io.reconstructions_from_json(io.json_load(fin))
+        return reconstructions
 
-    def save_densified_reconstruction(self, recon_filenames):
-        with io.open_wt(self._reconstruction_file('densified_reconstruction.json')) as fout:
-            fout.write('[\n')
+    def save_densified_reconstruction(self, recon_num, reconstruction, minify=False):
+        io.mkdir_p(self._densified_path())
+        with io.open_wt(self._densified_reconstruction_file(recon_num)) as fout:
+            io.json_dump(io.reconstructions_to_json([reconstruction]), fout, minify)
 
-            for i, f in enumerate(recon_filenames):
-                with io.open_rt(self._reconstruction_file(f)) as fin:
-                    shutil.copyfileobj(fin, fout)
+    def save_image_recon_num_dict(self, image_recon_num_dict):
+        with io.open_wt(os.path.join(self._densified_path(), 'image_recon_num.json')) as fout:
+            io.json_dump(image_recon_num_dict, fout, False)
 
-                if i == len(recon_filenames) - 1:
-                    fout.write('\n')
-                else:
-                    fout.write(',\n')
+    def get_recon_num(self, image):
+        with io.open_rt(os.path.join(self._densified_path(), 'image_recon_num.json')) as fin:
+            image_recon_num_dict = io.json_load(fin)
 
-            fout.write(']\n')
-
-        for f in recon_filenames:
-            os.remove(self._reconstruction_file(f))
+        if image in image_recon_num_dict:
+            return image_recon_num_dict[image]
+        else:
+            return -1
 
     def _reference_lla_path(self):
         return os.path.join(self.data_path, 'reference_lla.json')
