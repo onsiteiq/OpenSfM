@@ -26,7 +26,7 @@ class Command:
             dense.compute_depthmaps(data, graph, reconstruction)
 
         # uncomment below to generate merged.ply for visualization
-        #dense.merge_depthmaps(data, reconstructions)
+        dense.merge_depthmaps(data, reconstructions)
 
         # create densified version of reconstruction.json and tracks.csv.
         # note these operations are not parallelized to limit memory usage

@@ -318,7 +318,8 @@ def merge_depthmaps(data, reconstructions):
     labels = np.concatenate(labels)
     detections = np.concatenate(detections)
 
-    with io.open_wt(data._depthmap_path() + '/merged.ply') as fp:
+    io.mkdir_p(data._densified_path())
+    with io.open_wt(data._densified_path() + '/merged.ply') as fp:
         point_cloud_to_ply(points, normals, colors, labels, detections, fp)
 
 
@@ -333,6 +334,8 @@ def densify_reconstructions(data, reconstructions):
 
     for recon_num, reconstruction in enumerate(reconstructions):
         if len(reconstruction.points) == 0:
+            # this 'reconstruction' is formed by pdr and has no real densified points
+            data.save_densified_reconstruction(recon_num, reconstruction)
             continue
 
         reconstruction.points.clear()
@@ -357,7 +360,6 @@ def densify_reconstructions(data, reconstructions):
                     reconstruction.add_point(n_p)
 
         data.save_densified_reconstruction(recon_num, reconstruction)
-        reconstructions[recon_num] = None
 
     data.save_image_recon_num_dict(image_recon_num_dict)
 
@@ -372,6 +374,8 @@ def densify_tracks(data, reconstructions):
 
     for recon_num, reconstruction in enumerate(reconstructions):
         if len(reconstruction.points) == 0:
+            # save an densified tracks that's header only
+            data.save_densified_tracks_graph(recon_num, [])
             continue
 
         subshot_ids = []
@@ -484,8 +488,8 @@ def compute_depth_range(graph, reconstruction, shot, config):
     min_depth = np.percentile(depths, 10) * 0.9
     max_depth = np.percentile(depths, 90) * 1.1
 
-    config_min_depth = config['depthmap_min_depth']
-    config_max_depth = config['depthmap_max_depth']
+    config_min_depth = config['depthmap_min_depth'] / (config['reconstruction_scale_factor'] * 0.3048)
+    config_max_depth = config['depthmap_max_depth'] / (config['reconstruction_scale_factor'] * 0.3048)
 
     return config_min_depth or min_depth, config_max_depth or max_depth
 
