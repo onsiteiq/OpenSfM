@@ -777,8 +777,10 @@ class DataSet(object):
         reconstructions = self.load_reconstruction()
         recon_list = []
         for recon_num, reconstruction in enumerate(reconstructions):
+            '''
             if len(reconstruction.points) == 0:
                 continue
+            '''
 
             recon_list.append(recon_num)
 

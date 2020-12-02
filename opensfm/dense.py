@@ -335,6 +335,9 @@ def densify_reconstructions(data, reconstructions):
     for recon_num, reconstruction in enumerate(reconstructions):
         if len(reconstruction.points) == 0:
             # this 'reconstruction' is formed by pdr and has no real densified points
+            for spherical_shot_id in reconstruction.shots:
+                image_recon_num_dict[spherical_shot_id] = recon_num
+
             data.save_densified_reconstruction(recon_num, reconstruction)
             continue
 
