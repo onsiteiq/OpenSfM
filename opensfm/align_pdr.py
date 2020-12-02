@@ -403,7 +403,14 @@ def hybrid_align_pdr(data, target_images=None):
 
     # align recons to gps points and/or trusted shots
     for recon in reconstructions:
-        if recon.alignment.aligned or len(recon.shots) < MIN_RECON_SIZE:
+        if recon.alignment.aligned:
+            # if for some reason, alignment was run previously, we'd end up here
+            aligned_recons.append(recon)
+            for shot_id in recon.shots:
+                aligned_shots_dict[shot_id] = recon.shots[shot_id].pose.get_origin()
+            continue
+
+        if len(recon.shots) < MIN_RECON_SIZE:
             continue
 
         recon_gps_points = {}
