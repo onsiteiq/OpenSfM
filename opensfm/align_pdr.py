@@ -1110,6 +1110,8 @@ def prune_reconstructions_by_pdr(reconstructions, data, graph):
 
 
 def prune_reconstruction_by_pdr(reconstruction, pdr_shots_dict, culling_dict, graph, cameras):
+    is_nctech = 'nctech' in list(cameras.keys())[0]
+
     segments = []
     suspicious_images = []
 
@@ -1126,7 +1128,7 @@ def prune_reconstruction_by_pdr(reconstruction, pdr_shots_dict, culling_dict, gr
             # check 1: compare rotations predicted by pre-integration and that of the reconstruction
             geo_diff = diff_recon_preint(shot_id, next_shot_id, reconstruction, pdr_shots_dict)
 
-            if geo_diff > np.radians(HEADING_THRESH): # 10 degrees
+            if is_nctech and geo_diff > np.radians(HEADING_THRESH): # 10 degrees
                 logger.debug("{} {} rotation diff {} degrees".format(shot_id, next_shot_id, np.degrees(geo_diff)))
                 suspicious_images.append(shot_id)
                 continue
