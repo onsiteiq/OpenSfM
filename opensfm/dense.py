@@ -323,6 +323,23 @@ def merge_depthmaps(data, reconstructions):
         point_cloud_to_ply(points, normals, colors, labels, detections, fp)
 
 
+def save_poses(data, reconstructions):
+    camera_poses = {}
+    for reconstruction in reconstructions:
+        if len(reconstruction.points) == 0:
+            continue
+
+        for spherical_shot_id in reconstruction.shots:
+            camera_poses[spherical_shot_id] = \
+                np.concatenate((reconstruction.shots[spherical_shot_id].pose.get_origin(),
+                                tf.quaternion_from_matrix(reconstruction.shots[spherical_shot_id].pose.get_rotation_matrix().T)))
+
+    with io.open_wt(data._densified_path() + '/poses.csv') as fp:
+        for shot_id, pose in camera_poses.items():
+            fp.write(u'%s,%g,%g,%g,%g,%g,%g,%g\n' % (
+                shot_id, pose[0], pose[1], pose[2], pose[3], pose[4], pose[5], pose[6]))
+
+
 def densify_reconstructions(data, reconstructions):
     """
     Create densified_reconstructions_n.json. The code is modified to minimize memory usage.

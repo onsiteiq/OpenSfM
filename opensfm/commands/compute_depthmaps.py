@@ -1,4 +1,6 @@
+import sys
 import logging
+import subprocess
 
 from opensfm import dataset
 from opensfm import dense
@@ -25,14 +27,25 @@ class Command:
         for reconstruction in reconstructions:
             dense.compute_depthmaps(data, graph, reconstruction)
 
-        # uncomment below to generate merged.ply for visualization
+        # generate merged.ply
         dense.merge_depthmaps(data, reconstructions)
 
         # create densified version of reconstruction.json and tracks.csv.
         # note these operations are not parallelized to limit memory usage
         reconstructions = data.load_reconstruction()
+
+        '''
         dense.densify_tracks(data, reconstructions)
         dense.densify_reconstructions(data, reconstructions)
+        '''
+
+        # generate poses.csv
+        dense.save_poses(data, reconstructions)
+
+        try:
+            subprocess.call(['frame_point_cloud', 'merged.ply', 'poses.csv'], cwd=data._densified_path())
+        except OSError as e:
+            sys.stderr.write("frame_point_cloud execution failed: {}\n".format(e))
 
         # clean up intermediate files
         data.densification_cleanup()

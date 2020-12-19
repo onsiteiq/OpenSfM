@@ -673,6 +673,10 @@ class DataSet(object):
         """Path to the densified tracks file"""
         return os.path.join(self._densified_path(), 'densified_tracks_' + str(recon_num) + '.csv')
 
+    def _frame_point_cloud_file(self, image):
+        """Path to the densified recon file"""
+        return os.path.join(self._densified_path(), image + '.pcd')
+
     def save_image_tracks(self, image, tracks):
         """Save densified tracks for each subshot image"""
         with io.open_wt(self._image_tracks_file(image, 'tracks.csv')) as fout:
@@ -759,6 +763,22 @@ class DataSet(object):
         io.mkdir_p(self._densified_path())
         with io.open_wt(self._densified_reconstruction_file(recon_num)) as fout:
             io.json_dump(io.reconstructions_to_json([reconstruction]), fout, minify)
+
+    def frame_point_cloud_exists(self, image):
+        return os.path.isfile(self._frame_point_cloud_file(image))
+
+    def load_frame_point_cloud(self, image):
+        with io.open_rt(self._frame_point_cloud_file(image)) as fin:
+            # skip PCD file header
+            lines = fin.readlines()[11:]
+            fin.close()
+
+        points = []
+        for line in lines:
+            entries = line.split()
+            points.append((float(entries[0]), float(entries[1]), float(entries[2])))
+
+        return points
 
     def save_image_recon_num_dict(self, image_recon_num_dict):
         with io.open_wt(os.path.join(self._densified_path(), 'image_recon_num.json')) as fout:

@@ -21,7 +21,7 @@ def triangle_mesh(shot_id, r, graph, data):
     elif shot.camera.projection_type == 'fisheye':
         return triangle_mesh_fisheye(shot_id, r, graph)
     elif shot.camera.projection_type in ['equirectangular', 'spherical']:
-        return triangle_mesh_equirectangular(shot_id, r, graph)
+        return triangle_mesh_equirectangular(shot_id, r, graph, data)
     else:
         raise NotImplementedError
 
@@ -127,7 +127,7 @@ def triangle_mesh_fisheye(shot_id, r, graph):
     return vertices, faces
 
 
-def triangle_mesh_equirectangular(shot_id, r, graph):
+def triangle_mesh_equirectangular(shot_id, r, graph, data):
     shot = r.shots[shot_id]
 
     bearings = []
@@ -141,13 +141,24 @@ def triangle_mesh_equirectangular(shot_id, r, graph):
         point = shot.pose.transform_inverse(bearing)
         vertices.append(point.tolist())
 
-    for track_id, edge in graph[shot_id].items():
-        if track_id in r.points:
-            point = r.points[track_id].coordinates
+    if data.frame_point_cloud_exists(shot_id):
+        logger.debug("triangle meshing loading point cloud for {}".format(shot_id))
+        points = data.load_frame_point_cloud(shot_id)
+        for p in points:
+            point = np.asarray(p)
             vertices.append(point)
             direction = shot.pose.transform(point)
             pixel = direction / np.linalg.norm(direction)
             bearings.append(pixel.tolist())
+
+    else:
+        for track_id, edge in graph[shot_id].items():
+            if track_id in r.points:
+                point = r.points[track_id].coordinates
+                vertices.append(point)
+                direction = shot.pose.transform(point)
+                pixel = direction / np.linalg.norm(direction)
+                bearings.append(pixel.tolist())
 
     tri = scipy.spatial.ConvexHull(bearings)
     faces = tri.simplices.tolist()
