@@ -6,7 +6,9 @@ from __future__ import unicode_literals
 import logging
 
 import cv2
+import itertools
 import numpy as np
+import scipy.spatial
 from six import iteritems
 
 from opensfm import transformations as tf
@@ -338,6 +340,41 @@ def save_poses(data, reconstructions):
         for shot_id, pose in camera_poses.items():
             fp.write(u'%s,%g,%g,%g,%g,%g,%g,%g\n' % (
                 shot_id, pose[0], pose[1], pose[2], pose[3], pose[4], pose[5], pose[6]))
+
+
+def save_faces(data, reconstructions):
+    graph = data.load_tracks_graph()
+
+    for i, r in enumerate(reconstructions):
+        for shot in r.shots.values():
+            if shot.id in graph:
+                bearings = []
+                vertices = []
+
+                # Add vertices to ensure that the camera is inside the convex hull
+                # of the points
+                for point in itertools.product([-1, 1], repeat=3):  # vertices of a cube
+                    bearing = 0.3 * np.array(point) / np.linalg.norm(point)
+                    bearings.append(bearing)
+                    point = shot.pose.transform_inverse(bearing)
+                    vertices.append(point.tolist())
+
+                for track_id, edge in graph[shot.id].items():
+                    if track_id in r.points:
+                        point = r.points[track_id].coordinates
+                        vertices.append(point)
+                        direction = shot.pose.transform(point)
+                        pixel = direction / np.linalg.norm(direction)
+                        bearings.append(pixel.tolist())
+
+                tri = scipy.spatial.ConvexHull(bearings)
+                faces = tri.simplices.tolist()
+
+                with io.open_wt(data._densified_path() + '/' + shot.id + '_faces.csv') as fp:
+                    for face in faces:
+                        fp.write(u'%g,%g,%g\n' % (vertices[face[0]][0], vertices[face[0]][1], vertices[face[0]][2]))
+                        fp.write(u'%g,%g,%g\n' % (vertices[face[1]][0], vertices[face[1]][1], vertices[face[1]][2]))
+                        fp.write(u'%g,%g,%g\n' % (vertices[face[2]][0], vertices[face[2]][1], vertices[face[2]][2]))
 
 
 def densify_reconstructions(data, reconstructions):

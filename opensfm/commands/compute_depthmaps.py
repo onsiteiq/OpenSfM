@@ -42,16 +42,21 @@ class Command:
         # generate poses.csv
         dense.save_poses(data, reconstructions)
 
+        # save mesh faces based on sparse point cloud
+        dense.save_faces(data, reconstructions)
+
         # these will be moved to config files later
         visible_angle_thresh = 10.0
         max_distance_thresh = 999999
+        mesh_bound_thresh = 1.1
         angular_resolution_x = 0.5
         angular_resolution_y = 0.5
 
         try:
             subprocess.call(['frame_point_cloud', 'merged.ply', 'poses.csv',
                              '-rx', str(angular_resolution_x), '-ry', str(angular_resolution_y),
-                             '-at', str(visible_angle_thresh), '-dt', str(max_distance_thresh)],
+                             '-at', str(visible_angle_thresh), '-dt', str(max_distance_thresh),
+                             '-mb', str(mesh_bound_thresh)],
                             cwd=data._densified_path())
         except OSError as e:
             sys.stderr.write("frame_point_cloud execution failed: {}\n".format(e))
