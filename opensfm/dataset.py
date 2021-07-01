@@ -40,6 +40,7 @@ class DataSet(object):
         """Init dataset associated to a folder."""
         self.data_path = data_path
         self.gps_points_dict = {}
+        self.split_points_dict = {}
         self.pdr_shots_dict = {}
         self.topocentric_gps_points_dict = {}
         self.pdr_predictions_dict = {}
@@ -914,6 +915,21 @@ class DataSet(object):
         with io.open_wt(self._ply_file(filename)) as fout:
             fout.write(ply)
 
+    def _split_points_file(self):
+        return os.path.join(self.data_path, 'split_points_list.txt')  
+
+    def split_points_exist(self):
+        return os.path.isfile(self._split_points_file())
+
+    def load_split_points(self):
+        """Load explicit points where the reconstruction should be divided"""
+
+        if not self.split_points_dict:
+            with open(self._split_points_file()) as fin:
+                self.split_points_dict = io.read_split_points_list(fin)
+
+        return self.split_points_dict
+        
     def _gps_points_file(self):
         return os.path.join(self.data_path, 'gps_list.txt')        
         

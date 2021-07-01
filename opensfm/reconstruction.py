@@ -2060,7 +2060,20 @@ def incremental_reconstruction_sequential(data, graph):
                 split_images = [ img ]
 
         image_groups.append( split_images )
+    
+    # Otherwise, look for an explicit file that specifies splits
 
+    elif data.split_points_exist():
+        split_points_dict = data.load_split_points()
+        split_images = []
+        for img in full_images:
+            split_images.append( img )
+            split = split_points_dict.get( img )
+            if split is not None and split:
+                image_groups.append( split_images )
+                split_images = []
+        
+        image_groups.append( split_images )
     else:
         image_groups.append( full_images )
 

@@ -547,6 +547,9 @@ def write_ground_control_points(gcp, fileobj, reference):
 
     json_dump(obj, fileobj)
 
+def _read_split_points_list_line( line ):
+
+    words = line.split()
 
 def _read_gps_points_list_line( line, projection ):
     
@@ -593,6 +596,20 @@ def read_gps_points_list( fileobj ):
        
     return gps_dict
 
+def read_split_points_list( fileobj ):
+
+    """
+    Read a split points list file.
+    """
+    lines = fileobj.readlines()
+    
+    split_dict = {}
+    
+    for line in lines[1:]:
+        
+        split_dict[ line[:-1] ] = True
+       
+    return split_dict
 
 def mkdir_p(path):
     '''Make a directory including parent directories.
