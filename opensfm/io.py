@@ -547,10 +547,6 @@ def write_ground_control_points(gcp, fileobj, reference):
 
     json_dump(obj, fileobj)
 
-def _read_split_points_list_line( line ):
-
-    words = line.split()
-
 def _read_gps_points_list_line( line, projection ):
     
     words = line.split()
