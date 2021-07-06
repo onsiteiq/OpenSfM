@@ -31,11 +31,17 @@ class Command:
         if data.gps_points_exist():
             gps_points = data.load_gps_points()
             logger.info( str( gps_points ) )
-
+        
+        camera_models = {}
+        
         for image in exif_img_names:
             if data.exif_exists(image):
                 logging.info('Loading existing EXIF for {}'.format(image))
                 d = data.load_exif(image)
+                
+                if d['camera'] not in camera_models:
+                    camera = exif.camera_from_exif_metadata(d, data)
+                    camera_models[d['camera']] = camera
                 
                 # Clear the gps field
                 d.pop('gps', None)
@@ -60,7 +66,9 @@ class Command:
                         d['compass'] = lla_fen_spl_comp[5]
                 
                 data.save_exif(image, d)
-
+        
+        data.save_camera_models(camera_models)
+        
         end = time.time()
         with open(data.profile_log(), 'a') as fout:
             fout.write('update_gps_metadata: {0}\n'.format(end - start))
