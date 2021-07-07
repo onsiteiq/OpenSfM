@@ -601,7 +601,7 @@ def read_split_points_list( fileobj ):
     
     split_dict = {}
     
-    for line in lines[1:]:
+    for line in lines:
         
         split_dict[ line[:-1] ] = True
        
